@@ -1,4 +1,13 @@
 //! A prototype of what a graph could look like in the proof report.
+//!
+//! ```bash
+//! cargo run -p rewrite --example render
+//! cargo run -p rewrite --example render -- two_spellings --all
+//! cargo run -p rewrite --example render -- emit_does --diff
+//! ```
+//!
+//! `-p rewrite` is what makes it work from anywhere in the workspace; the
+//! corpus is found beside the crate rather than beside the shell.
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::cmp::Reverse;
 
@@ -281,39 +290,112 @@ fn render(tag: &str, g: &Graph, elide: bool) -> String {
 }
 
 fn main() {
-    let mut c = corpus::load(std::path::Path::new("tests")).unwrap();
-    let (idx, _) = c.library.identities.iter_enumerated()
-        .find(|(_, i)| i.name.contains("emit_does")).unwrap();
+    let mut filter = None;
+    let mut elide = true;
+    let mut diff = false;
+    for arg in std::env::args().skip(1) {
+        match arg.as_str() {
+            "--all" => elide = false,
+            "--diff" => diff = true,
+            "-h" | "--help" => {
+                eprintln!(
+                    "usage: cargo run -p rewrite --example render -- \
+                     [<identity substring>] [--all] [--diff]\n\
+                     \n  <substring>  which identity to render (default: emit_does)\
+                     \n  --all        show every box, `id` and `copy` included\
+                     \n  --diff       also drive the left side by `decide` and say what moved"
+                );
+                return;
+            }
+            other => filter = Some(other.to_string()),
+        }
+    }
+    let filter = filter.unwrap_or_else(|| "emit_does".to_string());
+
+    // The corpus sits beside the crate, not beside whatever directory this
+    // was run from.
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("the crate sits in the workspace")
+        .join("tests");
+    let mut c = match corpus::load(&root) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("error: could not load the corpus at {}: {}", root.display(), e);
+            std::process::exit(2);
+        }
+    };
+    let Some((idx, _)) = c
+        .library
+        .identities
+        .iter_enumerated()
+        .find(|(_, i)| i.name.contains(&filter))
+    else {
+        eprintln!("error: no identity matching {:?}. The corpus states:", filter);
+        for (_, i) in c.library.identities.iter_enumerated() {
+            eprintln!("  {}", i.name);
+        }
+        std::process::exit(2);
+    };
+    let name = c.library.identities[idx].name.clone();
+
     let mut goal = rewrite::goal::Goal::of_identity(&mut c.terms, &c.library, idx).unwrap();
     diagram2::inline(&mut goal.lhs, &mut c.terms, &c.library, None).unwrap();
     diagram2::inline(&mut goal.rhs, &mut c.terms, &c.library, None).unwrap();
-    let dir = "/tmp/claude-0/-home-user-hanoi/2ada2834-6117-5167-ad83-c804761fdb1a/scratchpad";
-    let full = format!("{}\n{}", render("left ", &goal.lhs, false), render("right", &goal.rhs, false));
-    let lean = format!("{}\n{}", render("left ", &goal.lhs, true), render("right", &goal.rhs, true));
-    std::fs::write(format!("{}/render_full.txt", dir), &full).unwrap();
-    std::fs::write(format!("{}/render.txt", dir), &lean).unwrap();
-    println!("every box: {} lines    read through id/copy: {} lines",
-        full.lines().count(), lean.lines().count());
 
+    println!("identity {}   (calls opened, nothing rewritten)\n", name);
+    print!("{}", render("left ", &goal.lhs, elide));
+    println!();
+    print!("{}", render("right", &goal.rhs, elide));
+
+    if !diff {
+        return;
+    }
     // What a step looks like when the ids are stable: drive the left side
     // and ask what moved. Nodes are only ever deleted, never renumbered.
     let before: BTreeSet<usize> = goal.lhs.live().map(|(i, _)| i.index()).collect();
     let names: HashMap<usize, String> =
         goal.lhs.live().map(|(i, k)| (i.index(), format!("{}", k))).collect();
     let mut after_graph = goal.lhs.clone();
-    let mut d = diagram2::rules::Derivation::default();
-    rewrite::diagram2::tactic::run(&mut after_graph, &mut d, &rewrite::diagram2::tactic::decide()).unwrap();
+    let mut deriv = diagram2::rules::Derivation::default();
+    rewrite::diagram2::tactic::run(
+        &mut after_graph,
+        &mut deriv,
+        &rewrite::diagram2::tactic::decide(),
+    )
+    .unwrap();
     let after: BTreeSet<usize> = after_graph.live().map(|(i, _)| i.index()).collect();
     let gone: Vec<usize> = before.difference(&after).copied().collect();
     let new: Vec<usize> = after.difference(&before).copied().collect();
     let mut bykind: BTreeMap<String, usize> = BTreeMap::new();
-    for id in &gone { *bykind.entry(names[id].split(' ').next().unwrap().to_string()).or_default() += 1; }
+    for id in &gone {
+        *bykind
+            .entry(names[id].split(' ').next().unwrap().to_string())
+            .or_default() += 1;
+    }
     let mut bykind: Vec<_> = bykind.into_iter().collect();
-    bykind.sort_by_key(|(_, n)| Reverse(*n));
-    println!("\nafter `decide`: {} boxes → {}   ({} gone, {} new)",
-        before.len(), after.len(), gone.len(), new.len());
-    println!("  gone: {}", bykind.iter().take(8)
-        .map(|(k, n)| format!("{}×{}", n, k)).collect::<Vec<_>>().join("  "));
-    println!("  survivors still holding a branch: {}",
-        after_graph.live().filter(|(_, k)| matches!(k, NodeKind::Fork { .. })).count());
+    bykind.sort_by_key(|(k, n)| (Reverse(*n), k.clone()));
+    println!(
+        "\nafter `decide`: {} boxes → {}   ({} gone, {} new)",
+        before.len(),
+        after.len(),
+        gone.len(),
+        new.len()
+    );
+    println!(
+        "  gone: {}",
+        bykind
+            .iter()
+            .take(8)
+            .map(|(k, n)| format!("{}×{}", n, k))
+            .collect::<Vec<_>>()
+            .join("  ")
+    );
+    println!(
+        "  branches still standing: {}",
+        after_graph
+            .live()
+            .filter(|(_, k)| matches!(k, NodeKind::Fork { .. }))
+            .count()
+    );
 }
