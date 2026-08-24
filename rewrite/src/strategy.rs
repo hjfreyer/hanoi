@@ -32,12 +32,16 @@
 //! now stands: a failed run leaves its graph at the last step that landed,
 //! and showing that state is the point of the guarantee.
 
+use std::collections::HashSet;
+
 use bytecode::Library;
 
-use crate::diagram2::{self, read_back, tactic};
+use crate::diagram2::rules::{Derivation, Law};
+use crate::diagram2::tactic::{Region, Tactic};
+use crate::diagram2::{self, BranchId, NodeId, read_back, tactic};
 use crate::goal::{Goal, Outcome, Proof, Residual, against};
 use crate::hant::{Body, OnSide, Step, Strategy, default_strategy};
-use crate::term::{Context, Error, Term, TermIndex};
+use crate::term::{Context, Error, Prim, Term, TermIndex};
 
 /// One side of a goal, picked out for a mutation that borrows it alone.
 type Pick = fn(&mut Goal) -> &mut diagram2::Graph;
@@ -157,42 +161,43 @@ impl<'l> Prover<'l> {
             // the operation is left standing, and everything after the
             // expansion is the table's business. A manipulation, not a
             // closer: what it leaves is a goal.
-            Step::Cases { prim } => {
+            //
+            // The arms, when the proof wrote them, run per-case
+            // sub-strategies scoped to the fresh branch — the hypothesis
+            // spent as structure — landing their steps in the same
+            // per-side records as the split, so the proof object and its
+            // checker never learn a hypothesis existed.
+            Step::Cases {
+                prim,
+                literal,
+                then_arm,
+                else_arm,
+            } => {
                 let mut goal = goal;
-                let mut spent: [Vec<diagram2::rules::Step>; 2] = [Vec::new(), Vec::new()];
-                let picks: [Pick; 2] = [|g| &mut g.lhs, |g| &mut g.rhs];
-                for (pick, record) in picks.into_iter().zip(&mut spent) {
-                    let side = pick(&mut goal);
-                    let Some(wire) = outermost(side, prim) else {
-                        continue;
-                    };
-                    let split =
-                        diagram2::rules::propose(side, &[diagram2::rules::Law::Shannon], wire)
-                            .into_iter()
-                            .next();
-                    let Some(split) = split else {
-                        continue;
-                    };
-                    let mut deriv = diagram2::rules::Derivation::default();
-                    if let Err(e) = deriv.push(side, split) {
-                        let why = format!("`cases` proposed a split the checker refused: {}", e);
-                        return Ok(Outcome::Stuck(gave_up(ctx, &goal, &why)));
-                    }
-                    *record = deriv.steps().cloned().collect();
-                }
-                if spent.iter().all(Vec::is_empty) {
-                    return Ok(Outcome::Stuck(gave_up(
-                        ctx,
-                        &goal,
-                        "`cases` finds nothing to split on: no side holds the operation \
-                         with anything downstream of its answer",
-                    )));
-                }
-                let [lhs, rhs] = spent;
+                let mut derivs = [Derivation::default(), Derivation::default()];
+                let counts = match self.cases_step(
+                    ctx,
+                    &mut goal,
+                    &mut derivs,
+                    [Scope::Whole, Scope::Whole],
+                    prim,
+                    literal.as_deref(),
+                    then_arm,
+                    else_arm,
+                ) {
+                    Ok(counts) => counts,
+                    Err(residual) => return Ok(Outcome::Stuck(*residual)),
+                };
+                let [l, r] = derivs;
+                let (lhs, rhs) = (l.steps().cloned().collect(), r.steps().cloned().collect());
+                let arms = (then_arm.is_some() || else_arm.is_some())
+                    .then_some((counts.then_steps, counts.else_steps));
                 Ok(match self.run(ctx, rest, goal)? {
                     Outcome::Closed(sub) => Outcome::Closed(Proof::Cases {
                         lhs,
                         rhs,
+                        splits: counts.splits,
+                        arms,
                         sub: Box::new(sub),
                     }),
                     Outcome::Stuck(mut residual) => {
@@ -372,14 +377,228 @@ impl<'l> Prover<'l> {
             }
         })
     }
+
+    /// One `cases` step, bare or structured, possibly nested: fire the
+    /// split per goal side, then run each written arm. Everything lands in
+    /// `derivs` — one derivation per goal side, alive for the whole step
+    /// so a structured split's arm steps append after its own, which is
+    /// what lets [`Proof::Cases`] replay flat.
+    #[allow(clippy::too_many_arguments)]
+    fn cases_step(
+        &self,
+        ctx: &mut Context,
+        goal: &mut Goal,
+        derivs: &mut [Derivation; 2],
+        scopes: [Scope; 2],
+        prim: &Prim,
+        literal: Option<&str>,
+        then_arm: &Option<Strategy<Body>>,
+        else_arm: &Option<Strategy<Body>>,
+    ) -> Result<CaseCounts, Box<Residual>> {
+        let mut counts = CaseCounts {
+            splits: 0,
+            then_steps: 0,
+            else_steps: 0,
+        };
+        let mut branches: [Option<BranchId>; 2] = [None, None];
+        let picks: [Pick; 2] = [|g| &mut g.lhs, |g| &mut g.rhs];
+        for i in 0..2 {
+            let within = match &scopes[i] {
+                Scope::Whole => None,
+                Scope::In(set) => Some(set),
+                Scope::Skip => continue,
+            };
+            let side = picks[i](goal);
+            let Some(wire) = outermost(side, prim, literal, within) else {
+                continue;
+            };
+            let split = diagram2::rules::propose(side, &[Law::Shannon], wire)
+                .into_iter()
+                .next();
+            let Some(split) = split else {
+                continue;
+            };
+            if let Err(e) = derivs[i].push(side, split) {
+                let why = format!("`cases` proposed a split the checker refused: {}", e);
+                return Err(Box::new(gave_up(ctx, goal, &why)));
+            }
+            // The Shannon replacement mints its select's branch after the
+            // arms it implants, so the introduced branch is the last one
+            // the recorded inverse carries — the handle the arms scope to.
+            branches[i] = derivs[i]
+                .latest_undo()
+                .and_then(|back| back.at.branches.last().copied());
+            counts.splits += 1;
+        }
+        if branches.iter().all(Option::is_none) {
+            return Err(Box::new(gave_up(
+                ctx,
+                goal,
+                "`cases` finds nothing to split on: no side holds the operation \
+                 with anything downstream of its answer",
+            )));
+        }
+        counts.then_steps = self.arm(ctx, goal, derivs, &branches, prim, true, then_arm)?;
+        counts.else_steps = self.arm(ctx, goal, derivs, &branches, prim, false, else_arm)?;
+        Ok(counts)
+    }
+
+    /// One written arm of a structured `cases`: its steps, run with every
+    /// rewrite scoped to this case's side of the fresh branch on each goal
+    /// side that still holds it. A goal side that never split — or whose
+    /// branch earlier work already collapsed, discharge being the point —
+    /// skips quietly, the way a bare `cases` leaves a side without the
+    /// operation standing. Answers how many steps the arm landed.
+    #[allow(clippy::too_many_arguments)]
+    fn arm(
+        &self,
+        ctx: &mut Context,
+        goal: &mut Goal,
+        derivs: &mut [Derivation; 2],
+        branches: &[Option<BranchId>; 2],
+        prim: &Prim,
+        case: bool,
+        strategy: &Option<Strategy<Body>>,
+    ) -> Result<usize, Box<Residual>> {
+        let Some(strategy) = strategy else {
+            return Ok(0);
+        };
+        let case_word = if case { "true" } else { "false" };
+        let stood_in = |residual: &mut Residual| {
+            residual.path.insert(
+                0,
+                format!("in the {} case of the split on `{}`", case_word, prim),
+            );
+        };
+        // Which goal sides still hold the branch, read at entry; a branch
+        // that vanishes mid-arm is the next step's business, loudly.
+        let active: [Option<BranchId>; 2] = [0, 1].map(|i| {
+            branches[i].filter(|&branch| {
+                let side = if i == 0 { &goal.lhs } else { &goal.rhs };
+                tactic::arm_nodes(side, branch, case).is_some()
+            })
+        });
+        let mut landed = 0;
+        for step in strategy {
+            match step {
+                Step::Rewrite { side, tactic: t } => {
+                    let sides: &[usize] = match side {
+                        OnSide::Lhs => &[0],
+                        OnSide::Rhs => &[1],
+                        OnSide::Both => &[0, 1],
+                    };
+                    for &i in sides {
+                        let Some(branch) = active[i] else {
+                            continue;
+                        };
+                        let wrapped = Tactic::Within(
+                            Region::Arm { branch, side: case },
+                            Box::new((**t).clone()),
+                        );
+                        let graph = if i == 0 { &mut goal.lhs } else { &mut goal.rhs };
+                        let mark = derivs[i].len();
+                        if let Err(e) = tactic::run(graph, &mut derivs[i], &wrapped) {
+                            let why = format!("`{}(…)`: {}", side.word(), e);
+                            let mut residual = gave_up(ctx, goal, &why);
+                            stood_in(&mut residual);
+                            return Err(Box::new(residual));
+                        }
+                        landed += derivs[i].len() - mark;
+                    }
+                }
+                Step::Cases {
+                    prim: inner,
+                    literal,
+                    then_arm,
+                    else_arm,
+                } => {
+                    let scopes = [0, 1].map(|i| match active[i] {
+                        None => Scope::Skip,
+                        Some(branch) => {
+                            let side = if i == 0 { &goal.lhs } else { &goal.rhs };
+                            match tactic::arm_nodes(side, branch, case) {
+                                Some(set) => Scope::In(set),
+                                None => Scope::Skip,
+                            }
+                        }
+                    });
+                    let sub = self
+                        .cases_step(
+                            ctx,
+                            goal,
+                            derivs,
+                            scopes,
+                            inner,
+                            literal.as_deref(),
+                            then_arm,
+                            else_arm,
+                        )
+                        .map_err(|mut residual| {
+                            stood_in(&mut residual);
+                            residual
+                        })?;
+                    landed += sub.splits + sub.then_steps + sub.else_steps;
+                }
+                other => unreachable!(
+                    "validate refused `{}` inside a `cases` arm at parse time",
+                    other
+                ),
+            }
+        }
+        Ok(landed)
+    }
+}
+
+/// How a `cases` step scopes each goal side when it looks for the wire to
+/// split on: the whole side at the top level; an enclosing arm's boxes
+/// when nested, so the split picks the arm's own retest rather than the
+/// test the enclosing split already spent; or not at all, for a side the
+/// enclosing split never touched.
+enum Scope {
+    Whole,
+    In(HashSet<NodeId>),
+    Skip,
+}
+
+/// What one `cases` step spent, for the proof's summary: how many
+/// expansions fired, and how many steps each written arm landed (both
+/// goal sides summed, nested splits included).
+struct CaseCounts {
+    splits: usize,
+    then_steps: usize,
+    else_steps: usize,
+}
+
+/// Whether one of a box's operands is the pushed literal `want` names —
+/// by its full spelling, or by any tail of it from a `::` boundary, the
+/// way an `inline` label names a sentence.
+fn names_literal(g: &diagram2::Graph, id: diagram2::NodeId, want: &str) -> bool {
+    g.sources(id).iter().any(|src| match *src {
+        diagram2::Source::Port { node, port: 0 } => match g.kind(node) {
+            diagram2::NodeKind::Op(Prim::Push(v)) => {
+                let spelled = format!("{}", v);
+                spelled == want || spelled.ends_with(&format!("::{}", want))
+            }
+            _ => false,
+        },
+        _ => false,
+    })
 }
 
 /// The box of one operation with the least upstream — the outermost
 /// decision, which is the one worth splitting on first: everything
-/// downstream of it is what the split decides. Ties break by id.
-fn outermost(g: &diagram2::Graph, prim: &crate::term::Prim) -> Option<diagram2::NodeId> {
+/// downstream of it is what the split decides. Ties break by id. Held to
+/// `within` when a nested split looks only inside its enclosing arm, and
+/// to the boxes testing against a named literal when the proof addressed
+/// the wire by what it tests.
+fn outermost(
+    g: &diagram2::Graph,
+    prim: &Prim,
+    literal: Option<&str>,
+    within: Option<&HashSet<NodeId>>,
+) -> Option<diagram2::NodeId> {
     let cone = |id: diagram2::NodeId| {
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = HashSet::new();
         let mut todo = vec![id];
         while let Some(node) = todo.pop() {
             if !seen.insert(node) {
@@ -394,7 +613,9 @@ fn outermost(g: &diagram2::Graph, prim: &crate::term::Prim) -> Option<diagram2::
         seen.len()
     };
     g.live()
+        .filter(|(id, _)| within.is_none_or(|set| set.contains(id)))
         .filter(|(_, k)| matches!(k, diagram2::NodeKind::Op(p) if p == prim))
+        .filter(|(id, _)| literal.is_none_or(|want| names_literal(g, *id, want)))
         .map(|(id, _)| id)
         .min_by_key(|&id| (cone(id), id))
 }
@@ -971,6 +1192,81 @@ mod tests {
         };
         let err = stolen.check(false_goal, &mut ctx, &false_lib).unwrap_err();
         assert!(err.contains("does not re-apply"), "{}", err);
+    }
+
+    /// A structured `cases` closes what the flat one does, with each arm's
+    /// work scoped to its side of the split — and the close re-checks,
+    /// which is the load-bearing assertion: the arm steps appended to the
+    /// split's record replay blind through `Proof::check`.
+    #[test]
+    fn a_structured_case_split_scopes_its_arms() {
+        let code = "identity probe \
+             { pick 0 push 7 equal branch { push 7 equal } { drop 0 push false } } \
+           = { pick 0 push 7 equal branch { drop 0 push true } { drop 0 push false } };";
+        let (_ctx, outcome) = prove_with(
+            code,
+            "probe",
+            Some("both(decide) cases(equal) (true: both(decide), false: both(decide)) diagram"),
+        );
+        let Outcome::Closed(proof) = outcome else {
+            panic!("the structured split closes what the flat one does");
+        };
+        let summary = proof.summary();
+        assert!(
+            summary.contains("(true:") && summary.contains("false:"),
+            "{}",
+            summary
+        );
+    }
+
+    /// An arm that fails names whose case it stood in, on top of the
+    /// tactic's own complaint.
+    #[test]
+    fn a_failed_arm_names_its_case() {
+        let code = "identity probe \
+             { pick 0 push 7 equal branch { push 7 equal } { drop 0 push false } } \
+           = { pick 0 push 7 equal branch { drop 0 push true } { drop 0 push false } };";
+        let (_ctx, outcome) = prove_with(
+            code,
+            "probe",
+            Some("both(decide) cases(equal) (true: both(fire(fork-dedup))) diagram"),
+        );
+        let Outcome::Stuck(residual) = outcome else {
+            panic!("a split's branch has no fork to dedup");
+        };
+        assert!(
+            residual
+                .path
+                .iter()
+                .any(|p| p.contains("in the true case of the split on")),
+            "{:?}",
+            residual.path
+        );
+        assert!(
+            residual.stopped.contains("`both(…)`"),
+            "{}",
+            residual.stopped
+        );
+    }
+
+    /// A goal side that never split skips the arms quietly — the same
+    /// tolerance the bare step keeps for a side without the operation.
+    #[test]
+    fn a_side_without_the_operation_skips_the_arms_quietly() {
+        let (_ctx, outcome) = prove_with(
+            "identity probe { is_bool is_bool } = { drop 0 push true };",
+            "probe",
+            Some("cases(is_bool) (true: both(decide), false: both(decide)) diagram"),
+        );
+        let Outcome::Closed(proof) = outcome else {
+            panic!("the right side has no test, and the left's split closes");
+        };
+        let summary = proof.summary();
+        assert!(
+            summary.starts_with("cases: 1 split(s) (true:"),
+            "{}",
+            summary
+        );
     }
 
     /// Which of the corpus's identities the bare table decides, pinned:

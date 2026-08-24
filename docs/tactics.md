@@ -653,11 +653,16 @@ convenience that picks a wire and fires the Shannon row — nothing in the
 prover touches a graph except through `Derivation::push`. `diagram.rs` is
 deleted; [docs/proving.md](proving.md) tells that story.
 
-Next, in order of want: a `Region::Arm` (the tactic that needs it has
-since been designed — the structured `cases` of
-[docs/hypotheses.md](hypotheses.md)); surface spellings for queries
-and stated (backward) steps; serialization for `Tactic` beyond the
-surface subset. The re-checkable derivation per closed identity has since
+`Region::Arm` has since landed — the tactic that needed it is the
+structured `cases` of [docs/hypotheses.md](hypotheses.md), whose arm
+sub-strategies run `Within` one side of a fresh branch. Its membership
+is the arm's *cone* (everything upstream of that side's blocks, minus
+the condition's own cone, plus the branch's ends, where the branch
+layer's laws anchor): shared context is deliberately in, because a
+split duplicates only what lies downstream of its wire, so the tests a
+nested split must reach sit upstream, shared between the copies. Next,
+in order of want: surface spellings for queries and stated (backward)
+steps; serialization for `Tactic` beyond the surface subset. The re-checkable derivation per closed identity has since
 landed — a `Proof` carries every step its drives spent, and
 `Prover::prove` replays the whole tree before answering — with
 persistence to disk the remaining half.
