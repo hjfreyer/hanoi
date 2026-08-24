@@ -7,22 +7,39 @@
 //!
 //! Per identity, its written strategy runs — the `.hant` beside the `.hana`,
 //! see `rewrite::hant` — or the default `diagram` when it has none, and one
-//! line reports the outcome. A goal that sticks prints its **residual**:
-//! what each side became, narrowed to where the two differ, which is what
-//! says what to try next. Exit codes: `0` every identity proved, `1` a
-//! claim is unproved or a proof entry could not attach, `2` the corpus
-//! would not build or the arguments were wrong.
+//! line reports the outcome.
+//!
+//! A goal that sticks prints its **residual**: the two sides as graphs —
+//! see `rewrite::diagram2::render` — which is what the tactics acted on and
+//! what a next step would name. A box keeps its id across a step, so two
+//! reports of one proof compare, which is what watching a proof means.
+//!
+//! `--terms` prints the sides as terms instead, narrowed to where they
+//! differ: that is the language a `via` waypoint is written in, so it is
+//! what a stuck goal is *answered* with — ask for it when you are ready to
+//! write one. `--boxes` stops reading through the `id` and `copy` the
+//! structural laws would delete.
+//!
+//! Exit codes: `0` every identity proved, `1` a claim is unproved or a
+//! proof entry could not attach, `2` the corpus would not build or the
+//! arguments were wrong.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
 
 use rewrite::corpus;
+use rewrite::diagram2::render;
 use rewrite::goal::{Goal, Outcome};
 use rewrite::strategy::Prover;
 
 struct Args {
     root: PathBuf,
     filter: Option<String>,
+    /// Print the sides as terms — the language a `via` is written in —
+    /// rather than as graphs.
+    terms_only: bool,
+    /// Show `id` and `copy` rather than reading through them.
+    all_boxes: bool,
 }
 
 fn main() -> ExitCode {
@@ -30,7 +47,7 @@ fn main() -> ExitCode {
         Ok(args) => args,
         Err(message) => {
             eprintln!("error: {}", message);
-            eprintln!("usage: prove <root> [--filter <substr>]");
+            eprintln!("usage: prove <root> [--filter <substr>] [--terms] [--boxes]");
             return ExitCode::from(2);
         }
     };
@@ -47,10 +64,14 @@ fn main() -> ExitCode {
 fn parse_args() -> Result<Args, String> {
     let mut root = None;
     let mut filter = None;
+    let mut terms_only = false;
+    let mut all_boxes = false;
     let mut argv = std::env::args().skip(1);
     while let Some(arg) = argv.next() {
         match arg.as_str() {
             "--filter" => filter = Some(argv.next().ok_or("--filter needs a value")?),
+            "--terms" => terms_only = true,
+            "--boxes" => all_boxes = true,
             other if root.is_none() && !other.starts_with('-') => root = Some(PathBuf::from(other)),
             other => return Err(format!("unrecognized argument: {}", other)),
         }
@@ -58,6 +79,8 @@ fn parse_args() -> Result<Args, String> {
     Ok(Args {
         root: root.ok_or("no corpus root given")?,
         filter,
+        terms_only,
+        all_boxes,
     })
 }
 
@@ -109,20 +132,41 @@ fn run(args: &Args) -> Result<bool, String> {
                 failed += 1;
                 println!("identity {} ... FAILED", identity.name);
                 println!();
-                if !residual.path.is_empty() {
-                    field("the difference is", &residual.path.join(", "));
+                if args.terms_only {
+                    // What to write back. With the library at hand a call
+                    // prints as the name a waypoint would have to write,
+                    // not as an index.
+                    let shown = |term| {
+                        corpus
+                            .terms
+                            .pretty(term, TERM_WIDTH)
+                            .named(&corpus.library)
+                            .to_string()
+                    };
+                    if !residual.path.is_empty() {
+                        field("the difference is", &residual.path.join(", "));
+                    }
+                    field("what the left came to", &shown(residual.lhs));
+                    field("what the right came to", &shown(residual.rhs));
+                } else {
+                    // What the goal *is*, as the tactics left it. Every
+                    // line names a box a next step could name back.
+                    for (tag, graph) in [
+                        ("left ", &residual.lhs_graph),
+                        ("right", &residual.rhs_graph),
+                    ] {
+                        let listing = render::listing(graph, tag);
+                        let listing = if args.all_boxes {
+                            listing.all_boxes()
+                        } else {
+                            listing
+                        };
+                        println!("{}", listing);
+                    }
+                    if !residual.path.is_empty() {
+                        field("as terms, they differ", &residual.path.join(", "));
+                    }
                 }
-                // With the library at hand a call prints as the name a
-                // waypoint would have to write, not as an index.
-                let shown = |term| {
-                    corpus
-                        .terms
-                        .pretty(term, TERM_WIDTH)
-                        .named(&corpus.library)
-                        .to_string()
-                };
-                field("what the left came to", &shown(residual.lhs));
-                field("what the right came to", &shown(residual.rhs));
                 field("the engine stopped", &residual.stopped);
                 println!();
             }

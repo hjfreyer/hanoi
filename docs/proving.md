@@ -106,7 +106,7 @@ proof identities::testing_a_test_by_name = inline diagram;
 | `exact` | claims the sides are one diagram — **isomorphic** — which the auto-close has already checked, so a reached `exact` fails and shows the goal exactly as it stands | always, when reached |
 | `via { body } (left: s, right: s)` | **cuts**: `A = B` splits into the goals `A = C` and `C = B`, the waypoint built as a graph | the waypoint's net stack change is not the goal's, or a side fails |
 | `cases(op)` | **case analysis** on an intermediate result: an `op` answer can only be `true` or `false`, so everything that depends on it is replaced by a branch holding one copy per case, the assumed answer pasted in as a literal — one checked rewrite per side, which the ordinary laws then simplify under each assumption (see below) | no side computes `op`, or nothing depends on its answer |
-| `diagram` | rewrites both sides by the whole table to fixpoint and asks whether they landed on one diagram — isomorphic | they did not — and the residual is both sides read back, narrowed to the difference |
+| `diagram` | rewrites both sides by the whole table to fixpoint and asks whether they landed on one diagram — isomorphic | they did not — and the residual is both sides as they stand, listed box by box (or, with `--terms`, read back and narrowed to the difference) |
 
 Inside `lhs(…)`, `rhs(…)` and `both(…)` is the rewrite language of
 [docs/tactics.md](tactics.md), juxtaposed like steps are: `saturate` (the
@@ -269,21 +269,44 @@ contract claim. Every other identity closes with no entry at all.
 
 ## The failure output is the point
 
-A stuck goal prints its **residual**: what each side became — for a failed
-`diagram`, the two rewritten graphs read back into the term language —
-narrowed to where the two differ (a `the difference is │ …` line strips
-shared context), plus why the step gave up. A
-false claim buried in one branch arm behind a shared prefix prints as the
-two leaves that disagree, not as two whole programs. That output is the
-deliverable of a failed run: the reified normal form is written in the same
-language a `via` waypoint is, so answering a residual is copying and
-editing rather than translating.
+A stuck goal prints its **residual**: the two sides as they stand, plus why
+the step gave up. That output is the deliverable of a failed run, and it
+comes in two spellings because reading a goal and answering one are
+different jobs.
+
+**The graphs are what it shows.** One line per box — its id, what it reads,
+what reads it — with a branch's arms indented between the `fork` and
+`select` that bracket them. This is what the tactics acted on, so a next
+step names the boxes it names; and a `NodeId` is stable for the life of a
+graph (nodes are only deleted, never moved), so two reports of one proof
+compare, which is what watching a proof means. Four things make a large one
+legible, and `rewrite/src/diagram2/render.rs` states each: branch
+membership is *computed* (downstream of the fork ∩ upstream of the select)
+rather than guessed from what sits between two lines; the order stays
+inside a branch once it enters one, instead of hoisting an arm's constants
+out of the arm; a box that reads nothing is placed just before the box that
+reads it, so an operand sits with its `equal`; and `id` and `copy` are read
+through, since they are what the structural laws delete and a `copy` says
+what the links already say. `--boxes` shows them.
+
+**The terms are what it answers with.** `--terms` prints the two sides read
+back into the term language and narrowed to where they differ (an `as
+terms, they differ │ …` line strips shared context), so a false claim
+buried in one branch arm behind a shared prefix prints as the two leaves
+that disagree rather than as two whole programs. This is the spelling to
+ask for when writing a `via`: the reified form is in the same language a
+waypoint is, so answering a residual is copying and editing rather than
+translating.
 
 A term that does not fit the width breaks at every `;` of its spine, indents
 a branch's arms inside their braces, and lines a parenthesized group up under
 its paren; anything that still fits stays on one line. The parentheses are
 the same ones the one-line spelling uses, so a broken term still says which
-tree it came from — the layout only chooses where the newlines go.
+tree it came from — the layout only chooses where the newlines go. What it
+does *not* do is spell the width it was written across: `read_back` emits
+every step over the whole live stack, and the two unit laws — `id(a) * id(b)
+= id(a + b)` over the flattened product, `id(n) ; t = t` — take that back
+off before anything prints it.
 
 ## What is not here yet
 

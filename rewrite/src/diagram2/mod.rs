@@ -168,6 +168,7 @@ use crate::term::{Arity, Context, Prim, Term, TermIndex, lower};
 #[cfg(test)]
 mod meaning;
 pub mod query;
+pub mod render;
 pub mod rules;
 pub mod tactic;
 
@@ -1648,7 +1649,7 @@ mod tests {
     use bytecode::{Library, SentenceIndex, assemble};
 
     /// The term a sentence written inline lowers to, built in `terms`.
-    fn term_of(terms: &mut Context, body: &str) -> TermIndex {
+    pub(super) fn term_of(terms: &mut Context, body: &str) -> TermIndex {
         let code = format!("sentence probe {{ {} }}", body);
         let library = assemble(&code).unwrap();
         let idx = library
