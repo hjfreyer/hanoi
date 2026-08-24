@@ -15,13 +15,19 @@
 //! derivation: replayable by [`rules::replay`], undoable by
 //! [`Derivation::undo`], with nothing new to trust.
 //!
-//! Two primitives, matching the two ways a step comes to be:
+//! Three primitives, matching the ways a step comes to be:
 //!
 //! - [`Tactic::Fire`] — **found**, forward: a [`Query`] narrows to the box
 //!   a rule is anchored at, [`rules::propose`] or
 //!   [`rules::find_pinned`] produces the [`Match`](rules::Match), and
 //!   payload blanks resolve by reading the bound box — the way
 //!   `read_off` has always read them.
+//! - [`Tactic::At`] — **found at a named box**, either direction: the
+//!   address is a [`NodeId`] copied off a residual listing, and the
+//!   search is [`rules::instances`] × [`rules::find_pinned`] over every
+//!   pattern box, so a match counts when it holds that box anywhere. The
+//!   one address that is a name rather than a description, and the one a
+//!   person writes by pointing at a report.
 //! - [`Tactic::State`] — **stated**, either direction but above all
 //!   backward: the matcher rightly declines every pattern that does not
 //!   pin its own match, so those steps are *statements*, and a
@@ -42,6 +48,16 @@
 //! dry, or exactly one on pain of [`TacticError::Ambiguous`]. Automorphic
 //! duplicates — `dedup`'s two boxes swapped — are *counted*, not detected:
 //! the deterministic order picks one and the derivation records which.
+//!
+//! [`Tactic::At`] is the exception that keeps the rule honest. It holds an
+//! id, and an id means nothing against a graph other than the one that
+//! issued it — so it holds one across no rewrite either: it is checked
+//! live at every entry, re-searched between firings like everything else,
+//! and it fails by name ([`TacticError::NoSuchNode`]) the moment the box
+//! it points at is gone. What licenses it is the residual listing, which
+//! is keyed by id precisely so that a next step can name what the report
+//! named; the address is exact for as long as the steps in front of it
+//! are, and no longer, which is the author's to know.
 //!
 //! ## A fatal failure leaves the graph standing
 //!
@@ -179,6 +195,41 @@ pub enum Tactic {
         rule: RuleSpec,
         pick: Pick,
     },
+    /// Found at a **named box**: the one address that is an id rather
+    /// than a description, and the one a residual listing hands you
+    /// ready-made.
+    ///
+    /// Everything else here addresses by [`Query`], because a [`NodeId`]
+    /// stops meaning anything once a rewrite has run and a description
+    /// does not. This is the deliberate exception, and it earns its place
+    /// from the other end: a stuck goal prints one line per box, keyed by
+    /// id, and the whole point of that listing is that *a next step names
+    /// the boxes it names*. Without this variant there is no way to say
+    /// back what the report just said.
+    ///
+    /// So the address is exact and the brittleness is the author's: an id
+    /// is a fact about one graph at one moment, and it survives only as
+    /// long as the steps in front of it do. What it buys is precision
+    /// nothing else offers — not "the first `dedup` that fires", but *that
+    /// one*.
+    ///
+    /// The search is the mirror of [`rules::propose`]'s. Every equation
+    /// the law comes to in this graph ([`rules::instances`]) is looked
+    /// for with each of its pattern boxes pinned in turn to `node`
+    /// ([`rules::find_pinned`]), so a match counts when it holds the box
+    /// **anywhere**, not only where the pattern happens to anchor. `dir`
+    /// says which side of the equation is the pattern: `Forward` matches
+    /// the left and leaves the right, `Backward` the other way round —
+    /// and backward finds something only where the law's right-hand side
+    /// names enough boxes to pin itself, which most of the table's do
+    /// not. Where it finds nothing it says so, loudly, naming the box and
+    /// the law.
+    At {
+        node: NodeId,
+        law: Law,
+        dir: Direction,
+        pick: Pick,
+    },
     /// Stated, either direction: query, resolve the spec, apply.
     State {
         at: Query,
@@ -241,6 +292,17 @@ pub enum TacticError {
     /// [`rules::apply`] refused a step the tactic constructed — a tactic
     /// bug, carried with the refusal so it can be read.
     Refused(rules::Error),
+    /// [`Tactic::At`] named a box the graph does not have live: an id
+    /// from before an earlier step deleted it, or from the other side of
+    /// the goal.
+    NoSuchNode { node: NodeId },
+    /// [`Tactic::At`] found the box, and no match of that law in that
+    /// direction holds it.
+    NoMatchAt {
+        node: NodeId,
+        law: Law,
+        dir: Direction,
+    },
     /// A spec named a variable the query does not bind.
     Unresolved { var: Var },
     /// A spec named a port a bound node does not have.
@@ -260,6 +322,19 @@ impl fmt::Display for TacticError {
             TacticError::Ambiguous { found } => {
                 write!(f, "one answer was claimed and {} were found", found)
             }
+            TacticError::NoSuchNode { node } => {
+                write!(f, "{} is not a live box of this side", node)
+            }
+            TacticError::NoMatchAt { node, law, dir } => write!(
+                f,
+                "no {} `{}` match holds {}",
+                match dir {
+                    Direction::Forward => "forward",
+                    Direction::Backward => "backward",
+                },
+                law,
+                node
+            ),
             TacticError::Refused(e) => write!(f, "a constructed step was refused: {}", e),
             TacticError::Unresolved { var } => write!(f, "{} is not bound by the query", var),
             TacticError::OutOfRange { var, port } => {
@@ -316,6 +391,12 @@ impl Runner<'_> {
     fn run(&mut self, tactic: &Tactic) -> Result<Progress, TacticError> {
         match tactic {
             Tactic::Fire { at, rule, pick } => self.fire(at, rule, *pick),
+            Tactic::At {
+                node,
+                law,
+                dir,
+                pick,
+            } => self.fire_at(*node, *law, *dir, *pick),
             Tactic::State {
                 at,
                 rule,
@@ -415,6 +496,110 @@ impl Runner<'_> {
                 Ok(Progress::Advanced(fired))
             }
         }
+    }
+
+    /// [`Tactic::At`]: the named box, that law, that direction.
+    ///
+    /// The shape is [`fire`](Runner::fire)'s, and it re-searches between
+    /// firings for the same reason — a [`Match`](rules::Match) never
+    /// crosses an [`apply`](rules::apply). The address does not need
+    /// re-resolving, being an id already; what needs re-asking is which
+    /// matches still hold it.
+    fn fire_at(
+        &mut self,
+        node: NodeId,
+        law: Law,
+        dir: Direction,
+        pick: Pick,
+    ) -> Result<Progress, TacticError> {
+        // Said apart from "no match holds it", because the two are
+        // different mistakes: a dead id is a proof reading a listing from
+        // before the step in front of it, and that is worth its own
+        // sentence.
+        if !self.graph.is_live(node) {
+            return Err(TacticError::NoSuchNode { node });
+        }
+        let missing = || TacticError::NoMatchAt { node, law, dir };
+        match pick {
+            Pick::First => {
+                let step = self.at_offers(node, law, dir).into_iter().next();
+                self.land(step.ok_or_else(missing)?)?;
+                Ok(Progress::Advanced(1))
+            }
+            Pick::Unique => {
+                let mut offers = self.at_offers(node, law, dir);
+                match offers.len() {
+                    0 => Err(missing()),
+                    1 => {
+                        self.land(offers.pop().expect("one"))?;
+                        Ok(Progress::Advanced(1))
+                    }
+                    found => Err(TacticError::Ambiguous { found }),
+                }
+            }
+            Pick::Each => {
+                let mut fired = 0;
+                // A firing may delete the box it was aimed at, and then
+                // there is nothing left to hold anything — which is one
+                // way this ends.
+                while self.graph.is_live(node)
+                    && let Some(step) = self.at_offers(node, law, dir).into_iter().next()
+                {
+                    self.land(step)?;
+                    fired += 1;
+                }
+                if fired == 0 {
+                    return Err(missing());
+                }
+                Ok(Progress::Advanced(fired))
+            }
+        }
+    }
+
+    /// Every step of `law`, in direction `dir`, whose match holds `node`.
+    ///
+    /// Two sweeps, and the second is the point. [`rules::instances`]
+    /// answers which equations the law comes to in this graph;
+    /// [`rules::find_pinned`] is then asked once per pattern box, pinning
+    /// *that* box to `node`, so the answers are the matches holding the
+    /// named box anywhere in their image rather than only at the box a
+    /// pattern happens to anchor on. A pattern that does not pin its own
+    /// match answers nothing, for every pin — which is how the backward
+    /// direction declines the rows it cannot search for.
+    ///
+    /// Deduplicated and left in the order the sweeps found it: instances
+    /// in live-box order, pins in pattern order, matches in the matcher's
+    /// own. Untrusted like every other search here — [`rules::apply`]
+    /// judges whatever this hands it.
+    fn at_offers(&self, node: NodeId, law: Law, dir: Direction) -> Vec<Step> {
+        // A focus scopes anchors, and this is an anchor: a box outside the
+        // region is not this tactic's to name.
+        if self.region.as_ref().is_some_and(|r| !r.contains(&node)) {
+            return Vec::new();
+        }
+        let mut out: Vec<Step> = Vec::new();
+        for rule in rules::instances(self.graph, law) {
+            let Ok((lhs, rhs)) = rules::sides(&rule) else {
+                continue;
+            };
+            let pattern = match dir {
+                Direction::Forward => lhs,
+                Direction::Backward => rhs,
+            };
+            for pin in 0..pattern.nodes.len() {
+                for at in rules::find_pinned(self.graph, &pattern, pin, node) {
+                    let step = Step {
+                        rule: rule.clone(),
+                        dir,
+                        at,
+                    };
+                    if !out.contains(&step) {
+                        out.push(step);
+                    }
+                }
+            }
+        }
+        out
     }
 
     fn state(
@@ -791,6 +976,18 @@ pub fn fire_first(laws: Vec<Law>) -> Tactic {
             laws,
             anchor: Var("n"),
         },
+        pick: Pick::First,
+    }
+}
+
+/// One law, one box, one direction — [`Tactic::At`] with the canonical
+/// pick, which is what the `.hant` surface `at(#7, dedup, backward)`
+/// builds.
+pub fn fire_at(node: NodeId, law: Law, dir: Direction) -> Tactic {
+    Tactic::At {
+        node,
+        law,
+        dir,
         pick: Pick::First,
     }
 }
@@ -1365,5 +1562,217 @@ mod tests {
         assert_eq!(graph.live_count(), 1, "\n{}", graph);
         let (_, kind) = graph.live().next().unwrap();
         assert_eq!(kind, &NodeKind::Op(Prim::Push(Value::Int(1))));
+    }
+
+    /// The one address that is a **name** rather than a description, and
+    /// what it is for: two boxes offer the same law, and the proof says
+    /// which. `fire` takes the first it is offered and has no way to say
+    /// anything else.
+    #[test]
+    fn a_named_box_is_where_the_step_lands() {
+        let graph = built("pick 1 pick 1 equal drop 0");
+        let copies: Vec<NodeId> = graph
+            .live()
+            .filter(|(_, kind)| matches!(kind, NodeKind::Copy(_)))
+            .map(|(id, _)| id)
+            .collect();
+        assert_eq!(copies.len(), 2, "two copies to choose between:\n{}", graph);
+
+        for &target in &copies {
+            let mut g = graph.clone();
+            let mut deriv = Derivation::default();
+            let fired = run(
+                &mut g,
+                &mut deriv,
+                &fire_at(target, Law::CopyElim, Direction::Forward),
+            )
+            .unwrap();
+            assert_eq!(fired, Progress::Advanced(1));
+            assert!(!g.is_live(target), "the named copy went:\n{}", g);
+            for &other in &copies {
+                assert!(
+                    other == target || g.is_live(other),
+                    "and only the named one:\n{}",
+                    g
+                );
+            }
+            // Checked like every other step, and a record that replays.
+            replay(
+                &mut graph.clone(),
+                &deriv.steps().cloned().collect::<Vec<_>>(),
+            )
+            .unwrap();
+        }
+
+        // What the un-addressed spelling does instead.
+        let mut g = graph.clone();
+        let mut deriv = Derivation::default();
+        run(&mut g, &mut deriv, &fire_first(vec![Law::CopyElim])).unwrap();
+        assert!(!g.is_live(copies[0]), "the first, always:\n{}", g);
+    }
+
+    /// A match counts when it holds the named box **anywhere** in its
+    /// image, not only where the law's pattern anchors. `not-not`'s
+    /// pattern is `not ; not` and it anchors on the first, so `propose`
+    /// seeded at the second offers nothing — and naming the second fires
+    /// all the same, which is the whole difference between an address and
+    /// a seed.
+    #[test]
+    fn the_named_box_need_not_be_where_the_pattern_anchors() {
+        let mut graph = built("not not");
+        run(
+            &mut graph,
+            &mut Derivation::default(),
+            &saturate_structural(),
+        )
+        .unwrap();
+        let nots: Vec<NodeId> = graph
+            .live()
+            .filter(|(_, kind)| matches!(kind, NodeKind::Op(Prim::Not)))
+            .map(|(id, _)| id)
+            .collect();
+        let [first, second] = nots[..] else {
+            panic!("two nots, back to back:\n{}", graph)
+        };
+        assert!(
+            rules::propose(&graph, &[Law::NotNot], second).is_empty(),
+            "the pattern anchors on the first `not`"
+        );
+
+        let mut deriv = Derivation::default();
+        run(
+            &mut graph,
+            &mut deriv,
+            &fire_at(second, Law::NotNot, Direction::Forward),
+        )
+        .unwrap();
+        assert_eq!(deriv.len(), 1);
+        assert!(
+            !graph.is_live(first) && !graph.is_live(second),
+            "both nots went, the pair being what the law spends:\n{}",
+            graph
+        );
+    }
+
+    /// The direction is the author's, and `backward` reads the law's
+    /// equation right to left. It finds something wherever the right-hand
+    /// side names enough boxes to pin its own match: `dedup`'s does — one
+    /// box, read twice — so a box can be split back into two.
+    #[test]
+    fn a_named_box_can_be_rewritten_backward() {
+        let graph = built("pick 1 pick 1 equal drop 0");
+        let (drop, _) = graph
+            .live()
+            .find(|(_, kind)| matches!(kind, NodeKind::Drop(_)))
+            .expect("the `drop 0`");
+
+        let mut g = graph.clone();
+        let mut deriv = Derivation::default();
+        run(
+            &mut g,
+            &mut deriv,
+            &fire_at(drop, Law::Dedup, Direction::Backward),
+        )
+        .unwrap();
+        let landed: Vec<Step> = deriv.steps().cloned().collect();
+        let [step] = &landed[..] else {
+            panic!("one step")
+        };
+        assert_eq!(step.dir, Direction::Backward);
+        assert_eq!(step.rule.law(), Law::Dedup);
+        assert_eq!(
+            g.live()
+                .filter(|(_, kind)| matches!(kind, NodeKind::Drop(_)))
+                .count(),
+            2,
+            "one box read twice became two:\n{}",
+            g
+        );
+        // `dedup` is wiring, so the oracle can judge the whole run.
+        same_meaning("dedup, backward", &graph, &g);
+        replay(&mut graph.clone(), &landed).unwrap();
+    }
+
+    /// The two ways a named address fails, said apart — because they are
+    /// different mistakes. A box that is not there is a proof reading a
+    /// listing from before the step in front of it; a box that is there
+    /// with nothing to fire on it is a proof naming the wrong law.
+    #[test]
+    fn a_named_address_fails_by_name() {
+        let graph = built("not not");
+        let (live, _) = graph.live().next().expect("boxes");
+
+        let ghost = NodeId::at(graph.live_count() + 999);
+        assert_eq!(
+            run(
+                &mut graph.clone(),
+                &mut Derivation::default(),
+                &fire_at(ghost, Law::NotNot, Direction::Forward),
+            ),
+            Err(TacticError::NoSuchNode { node: ghost })
+        );
+
+        assert_eq!(
+            run(
+                &mut graph.clone(),
+                &mut Derivation::default(),
+                &fire_at(live, Law::EqualRefl, Direction::Forward),
+            ),
+            Err(TacticError::NoMatchAt {
+                node: live,
+                law: Law::EqualRefl,
+                dir: Direction::Forward,
+            })
+        );
+        assert_eq!(
+            TacticError::NoMatchAt {
+                node: live,
+                law: Law::EqualRefl,
+                dir: Direction::Backward,
+            }
+            .to_string(),
+            format!("no backward `equal-refl` match holds {}", live)
+        );
+    }
+
+    /// A focus scopes anchors, and a named box is an anchor: naming one
+    /// outside the region finds nothing, the same answer a query gets.
+    #[test]
+    fn a_focus_scopes_a_named_box_too() {
+        let graph = built("pick 1 pick 1 equal drop 0");
+        let copies: Vec<NodeId> = graph
+            .live()
+            .filter(|(_, kind)| matches!(kind, NodeKind::Copy(_)))
+            .map(|(id, _)| id)
+            .collect();
+        let [inside, outside] = copies[..] else {
+            panic!("two copies:\n{}", graph)
+        };
+        // A region holding the first copy and nothing else. `LastImage`
+        // with an empty derivation is the empty region, so this is built
+        // the way a real focus is — from what a step landed — by firing
+        // one and focusing its image.
+        let mut g = graph.clone();
+        let mut deriv = Derivation::default();
+        let focused = Tactic::Within(
+            Region::LastImage,
+            Box::new(fire_at(outside, Law::CopyElim, Direction::Forward)),
+        );
+        // Nothing has landed, so the focus is empty and the box is out of
+        // it — even though it is a live box the tactic could otherwise
+        // name.
+        assert_eq!(
+            run(&mut g, &mut deriv, &focused),
+            Err(TacticError::NoMatchAt {
+                node: outside,
+                law: Law::CopyElim,
+                dir: Direction::Forward,
+            })
+        );
+        assert!(
+            g.is_live(outside) && g.is_live(inside),
+            "nothing ran:\n{}",
+            g
+        );
     }
 }

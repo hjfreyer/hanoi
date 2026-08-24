@@ -113,10 +113,25 @@ proof identities::testing_a_test_by_name = inline diagram;
 Inside `lhs(…)`, `rhs(…)` and `both(…)` is the rewrite language of
 [docs/tactics.md](tactics.md), juxtaposed like steps are: `saturate` (the
 structural laws to fixpoint), `saturate(law, …)`, `branches` (the branch
-layer with its cleanup), `fire(law, …)` (one directed firing), `repeat(…)`
-and `try(…)` — laws named as the algebra sheet names them, `copy-elim`,
-`select-view`, `dead-node`, with `structural` and `branching` naming the
-two lists.
+layer with its cleanup), `fire(law, …)` (one directed firing),
+`at(#box, law)` (one firing at a **named box**), `repeat(…)` and `try(…)`
+— laws named as the algebra sheet names them, `copy-elim`, `select-view`,
+`dead-node`, with `structural` and `branching` naming the two lists.
+
+`at` is the step that answers the report in the report's own words. `fire`
+takes the first match it is offered anywhere on the side; when that is the
+wrong one, `at(#41, fork-hoist)` names the box the residual listing printed
+beside the line, and fires the law in a match that holds *that* box —
+anywhere in the match, not only where the law's pattern happens to anchor.
+A third field is the direction, `forward` when it is left out:
+`at(#41, select-same, backward)` reads the law's equation right to left,
+which is how a proof says "put this back", and it finds something wherever
+the law's right-hand side names enough boxes to be looked for. An id is an
+exact address and a brittle one: it means one box of one graph at one
+moment, so an `at` is written by reading a report and holds only against
+the goal that report described — change a step in front of it and the ids
+behind it move. A proof whose named box is gone fails saying so, by name,
+rather than firing somewhere else.
 
 A strategy acts on **one goal**, and the proof mirrors a tree of goals.
 The manipulations transform the current goal; the splitter — `via` —
@@ -314,9 +329,11 @@ different jobs.
 **The graphs are what it shows.** One line per box — its id, what it reads,
 what reads it — with a branch's arms indented between the `fork` and
 `select` that bracket them. This is what the tactics acted on, so a next
-step names the boxes it names; and a `NodeId` is stable for the life of a
-graph (nodes are only deleted, never moved), so two reports of one proof
-compare, which is what watching a proof means. Four things make a large one
+step names the boxes it names — literally, with `at(#41, law)`, which is
+the one address in the tactic language that is a name rather than a
+description; and a `NodeId` is stable for the life of a graph (nodes are
+only deleted, never moved), so two reports of one proof compare, which is
+what watching a proof means. Four things make a large one
 legible, and `rewrite/src/diagram2/render.rs` states each: branch
 membership is *computed* (downstream of the fork ∩ upstream of the select)
 rather than guessed from what sits between two lines; the order stays
