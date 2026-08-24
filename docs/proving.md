@@ -226,6 +226,12 @@ Open the definitions, drive, split on `equal(x, t1)`, drive, split on
 know the literature: this is η — the case split on an opaque value that
 canonical forms cannot make — spent deliberately, as a checked rewrite.)
 
+A hypothesis-style surface over this step — one sub-strategy per case,
+the assumption printed above each subgoal — is designed in
+[docs/hypotheses.md](hypotheses.md), together with the argument that it
+compiles to the derivations this page describes and costs the checker
+nothing.
+
 **Trust.** `sides` and `apply` are the whole of it — plus the machine
 itself, where a law is *about* what an operation computes (`fold` and the
 Shannon expansion consult `run_window`, the real `vm`, so there is no

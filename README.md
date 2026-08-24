@@ -185,3 +185,4 @@ Use the helper shell scripts at the project root to execute test suites:
 - [docs/totality.md](docs/totality.md): Why every instruction answers on every input, and what that buys.
 - [docs/proving.md](docs/proving.md): How `bin/prove` discharges identities — the goal pipeline, the e-graph, and the `.hant` stepping-stone files.
 - [docs/algebra.md](docs/algebra.md): The equational theory itself — every structural law with its side conditions, and the map to the category-theory literature it comes from.
+- [docs/hypotheses.md](docs/hypotheses.md): A design note on hypothesis-style proof authorship — assume a condition, prove each case — and why it compiles to the linear derivations the checker already replays.
