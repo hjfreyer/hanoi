@@ -1320,4 +1320,75 @@ mod tests {
             "the table's reach changed"
         );
     }
+
+    /// The loop an addressed step exists to close: a stuck goal prints a
+    /// listing keyed by box id, and the id it printed is what the next
+    /// step writes back. `fire` cannot say "that one"; `at` is how the
+    /// proof answers the report in the report's own words.
+    #[test]
+    fn a_proof_can_name_the_box_the_residual_printed() {
+        use crate::diagram2::{NodeKind, render};
+
+        let code = "identity probe { pick 1 pick 1 equal drop 0 } = { };";
+
+        // `exact` fails on purpose — the report is its whole job.
+        let (_ctx, outcome) = prove_with(code, "probe", Some("exact"));
+        let Outcome::Stuck(residual) = outcome else {
+            panic!("the sides are not one diagram yet");
+        };
+        let (dead, _) = residual
+            .lhs_graph
+            .live()
+            .find(|(_, kind)| matches!(kind, NodeKind::Drop(_)))
+            .expect("the discarded comparison");
+        let listing = render::listing(&residual.lhs_graph, "left").to_string();
+        assert!(
+            listing.contains(&dead.to_string()),
+            "the listing names the box a proof would name:\n{}",
+            listing
+        );
+
+        // …and that is the address, written exactly as it was printed.
+        let (_ctx, outcome) = prove_with(
+            code,
+            "probe",
+            Some(&format!("lhs(at({}, dead-node)) diagram", dead)),
+        );
+        let Outcome::Closed(proof) = outcome else {
+            panic!("the named box is dead and `dead-node` collects it");
+        };
+        assert!(
+            proof.summary().contains("lhs: 1 rewrite"),
+            "{}",
+            proof.summary()
+        );
+
+        // A box the side does not have is its own mistake, said as one.
+        let (_ctx, outcome) = prove_with(code, "probe", Some("lhs(at(#999, dead-node)) diagram"));
+        let Outcome::Stuck(residual) = outcome else {
+            panic!("there is no #999")
+        };
+        assert!(
+            residual.stopped.contains("#999 is not a live box"),
+            "{}",
+            residual.stopped
+        );
+
+        // So is a box that is there with nothing of that law to fire.
+        let (_ctx, outcome) = prove_with(
+            code,
+            "probe",
+            Some(&format!("lhs(at({}, equal-refl)) diagram", dead)),
+        );
+        let Outcome::Stuck(residual) = outcome else {
+            panic!("a `drop` is no `equal`")
+        };
+        assert!(
+            residual
+                .stopped
+                .contains(&format!("no forward `equal-refl` match holds {}", dead)),
+            "{}",
+            residual.stopped
+        );
+    }
 }

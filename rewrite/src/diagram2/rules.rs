@@ -185,6 +185,87 @@ pub enum Law {
     Retuple,
 }
 
+impl Law {
+    /// How the docs spell this law, which is also how a proof names it.
+    ///
+    /// One table, read both ways: [`crate::hant`] parses a law name by
+    /// scanning [`every`](Law::every) law for the spelling that matches,
+    /// so a law added to the enum is spellable in a `.hant` the moment it
+    /// is named here, and a message that names a law and a proof that
+    /// names one cannot drift apart.
+    pub fn name(self) -> &'static str {
+        match self {
+            Law::IdElim => "id-elim",
+            Law::SwapElim => "swap-elim",
+            Law::CopyElim => "copy-elim",
+            Law::DeadNode => "dead-node",
+            Law::Dedup => "dedup",
+            Law::NotNot => "not-not",
+            Law::AndLiteral => "and-literal",
+            Law::TupleCancel => "tuple-cancel",
+            Law::AsTupleBuilt => "as-tuple-built",
+            Law::EqualRefl => "equal-refl",
+            Law::ForkHoist => "fork-hoist",
+            Law::ForkDedup => "fork-dedup",
+            Law::SelectView => "select-view",
+            Law::SelectSame => "select-same",
+            Law::SelectLiteral => "select-literal",
+            Law::SelectConst => "select-const",
+            Law::SpecializeEqual => "specialize-equal",
+            Law::SpecializeBool => "specialize-bool",
+            Law::SpecializeChoice => "specialize-choice",
+            Law::ViewValue => "view-value",
+            Law::Shannon => "shannon",
+            Law::PromisedBool => "promised-bool",
+            Law::Fold => "fold",
+            Law::TestedBool => "tested-bool",
+            Law::Retuple => "retuple",
+        }
+    }
+
+    /// Every law there is, in the order the enum declares them.
+    ///
+    /// Not a list to *drive* — [`structural`], [`branching`] and
+    /// [`folding`] are the lists a strategy spends, and `view-value` is
+    /// held out of all three on purpose. This is the vocabulary: what a
+    /// name can resolve to, and what a table of names is checked against.
+    pub fn every() -> Vec<Law> {
+        vec![
+            Law::IdElim,
+            Law::SwapElim,
+            Law::CopyElim,
+            Law::DeadNode,
+            Law::Dedup,
+            Law::NotNot,
+            Law::AndLiteral,
+            Law::TupleCancel,
+            Law::AsTupleBuilt,
+            Law::EqualRefl,
+            Law::ForkHoist,
+            Law::ForkDedup,
+            Law::SelectView,
+            Law::SelectSame,
+            Law::SelectLiteral,
+            Law::SelectConst,
+            Law::SpecializeEqual,
+            Law::SpecializeBool,
+            Law::SpecializeChoice,
+            Law::ViewValue,
+            Law::Shannon,
+            Law::PromisedBool,
+            Law::Fold,
+            Law::TestedBool,
+            Law::Retuple,
+        ]
+    }
+}
+
+impl fmt::Display for Law {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.name())
+    }
+}
+
 /// Which operand of a two-input box a payload means.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Side {
@@ -2549,6 +2630,36 @@ pub fn propose(graph: &Graph, laws: &[Law], id: NodeId) -> Vec<Step> {
     out
 }
 
+/// Every instantiation of `law` this graph offers a payload for.
+///
+/// [`propose`] answers "what can fire *here*", and the anchor it is given
+/// is also where the payload is read from. This answers the other half:
+/// **which equations** the law comes to in this graph, with the *where*
+/// left open — the vocabulary of concrete [`Rule`]s a caller can then look
+/// for anywhere, at either side.
+///
+/// It is [`read_off`] swept over every live box and deduplicated, so the
+/// payloads are exactly the ones some box in the graph spells: `dedup` of
+/// each kind present, `id-elim` of each width present, and nothing the
+/// graph does not itself say. That is a real limit and it is the honest
+/// one — a payload no box witnesses would have to be stated rather than
+/// found, which is what [`Match`] and a stated step are for — and it is
+/// what makes a **backward** search possible at all: the right-hand side
+/// of a concrete rule is a graph like any other, so it can be looked for
+/// wherever it names enough boxes to pin itself.
+pub fn instances(graph: &Graph, law: Law) -> Vec<Rule> {
+    let ids: Vec<NodeId> = graph.live().map(|(id, _)| id).collect();
+    let mut out: Vec<Rule> = Vec::new();
+    for id in ids {
+        for (rule, _) in read_off(graph, law, id) {
+            if !out.contains(&rule) {
+                out.push(rule);
+            }
+        }
+    }
+    out
+}
+
 /// The boxes between a fork and one side of its select, lifted out as a
 /// graph of their own — the payload a whole-branch rule carries.
 ///
@@ -4728,6 +4839,82 @@ mod tests {
                 body,
                 law
             );
+        }
+    }
+
+    /// The vocabulary, checked against itself: every law spells one name,
+    /// no two share a name, and every list a strategy drives is drawn
+    /// from it. [`Law::name`]'s match is exhaustive, so a law added to
+    /// the enum has to be named there; this is what makes it get added to
+    /// [`Law::every`] as well, which is what [`crate::hant`] parses
+    /// against.
+    #[test]
+    fn every_law_is_named_once() {
+        let all = Law::every();
+        assert_eq!(
+            all.len(),
+            25,
+            "a law joined the table: name it, and list it in `Law::every`"
+        );
+        let mut names: Vec<&str> = all.iter().map(|law| law.name()).collect();
+        names.sort_unstable();
+        let spelled = names.len();
+        names.dedup();
+        assert_eq!(names.len(), spelled, "two laws share a spelling");
+        for law in [structural(), branching(), folding(), vec![Law::ViewValue]].concat() {
+            assert!(all.contains(&law), "{:?} is on no vocabulary", law);
+        }
+    }
+
+    /// [`instances`] answers which equations a law comes to in one graph,
+    /// with the *where* left open — the payloads the graph's own boxes
+    /// spell, and nothing it does not say.
+    #[test]
+    fn the_instances_of_a_law_are_the_payloads_the_graph_spells() {
+        let (_terms, graph) = built("pick 1 pick 1 equal drop 0");
+
+        // `dedup` carries a kind, so the instances are the kinds present
+        // — each of them once, however many boxes spell it.
+        let deduped: Vec<NodeKind> = instances(&graph, Law::Dedup)
+            .into_iter()
+            .map(|rule| match rule {
+                Rule::Dedup { kind } => kind,
+                other => panic!("{:?} is not a dedup", other),
+            })
+            .collect();
+        for (_, kind) in graph.live() {
+            assert!(
+                matches!(kind, NodeKind::Fork { .. } | NodeKind::Select { .. })
+                    || deduped.contains(kind),
+                "no `dedup` payload for {:?}",
+                kind
+            );
+        }
+        for kind in &deduped {
+            assert!(
+                graph.live().any(|(_, live)| live == kind),
+                "{:?} is a payload no box spells",
+                kind
+            );
+            assert_eq!(
+                deduped.iter().filter(|other| *other == kind).count(),
+                1,
+                "{:?} twice",
+                kind
+            );
+        }
+
+        // And a law no box witnesses comes to nothing: there is no
+        // `tuple` here, so no `tuple-cancel` payload to read.
+        assert!(instances(&graph, Law::TupleCancel).is_empty());
+
+        // Every instance is an equation that builds, which is what makes
+        // it something to look for on either side.
+        for law in Law::every() {
+            for rule in instances(&graph, law) {
+                assert_eq!(rule.law(), law);
+                sides(&rule).unwrap_or_else(|e| panic!("{:?}: {:?}", rule, e));
+            }
         }
     }
 }

@@ -51,6 +51,12 @@ backward step is a hand-written `Match`. The deepest job of the query
 language is to be the vocabulary such a statement is written in — bindings
 are the nouns of a stated step.
 
+(Trued up by `Tactic::At`, below: the commitment is about what *declines*,
+not about the direction. A concrete rule's right-hand side is a graph like
+any other, so where it does pin its own match it can simply be looked for,
+and that case is now found rather than stated. What stays stated is what
+genuinely cannot be found — the box-less side, the reader-split.)
+
 **Strategy is data.** The deleted `saturate` comes back as a *program in
 this language*, and the doc-comment knowledge that `select-view` unlocks
 the rest of the branch layer comes back as a *library tactic* — data a
@@ -194,6 +200,47 @@ rewrite**. A `Bindings` is consumed within one primitive step, before any
 `NodeId`s shift meaning across rewrites, so the language never stores one
 across a step; it stores the *description*, which is exactly what "the copy
 feeding the add" is.
+
+### The one address that is a name
+
+There is a deliberate exception, and it comes from the other end of the
+system. A stuck goal prints its residual as a **listing keyed by box id**,
+one line per box, precisely so that — as [docs/proving.md](proving.md) puts
+it — *a next step names the boxes it names*. Nothing in the query language
+can say that back: a `Query` describes, and the report named.
+
+`Tactic::At { node, law, dir, pick }` is the spelling that closes the loop,
+`at(#41, fork-hoist)` on the surface. Its address is a `NodeId` copied off
+a listing, and everything the rule above protects still holds: an id is
+never *held* across a rewrite either. It is checked live at every entry,
+re-searched between firings like every other primitive, and it fails by
+name — `NoSuchNode` — the moment the box it points at is gone. The
+brittleness is real and it is the author's: an id is a fact about one graph
+at one moment, so a step written in front of an `at` moves the ids behind
+it. What it buys is that no other spelling of "that one" exists. A goal
+offering nine `dedup`s and needing the seventh has, without this, no proof
+to write.
+
+Two things make it more than `propose` with a fixed seed:
+
+```rust
+/// Every instantiation of `law` this graph offers a payload for —
+/// `read_off` swept over every live box, deduplicated. The *where* is
+/// left open, which is what lets a caller look for either side.
+pub fn instances(graph: &Graph, law: Law) -> Vec<Rule>;
+```
+
+`instances` × `find_pinned` over **every** pattern box, pinned in turn to
+the named node, so a match counts when it holds that box *anywhere* in its
+image rather than only where the law's pattern happens to anchor —
+`not-not` fired by naming its second `not` is the small case, and a
+whole-branch law named at a box inside an arm is the one that matters. And
+because the *where* is open, the pattern looked for can be either side of
+the equation: `dir` picks it, so `at(#7, dedup, backward)` is a **found**
+backward step, which the rest of the language has to state. It finds
+something only where the right-hand side pins its own match and where the
+payload is one this graph's own boxes spell; the rest stay stated data, and
+both failures say which.
 
 ## Handing off to the matcher
 
@@ -638,9 +685,11 @@ is whole-graph **isomorphism** (`diagram2::isomorphic`, a pinned-boundary
 bijection search, verified link by link before it answers yes). The
 surface (in [rewrite/src/hant.rs](../rewrite/src/hant.rs)) spells
 `saturate`, `saturate(law, …)`, `branches`, `decide`, `fire(law, …)`,
-`repeat(…)` and `try(…)`; queries and stated steps remain data-only until
-a proof needs a spelling for them. `peel` and `descend` retired with the
-term goal.
+`at(#box, law[, forward|backward])`, `repeat(…)` and `try(…)`; queries and
+the *stated* steps remain data-only until a proof needs a spelling for
+them. `peel` and `descend` retired with the term goal. Law names are
+`Law::name`'s, read both ways — the surface spells every law the table
+has, and `structural` and `branching` still name the two lists.
 
 And the old engine has since retired outright: the table grew the value
 layer (`fold` running the machine's own window, `tested-bool`, `retuple`,
@@ -660,9 +709,15 @@ is the arm's *cone* (everything upstream of that side's blocks, minus
 the condition's own cone, plus the branch's ends, where the branch
 layer's laws anchor): shared context is deliberately in, because a
 split duplicates only what lies downstream of its wire, so the tests a
-nested split must reach sit upstream, shared between the copies. Next,
-in order of want: surface spellings for queries and stated (backward)
-steps; serialization for `Tactic` beyond the surface subset. The re-checkable derivation per closed identity has since
+nested split must reach sit upstream, shared between the copies.
+
+`Tactic::At` has since landed, and it took the *found* half of "stated
+backward steps" with it: a concrete rule's right-hand side is a graph like
+any other, so wherever it pins its own match it can simply be looked for.
+What is left for `MatchSpec` is what genuinely cannot be found — a
+box-less side, a reader-split — and that is the honest boundary. Next, in
+order of want: a surface spelling for queries, and for the stated steps
+that remain; serialization for `Tactic` beyond the surface subset. The re-checkable derivation per closed identity has since
 landed — a `Proof` carries every step its drives spent, and
 `Prover::prove` replays the whole tree before answering — with
 persistence to disk the remaining half.

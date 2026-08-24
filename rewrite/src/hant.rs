@@ -50,14 +50,50 @@
 //! | `branches` | the branch layer with its cleanup, to fixpoint |
 //! | `decide` | the whole table to fixpoint — what the `diagram` closer drives |
 //! | `fire(law, …)` | the first proposal of those laws, once — fails finding none |
+//! | `at(#box, law)` | that law, once, in a match that holds **that box** — the id the residual printed |
+//! | `at(#box, law, backward)` | the same, reading the law's equation right to left |
 //! | `repeat(t …)` | the sequence until it stops advancing |
 //! | `try(t …)` | the sequence, or nothing — failure becomes no progress |
 //!
 //! A law is named as the docs name it — `copy-elim`, `select-view`,
-//! `dead-node` — and `structural` and `branching` name the two lists of
-//! [`crate::diagram2::rules`]. This surface is deliberately smaller than
-//! the language underneath: queries and stated backward steps exist as
-//! data first, and grow a spelling here when a proof needs one.
+//! `dead-node`, the spellings [`Law::name`] holds — and `structural` and
+//! `branching` name the two lists of [`crate::diagram2::rules`]. This
+//! surface is deliberately smaller than the language underneath: queries
+//! and stated backward steps exist as data first, and grow a spelling here
+//! when a proof needs one.
+//!
+//! ## Pointing at a box
+//!
+//! `fire` takes the first match it is offered anywhere on the side. `at`
+//! is for when that is the wrong one: it names the box, by the id the
+//! **residual listing** printed beside it, and fires the law in a match
+//! that holds that box — anywhere in the match, not only where the law's
+//! pattern happens to anchor. A goal with nine `dedup`s available and one
+//! that matters is what it is for.
+//!
+//! ```text
+//! proof identities::the_awkward_one =
+//!     lhs(decide) lhs(at(#41, fork-hoist)) lhs(decide) diagram;
+//! ```
+//!
+//! The third field is the direction, `forward` when it is left out:
+//! `at(#41, select-same, backward)` reads the law's equation right to
+//! left, which is how a proof says "put this back". Backward finds
+//! something only where the law's right-hand side names enough boxes to
+//! be looked for, and where the payload is one this graph's own boxes
+//! spell — most of the table's right-hand sides are bare wiring and pin
+//! nothing, and those steps stay [stated
+//! data](crate::diagram2::tactic::Tactic::State) with no spelling yet.
+//! Both failures say so by name.
+//!
+//! An id is an exact address and a brittle one, and both halves are the
+//! point. A [`NodeId`] means one box of one graph at one moment, so `at`
+//! is written by reading a report and is only good against the goal that
+//! report described: change a step in front of it and the ids behind it
+//! move. What it buys is that no other spelling of "that one" exists —
+//! the listing is keyed by id precisely so a next step can name what the
+//! report named. A proof whose named box is gone fails loudly, naming it,
+//! rather than firing somewhere else.
 //!
 //! `inline` and `cases` are the steps that *change what is provable* — no
 //! closer opens a call or invents a case analysis on its own — and the
@@ -91,7 +127,8 @@ use std::fmt;
 
 use bytecode::SentenceIndex;
 
-use crate::diagram2::rules::{self, Law};
+use crate::diagram2::NodeId;
+use crate::diagram2::rules::{self, Direction, Law};
 use crate::diagram2::tactic::{self, Tactic};
 use crate::term::TermIndex;
 
@@ -472,6 +509,13 @@ fn parse_tactic(input: &str) -> Result<(Tactic, &str), String> {
                 after,
             ))
         }
+        // The one address that is a name rather than a description: a
+        // box id, copied off the residual listing that printed it.
+        "at" => {
+            let (inside, after) = paren_block(rest.trim_start())
+                .ok_or("`at` expects `(#box, law)` or `(#box, law, backward)`")?;
+            Ok((parse_at(inside)?, after))
+        }
         "branches" => Ok((tactic::branch_pass(), rest)),
         "decide" => Ok((tactic::decide(), rest)),
         "fire" => {
@@ -505,33 +549,79 @@ fn parse_tactic(input: &str) -> Result<(Tactic, &str), String> {
     }
 }
 
+/// `at(#7, dedup)`, `at(#7, dedup, backward)`: a box named by the id the
+/// residual printed, one law, and which way round to read its equation.
+///
+/// The `#` is the listing's own spelling and is optional here, so a
+/// pasted `#7` and a typed `7` are the same box. A law **list** is
+/// refused: pointing at one box is a claim about one rewrite, and
+/// `structural` there would mean "whichever of twelve laws happens to
+/// fire", which is the opposite of what naming a box is for.
+fn parse_at(inside: &str) -> Result<Tactic, String> {
+    let mut fields = inside.split(',').map(str::trim);
+    let node = fields
+        .next()
+        .filter(|f| !f.is_empty())
+        .ok_or("`at` names no box")?;
+    let node = node.strip_prefix('#').unwrap_or(node);
+    let node: usize = node.parse().map_err(|_| {
+        format!(
+            "`at`: `{}` is not a box id — write `#7`, as the report does",
+            node
+        )
+    })?;
+    let law = fields.next().map(str::trim).unwrap_or("");
+    let law = one_law(law)?;
+    let dir = match fields.next().map(str::trim) {
+        None | Some("forward") => Direction::Forward,
+        Some("backward") => Direction::Backward,
+        Some(other) => {
+            return Err(format!(
+                "`at`: a direction is `forward` or `backward`, not `{}`",
+                other
+            ));
+        }
+    };
+    if let Some(extra) = fields.next() {
+        return Err(format!(
+            "`at` takes a box, a law and a direction, and found: {}",
+            head_of(extra)
+        ));
+    }
+    Ok(tactic::fire_at(NodeId::at(node), law, dir))
+}
+
+/// One law and not a list — what an address to a single box may name.
+fn one_law(name: &str) -> Result<Law, String> {
+    if name.is_empty() {
+        return Err("`at` names no law".to_string());
+    }
+    match parse_laws(name)?[..] {
+        [law] => Ok(law),
+        _ => Err(format!(
+            "`at` fires one law at one box, and `{}` is a list of them",
+            name
+        )),
+    }
+}
+
 /// Law names as the docs spell them, and the two lists by their names.
+///
+/// The spellings are [`Law::name`]'s, scanned rather than restated, so the
+/// surface gains a law the moment the table names one and a message that
+/// names a law cannot disagree with a proof that names the same one.
 fn parse_laws(inside: &str) -> Result<Vec<Law>, String> {
     let mut out = Vec::new();
     for name in inside.split(',') {
-        out.extend(match name.trim() {
+        let name = name.trim();
+        out.extend(match name {
             "structural" => rules::structural(),
             "branching" => rules::branching(),
-            "id-elim" => vec![Law::IdElim],
-            "swap-elim" => vec![Law::SwapElim],
-            "copy-elim" => vec![Law::CopyElim],
-            "dead-node" => vec![Law::DeadNode],
-            "dedup" => vec![Law::Dedup],
-            "not-not" => vec![Law::NotNot],
-            "and-literal" => vec![Law::AndLiteral],
-            "tuple-cancel" => vec![Law::TupleCancel],
-            "as-tuple-built" => vec![Law::AsTupleBuilt],
-            "equal-refl" => vec![Law::EqualRefl],
-            "fork-hoist" => vec![Law::ForkHoist],
-            "fork-dedup" => vec![Law::ForkDedup],
-            "select-view" => vec![Law::SelectView],
-            "select-same" => vec![Law::SelectSame],
-            "select-literal" => vec![Law::SelectLiteral],
-            "specialize-equal" => vec![Law::SpecializeEqual],
-            "specialize-bool" => vec![Law::SpecializeBool],
-            "promised-bool" => vec![Law::PromisedBool],
             "" => return Err("a law list names no law".to_string()),
-            other => return Err(format!("no law is called `{}`", other)),
+            _ => match Law::every().into_iter().find(|law| law.name() == name) {
+                Some(law) => vec![law],
+                None => return Err(format!("no law is called `{}`", name)),
+            },
         });
     }
     Ok(out)
@@ -1021,5 +1111,111 @@ mod tests {
         }
         let err = parse_hant("proof p = descend(then: diagram);").unwrap_err();
         assert!(err.contains("no step is called"), "{}", err);
+    }
+
+    /// The address a residual hands you, read back: a box id, a law, and
+    /// which way round to read the law's equation.
+    #[test]
+    fn a_box_can_be_named_by_the_id_the_report_printed() {
+        use crate::diagram2::NodeId;
+
+        let entries = parse_hant("proof p = lhs(at(#41, fork-hoist)) diagram;").unwrap();
+        let [Step::Rewrite { side, tactic }, Step::Diagram] = &entries[0].strategy[..] else {
+            panic!("{:?}", entries[0].strategy);
+        };
+        assert_eq!(*side, OnSide::Lhs);
+        assert_eq!(
+            tactic.as_ref(),
+            &tactic::fire_at(NodeId::at(41), Law::ForkHoist, Direction::Forward)
+        );
+
+        // The `#` is the listing's spelling, and optional here, so a
+        // pasted id and a typed one are the same box.
+        let entries = parse_hant("proof p = rhs(at(41, fork-hoist)) diagram;").unwrap();
+        let [Step::Rewrite { tactic, .. }, _] = &entries[0].strategy[..] else {
+            panic!()
+        };
+        assert_eq!(
+            tactic.as_ref(),
+            &tactic::fire_at(NodeId::at(41), Law::ForkHoist, Direction::Forward)
+        );
+
+        // The third field is the direction, `forward` when it is left out.
+        let entries = parse_hant("proof p = lhs(at(#7, select-same, backward)) diagram;").unwrap();
+        let [Step::Rewrite { tactic, .. }, _] = &entries[0].strategy[..] else {
+            panic!()
+        };
+        assert_eq!(
+            tactic.as_ref(),
+            &tactic::fire_at(NodeId::at(7), Law::SelectSame, Direction::Backward)
+        );
+
+        // And it composes like any other tactic.
+        let entries =
+            parse_hant("proof p = both(decide try(at(#3, dedup, backward)) decide) diagram;")
+                .unwrap();
+        let [Step::Rewrite { tactic, .. }, _] = &entries[0].strategy[..] else {
+            panic!()
+        };
+        let Tactic::Seq(steps) = tactic.as_ref() else {
+            panic!("{:?}", tactic)
+        };
+        assert_eq!(
+            steps[1],
+            Tactic::Try(Box::new(tactic::fire_at(
+                NodeId::at(3),
+                Law::Dedup,
+                Direction::Backward
+            )))
+        );
+    }
+
+    /// Every way of writing the address wrong, answered where it is
+    /// written. A list of laws is refused on purpose: naming one box is a
+    /// claim about one rewrite, and `structural` there would mean
+    /// "whichever of twelve happens to fire".
+    #[test]
+    fn a_named_box_is_written_one_way() {
+        for (proof, expected) in [
+            ("proof p = lhs(at) diagram;", "expects"),
+            ("proof p = lhs(at()) diagram;", "names no box"),
+            ("proof p = lhs(at(#41)) diagram;", "names no law"),
+            (
+                "proof p = lhs(at(the third one, dedup)) diagram;",
+                "not a box id",
+            ),
+            (
+                "proof p = lhs(at(#41, no-such-law)) diagram;",
+                "no law is called",
+            ),
+            (
+                "proof p = lhs(at(#41, structural)) diagram;",
+                "is a list of them",
+            ),
+            (
+                "proof p = lhs(at(#41, dedup, sideways)) diagram;",
+                "forward",
+            ),
+            (
+                "proof p = lhs(at(#41, dedup, backward, 9)) diagram;",
+                "and found",
+            ),
+        ] {
+            let err = parse_hant(proof).unwrap_err();
+            assert!(err.contains(expected), "{}: {}", proof, err);
+        }
+    }
+
+    /// The law table is [`Law::name`]'s, read backwards, so the surface
+    /// spells every law the table has and spells each of them once.
+    #[test]
+    fn every_law_the_table_has_can_be_named() {
+        for law in Law::every() {
+            assert_eq!(parse_laws(law.name()).unwrap(), vec![law], "{}", law);
+        }
+        for group in ["structural", "branching"] {
+            assert!(parse_laws(group).unwrap().len() > 1, "{}", group);
+            assert!(one_law(group).is_err(), "{}", group);
+        }
     }
 }
