@@ -102,6 +102,13 @@
 //! [`Law::SpecializeBool`] are stated at the select, and why they reach a
 //! block and not the inside of an arm.
 //!
+//! [`Law::SpecializeBool`] holds one box more than the branch: the `as_bool`
+//! that made the condition, sitting in front of the fork. A bool is the one
+//! kind of condition whose truthiness *is* its value, and having the
+//! coercion in the window is how the rule says the condition is one.
+//! [`Law::PromisedBool`] is what puts it there, which is the whole use of
+//! writing an instruction set's promise down as a box.
+//!
 //! [`Law::SelectLiteral`] holds the whole branch, and it does so by carrying
 //! the arms as **payload** — the way the term version carried subterms. That
 //! costs the table nothing, since [`sides`] implants them, and it buys two
@@ -325,19 +332,33 @@ pub enum Rule {
         value: Value,
         literal: Side,
     },
-    /// `as_bool` of the very value a branch tested is what the branch
-    /// decided: `true` in the then block, `false` in the else block.
-    /// `as_bool` *is* `truthy` made into an instruction, and the else block
-    /// is reached only by the one falsy value, so both halves are exact.
+    /// The very value a branch tested, when it is a **bool**, is what the
+    /// branch decided: `true` in the then block, `false` in the else block.
+    /// A truthy bool is `true` and a falsy one is `false` — there is
+    /// nothing else for it to be — so both halves are exact.
     ///
     /// The **fork is in the window**, and it has to be. An arm never sees
     /// the condition directly — it sees whatever the fork handed it — so
     /// the rule can only say "this is the condition" by holding the fork
     /// and pointing at a stack slot the condition was copied into. That is
-    /// what `port` names, and requiring it to be the condition's own source
-    /// is the whole of the side condition.
+    /// what `view` names, and requiring it to be the condition's own source
+    /// is half of the side condition.
     ///
-    /// `view` is the fork output the `as_bool` reads and `at` the select's
+    /// The **`as_bool` is in the window too**, and it is the other half: it
+    /// sits where the condition is *made*, in front of the fork, and its
+    /// being there is what says the condition is a bool. Without that the
+    /// rule would be false — a condition of `5` is truthy, and the then
+    /// block would read `5` rather than `true`.
+    ///
+    /// It used to sit between the fork's view and the block instead, doing
+    /// the coercion on the way past. That reads the same on a value that is
+    /// not a bool and is unreachable on one that is: a condition already a
+    /// bool carries no coercion, and nothing puts one on a fork's view,
+    /// since [`Law::PromisedBool`] writes the promise on the *op* that made
+    /// the answer. Moved to the front, the rule fires on exactly what that
+    /// law leaves — which is the point of writing the promise down.
+    ///
+    /// `view` is the fork output the block reads and `at` the select's
     /// block, each counted over the whole of `2f` and `2n`; `at < arity` is
     /// the then side, and so decides which literal this folds to.
     SpecializeBool {
@@ -1176,38 +1197,35 @@ pub fn sides(rule: &Rule) -> Result<(Graph, Graph), Error> {
             // The block is on the then side exactly when it is in the first
             // half, and that is what the branch decided about the condition.
             let decided = Value::Bool(b < n);
-            // Boundary input 0 is the condition, and it is *also* the fork's
-            // stack slot `v % f` — which is the side condition, said in the
-            // pattern rather than tested.
+            // The coercion's answer is the condition, and it is *also* the
+            // fork's stack slot `v % f`. Both are said in the pattern rather
+            // than tested — and the coercion being in the window is what says
+            // the condition is a bool, which is the whole of why a truthy
+            // condition may be read as `true`.
             let slot = v % f;
-            let stack = |i: usize| {
-                if i == slot {
-                    Source::Input(0)
-                } else {
-                    Source::Input(1 + if i < slot { i } else { i - 1 })
-                }
-            };
+            let stack =
+                |i: usize| (i != slot).then(|| Source::Input(1 + if i < slot { i } else { i - 1 }));
             let block = |other: usize| Source::Input(f + if other < b { other } else { other - 1 });
             let width = f + 2 * n - 1;
 
             let build = |folded: bool| {
                 let mut g = Graph::empty(width);
+                let coerced = g.add(NodeKind::Op(Prim::AsBool), vec![Source::Input(0)])[0];
                 let branch = g.next_branch();
-                let mut handed = vec![Source::Input(0)];
-                handed.extend((0..f).map(stack));
+                let mut handed = vec![coerced];
+                handed.extend((0..f).map(|i| stack(i).unwrap_or(coerced)));
                 let ports = g.add(NodeKind::Fork { arity: f, branch }, handed);
-                let coerced = g.add(NodeKind::Op(Prim::AsBool), vec![ports[v]]);
                 let known = if folded {
                     g.add(NodeKind::Op(Prim::Push(decided.clone())), Vec::new())[0]
                 } else {
-                    coerced[0]
+                    ports[v]
                 };
-                let mut takes = vec![Source::Input(0)];
+                let mut takes = vec![coerced];
                 takes.extend((0..2 * n).map(|other| if other == b { known } else { block(other) }));
                 let answers = g.add(NodeKind::Select { arity: n, branch }, takes);
                 let mut out = ports;
                 // The coercion stays readable from outside.
-                out.push(coerced[0]);
+                out.push(coerced);
                 out.extend(answers);
                 g.close(out);
                 g
@@ -2836,8 +2854,9 @@ fn read_off(graph: &Graph, law: Law, id: NodeId) -> Vec<(Rule, NodeId)> {
                 .collect()
         }
 
-        // A block that answers with `as_bool` of a view of the very
-        // condition — which is the only way an arm gets to see it.
+        // A block that answers with a view of the very condition, that
+        // condition being manifestly a bool — which is the only way an arm
+        // gets to see what the branch decided.
         (
             Law::SpecializeBool,
             NodeKind::Select {
@@ -2846,12 +2865,14 @@ fn read_off(graph: &Graph, law: Law, id: NodeId) -> Vec<(Rule, NodeId)> {
             },
         ) => {
             let (n, cond) = (*n, takes[0]);
+            // The `as_bool` that made the condition is the pattern's first
+            // box, so it is what the search is anchored at.
+            let Some((coercion, NodeKind::Op(Prim::AsBool))) = made_by(cond) else {
+                return Vec::new();
+            };
             (0..2 * n)
                 .filter_map(|b| {
-                    let (ab, NodeKind::Op(Prim::AsBool)) = made_by(takes[1 + b])? else {
-                        return None;
-                    };
-                    let Source::Port { node: fork, port } = graph.sources(ab)[0] else {
+                    let Source::Port { node: fork, port } = takes[1 + b] else {
                         return None;
                     };
                     let NodeKind::Fork { arity: f, branch } = graph.kind(fork) else {
@@ -2859,7 +2880,7 @@ fn read_off(graph: &Graph, law: Law, id: NodeId) -> Vec<(Rule, NodeId)> {
                     };
                     let handed = graph.sources(fork);
                     // One branch, and a stack slot the condition was copied
-                    // into — without which the coercion says nothing.
+                    // into — without which the view says nothing.
                     (branch == mine && handed[0] == cond && handed[1 + port % f] == cond).then_some(
                         (
                             Rule::SpecializeBool {
@@ -2868,7 +2889,7 @@ fn read_off(graph: &Graph, law: Law, id: NodeId) -> Vec<(Rule, NodeId)> {
                                 view: port,
                                 at: b,
                             },
-                            fork,
+                            coercion,
                         ),
                     )
                 })

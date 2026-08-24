@@ -1,48 +1,52 @@
-//! Spending a path condition: how close the table gets, and on what it stops.
+//! Spending a path condition, end to end.
 //!
 //! `if is_symbol(x) then is_symbol(x) else true` is `true` — the then arm
 //! recomputes the very test its branch decided. Three boxes, and the
-//! decision procedure does not close it. This pins down why, because the
-//! reason is one law wide and the route to it is worth keeping.
+//! decision procedure does not close it on its own. This is the route that
+//! does, one law at a time, because every step of it is a fact about the
+//! table worth keeping under test.
 //!
-//! The route is: **widen, hoist, dedup.** The else arm drops its view of
-//! `x`; compute `is_symbol` on it first and drop *that* instead, so both
-//! arms do the same work — `dead-node`, backwards, which the table already
-//! states as an equation and so already runs in reverse. Then `fork-hoist`
-//! lifts the pair out in front of the branch, because the same operation
-//! done in both arms was always one operation. Then `dedup` merges it with
-//! the condition's own test, since the two now read one source.
+//! **Widen.** The else arm drops its view of `x`; compute `is_symbol` on it
+//! first and drop *that* instead, so both arms do the same work. That is
+//! `dead-node` backwards — a rule is an equation and an equation runs both
+//! ways — and it is the one deliberate step, the move no driver makes on
+//! its own. Everything after it is the table's own business.
 //!
-//! The hoist has to be `fork-hoist` rather than `fork-dedup`. The two state
-//! the same equation and differ in where the answer is read: `fork-dedup`
-//! reads it from outside the fork, which is a `view-value` spent in the same
-//! breath, and once every arm reads around the fork the fork is dead. The
-//! fact would then be true and the shape that can name it gone. `fork-hoist`
-//! hands the answer back as a stack slot of the fork's own, so the value
-//! stays inside the branch.
+//! **Hoist.** `fork-hoist` lifts the pair out in front of the branch,
+//! because the same operation done in both arms was always one operation.
+//! It has to be `fork-hoist` and not `fork-dedup`: the two state the same
+//! equation and differ in where the answer is read, and `fork-dedup` reads
+//! it from outside the fork — a `view-value` spent in the same breath.
+//! Once every arm reads around a fork the fork is dead, and the anchor the
+//! rest of this needs would be gone. `fork-hoist` hands the answer back as
+//! a stack slot of the fork's own.
 //!
-//! Every one of those steps works today, and together they land the goal
-//! exactly on the shape `specialize-bool` is written for: the fork's slot
-//! *is* the condition, and the select's then block reads a view of that
-//! slot. One thing still stops it. The rule's pattern puts an `as_bool`
-//! between the view and the block — the coercion that makes an arbitrary
-//! truthy value into the bool the branch decided — and here the condition is
-//! `is_symbol`, which the instruction set already promises is a bool. There
-//! is no coercion to match, and no law says `as_bool` of a promised bool is
-//! that bool, so none can be introduced.
+//! **Dedup.** The hoisted test and the condition's own test now read one
+//! source, so they are one box. The fork's slot *is* the condition.
 //!
-//! So what is left is not a missing row but a rule that cannot see a
-//! condition already in the form it wants: `specialize-bool` needs to accept
-//! a block reading the view directly, when the condition's producer promises
-//! a bool. That promise has to be *stated* rather than tested, the way
-//! `tested-bool` states it — by carrying the producing kind in the payload.
+//! **Promise.** `promised-bool` writes down what the instruction set
+//! already guarantees: `is_symbol` answers a bool, so `is_symbol` is
+//! `is_symbol ; as_bool`. The coercion is a no-op on a value already a
+//! bool; what it is for is to *stand there*, a type assertion manifested in
+//! the graph.
 //!
-//! When that lands, the last assertion here flips from "does not close" to
-//! "closes", and this file becomes its regression test.
+//! **Specialize.** `specialize-bool` reads it. The rule holds the `as_bool`
+//! in front of the fork — which is how it says the condition is a bool —
+//! and the fork's slot, and the block reading that slot's view. A truthy
+//! bool is `true`, so the then block folds to `push true`. Both arms then
+//! answer alike and the branch collapses.
+//!
+//! One arm's worth of work is widened here because the arm recomputes one
+//! box. A condition that is a *conjunction* — which is the shape the
+//! corpus's contract claims actually have — is the same route with a wider
+//! widening: the else arm has to be given the whole of what the then arm
+//! recomputes before `fork-hoist` has a pair to lift, one backward
+//! `dead-node` per box. Nothing new is needed for it, and it is not written
+//! out here.
 
 use bytecode::assemble;
 use rewrite::diagram2::rules::{Direction, Law, Match, Rule, Step};
-use rewrite::diagram2::{self, Graph, NodeKind, Source, rules, tactic};
+use rewrite::diagram2::{self, Graph, NodeId, NodeKind, Source, rules, tactic};
 use rewrite::goal::Goal;
 use rewrite::term::{Context, Prim, TermIndex, lower};
 
@@ -63,6 +67,11 @@ fn drive(graph: &mut Graph, tactic: &tactic::Tactic) {
     tactic::run(graph, &mut deriv, tactic).expect("the tactic finds its laws");
 }
 
+/// A law to fixpoint.
+fn saturate(law: Law) -> tactic::Tactic {
+    tactic::Tactic::Repeat(Box::new(tactic::fire_first(vec![law])), None)
+}
+
 /// The goal, cleaned up by the wiring laws alone — which leave the branch
 /// layer's anchors standing, since only `view-value` re-points a fork's
 /// outputs and `dead-node` only takes a fork nothing reads.
@@ -79,7 +88,16 @@ fn probe() -> (Context, Goal) {
     (ctx, goal)
 }
 
-/// The one end of a branch that every branch has, and what it reads.
+/// The fork a branch still has, and its arity.
+fn fork_of(graph: &Graph) -> Option<(NodeId, usize)> {
+    graph.live().find_map(|(id, kind)| match kind {
+        NodeKind::Fork { arity, .. } => Some((id, *arity)),
+        _ => None,
+    })
+}
+
+/// The one end of a branch that every branch has: its condition, and its
+/// first block.
 fn select(graph: &Graph) -> (Source, Source) {
     let (id, _) = graph
         .live()
@@ -89,86 +107,8 @@ fn select(graph: &Graph) -> (Source, Source) {
     (sources[0], sources[1])
 }
 
-#[test]
-fn the_decision_procedure_does_not_close_it() {
-    let (_ctx, mut goal) = probe();
-    drive(&mut goal.lhs, &tactic::decide());
-    assert!(
-        !diagram2::isomorphic(&goal.lhs, &goal.rhs),
-        "the table closed this on its own — delete this file and the law it asks for"
-    );
-}
-
-/// Widening the else arm is `dead-node` run backwards, and the table takes
-/// it: a rule is an equation, and an equation runs both ways.
-#[test]
-fn the_table_runs_dead_node_backwards() {
-    let (_ctx, mut goal) = probe();
-    let before = goal.lhs.live_count();
-    widen(&mut goal.lhs);
-    assert_eq!(
-        goal.lhs.live_count(),
-        before + 1,
-        "the backward step introduced no box"
-    );
-    goal.lhs.check().expect("and left a well-formed graph");
-}
-
-/// Widen, hoist, dedup — and the then block comes to read the condition's
-/// own port. That is the fact a proof needs and the last one the table can
-/// establish on its own.
-#[test]
-fn the_route_reaches_the_fact_and_stops() {
-    let (_ctx, mut goal) = probe();
-
-    let (condition, then_block) = select(&goal.lhs);
-    assert_ne!(
-        condition, then_block,
-        "before the route the arm's test is its own box"
-    );
-
-    widen(&mut goal.lhs);
-    for law in [Law::ForkHoist, Law::Dedup] {
-        drive(&mut goal.lhs, &tactic::fire_first(vec![law]));
-    }
-
-    // The fork is still standing, and the slot it now carries is the
-    // condition itself — which is what `specialize-bool` is anchored on.
-    let (fork, arity) = fork_of(&goal.lhs).expect("the hoist keeps the fork");
-    let (condition, then_block) = select(&goal.lhs);
-    assert_eq!(
-        goal.lhs.sources(fork)[arity],
-        condition,
-        "the fork's hoisted slot is not the condition"
-    );
-    assert_eq!(
-        then_block,
-        Source::Port {
-            node: fork,
-            port: arity - 1
-        },
-        "the then block does not read the view of the hoisted slot"
-    );
-
-    // And there it stops. `specialize-bool` wants an `as_bool` between the
-    // view and the block, and a condition that is already a bool has none.
-    drive(&mut goal.lhs, &tactic::decide());
-    assert!(
-        !diagram2::isomorphic(&goal.lhs, &goal.rhs),
-        "a law now spends the path condition — flip this assertion"
-    );
-}
-
-/// The fork a branch still has, and its arity.
-fn fork_of(graph: &Graph) -> Option<(rewrite::diagram2::NodeId, usize)> {
-    graph.live().find_map(|(id, kind)| match kind {
-        NodeKind::Fork { arity, .. } => Some((id, *arity)),
-        _ => None,
-    })
-}
-
 /// The else arm drops its view of the value; compute `is_symbol` on it
-/// first, so that both arms do the one thing `fork-hoist` can lift out.
+/// first, so both arms do the one thing `fork-hoist` can lift out.
 fn widen(graph: &mut Graph) {
     let (fork, arity) = fork_of(graph).expect("the wiring laws leave the fork standing");
     // Outputs `0..arity` are the then view, `arity..2 * arity` the else.
@@ -190,4 +130,94 @@ fn widen(graph: &mut Graph) {
     rules::Derivation::default()
         .push(graph, step)
         .expect("the table accepts the backward dead-node");
+}
+
+/// Nothing here is automatic. The widening is a deliberate step — no driver
+/// invents work for an arm that was throwing its input away — so the
+/// decision procedure alone still leaves this open, and should.
+#[test]
+fn the_decision_procedure_does_not_close_it() {
+    let (_ctx, mut goal) = probe();
+    drive(&mut goal.lhs, &tactic::decide());
+    assert!(
+        !diagram2::isomorphic(&goal.lhs, &goal.rhs),
+        "the table found the route on its own — say so here rather than pretending it did not"
+    );
+}
+
+/// Widening is `dead-node` run backwards, and the table takes it.
+#[test]
+fn the_table_runs_dead_node_backwards() {
+    let (_ctx, mut goal) = probe();
+    let before = goal.lhs.live_count();
+    widen(&mut goal.lhs);
+    assert_eq!(
+        goal.lhs.live_count(),
+        before + 1,
+        "the backward step introduced no box"
+    );
+    goal.lhs.check().expect("and left a well-formed graph");
+}
+
+/// The hoist keeps the fork, and leaves its new slot holding the condition
+/// — which is half of what `specialize-bool` is anchored on.
+#[test]
+fn the_hoist_leaves_the_slot_holding_the_condition() {
+    let (_ctx, mut goal) = probe();
+    let (condition, then_block) = select(&goal.lhs);
+    assert_ne!(
+        condition, then_block,
+        "before the route the arm's test is its own box"
+    );
+
+    widen(&mut goal.lhs);
+    for law in [Law::ForkHoist, Law::Dedup] {
+        drive(&mut goal.lhs, &tactic::fire_first(vec![law]));
+    }
+
+    let (fork, arity) = fork_of(&goal.lhs).expect("the hoist keeps the fork");
+    let (condition, then_block) = select(&goal.lhs);
+    assert_eq!(
+        goal.lhs.sources(fork)[arity],
+        condition,
+        "the fork's hoisted slot is not the condition"
+    );
+    assert_eq!(
+        then_block,
+        Source::Port {
+            node: fork,
+            port: arity - 1
+        },
+        "the then block does not read the view of the hoisted slot"
+    );
+}
+
+/// The whole route, and it closes.
+#[test]
+fn widen_hoist_dedup_promise_specialize() {
+    let (_ctx, mut goal) = probe();
+    widen(&mut goal.lhs);
+    drive(&mut goal.lhs, &tactic::fire_first(vec![Law::ForkHoist]));
+    drive(&mut goal.lhs, &saturate(Law::Dedup));
+    drive(&mut goal.lhs, &saturate(Law::PromisedBool));
+
+    // The other half of the anchor: the condition is manifestly a bool.
+    let (condition, _) = select(&goal.lhs);
+    let Source::Port { node, .. } = condition else {
+        panic!("the condition is a boundary input");
+    };
+    assert!(
+        matches!(goal.lhs.kind(node), NodeKind::Op(Prim::AsBool)),
+        "the promise was not written down in front of the fork"
+    );
+
+    drive(
+        &mut goal.lhs,
+        &tactic::fire_first(vec![Law::SpecializeBool]),
+    );
+    drive(&mut goal.lhs, &tactic::decide());
+    assert!(
+        diagram2::isomorphic(&goal.lhs, &goal.rhs),
+        "the path condition was spent and the goal still did not close"
+    );
 }
