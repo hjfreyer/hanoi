@@ -1316,6 +1316,7 @@ mod tests {
                 "identities::taking_a_frame_off",
                 "identities::comparing_two_built_tuples",
                 "identities::untupling_and_retupling_is_the_coercion",
+                "identities::a_coerced_tuple_survives_the_round_trip",
             ],
             "the table's reach changed"
         );

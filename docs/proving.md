@@ -70,7 +70,18 @@ laws (`id-elim`, `swap-elim`, `copy-elim`, `dead-node`, `dedup`), the
 branch layer (`select-literal` and its kin, the specializing rules,
 `view-value` held to last), and the value layer — a literal window runs on
 the real `vm` (one `run_window`, no second semantics, `fold`), a promised
-bool tests true (`tested-bool`), retupling is the coercion (`retuple`).
+bool tests true (`tested-bool`), retupling is the coercion (`retuple`), and
+a value already coerced survives that round trip (`as-tuple-round-trip`).
+
+Two rows sit outside every list, because they **grow** a graph: `as-bool-branch`
+(`as_bool` is the branch it makes) and `coercion-guard` (a coercion is the
+guarded identity the instruction set describes it as, the width part of the
+guard for `as_tuple n`). A driver run to fixpoint wants rows that shrink, and
+*whether to unpack a coercion* is a decision of the same kind `inline` is — so
+a proof names the one it wants: `lhs(fire(coercion-guard)) diagram` is the whole
+of three corpus identities. What they buy is the direction the rest of the table
+cannot read: a coercion is opaque to every rule that asks what a value *is*, and
+these put the test that decides it where a case split can spend it.
 
 The `diagram` closer drives the whole table to fixpoint on each side
 (`tactic::decide`) and asks one final question: are the two graphs
