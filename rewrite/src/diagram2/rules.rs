@@ -63,12 +63,23 @@
 //!
 //! ## The branch layer, and the one place it stops
 //!
-//! [`branching`] is layer 2 of the sheet: [`Law::ForkDedup`],
-//! [`Law::SelectView`], [`Law::SelectSame`], [`Law::SelectLiteral`],
-//! [`Law::SpecializeEqual`] and [`Law::SpecializeBool`]. Between them they
-//! fold a literal condition into its arm, delete a branch whose arms answer
-//! alike, lift work both arms do out in front, and write what a test decided
-//! into the block that tested it. `branch { A } { A } = drop-top ; A` is not
+//! [`branching`] is layer 2 of the sheet: [`Law::ForkHoist`],
+//! [`Law::ForkDedup`], [`Law::SelectView`], [`Law::SelectSame`],
+//! [`Law::SelectLiteral`], [`Law::SpecializeEqual`] and
+//! [`Law::SpecializeBool`]. Between them they fold a literal condition into
+//! its arm, delete a branch whose arms answer alike, lift work both arms do
+//! out in front, and write what a test decided into the block that tested
+//! it.
+//!
+//! The two hoists are one equation stated twice, and the difference is the
+//! whole reason both are here. [`Law::ForkDedup`] reads the hoisted answer
+//! from *outside* the fork, which is a [`Law::ViewValue`] spent in the same
+//! breath — and once every arm reads around a fork, the fork is dead and
+//! the specializing laws have nothing to anchor on. [`Law::ForkHoist`] hands
+//! the answer back to the fork as a stack slot of its own, so the value
+//! stays inside the branch and can still be named there. A driver that
+//! holds `view-value` back until nothing else fires should prefer the
+//! hoist for the same reason. `branch { A } { A } = drop-top ; A` is not
 //! among them and does not need to be: it is `fork-dedup`, then
 //! `select-same`, then `dead-node`.
 //!
@@ -145,6 +156,7 @@ pub enum Law {
     // The branch layer. Every one of these is stated at an end of a branch
     // that has the condition in its own window — see the module docs for why
     // that is the only place some of them can be stated soundly at all.
+    ForkHoist,
     ForkDedup,
     SelectView,
     SelectSame,
@@ -197,9 +209,37 @@ pub enum Rule {
 
     // ---- the branch layer ----
     /// The same operation done in both arms is one operation, done before
+    /// the fork — and its answer **still handed to the fork**, which is the
+    /// whole of the difference from [`Rule::ForkDedup`]. δ-naturality seen
+    /// through a `fork`: the views are copies, so `f` of a view is a view of
+    /// `f`, and the two boxes were always computing the one thing.
+    ///
+    /// The fork grows by the box's outputs: they become stack slots of its
+    /// own, and what read the arms' boxes reads the views of those slots.
+    /// So the value stays *inside* the branch, and a rule anchored at the
+    /// fork can still name it — which is the point. [`Rule::ForkDedup`] is
+    /// this law and [`Rule::ViewValue`] spent together, and spending them
+    /// together is what leaves the specializing rules nothing to hold: it
+    /// routes the answer around the fork, and once every arm reads around
+    /// it the fork is dead. The two are separated here so a strategy can
+    /// take the hoist without the bypass, the same way it holds
+    /// `view-value` back until nothing else fires.
+    ///
+    /// `ports[i]` is the fork input whose view the box's input `i` reads.
+    ForkHoist {
+        arity: usize,
+        kind: NodeKind,
+        ports: Vec<usize>,
+    },
+    /// The same operation done in both arms is one operation, done before
     /// the fork. δ-naturality again, this time seeing through a `fork`: the
     /// views are copies, so the two boxes were always computing the one
     /// thing.
+    ///
+    /// The answer is read from **outside** the fork, so this is
+    /// [`Rule::ForkHoist`] with a [`Rule::ViewValue`] already spent on it.
+    /// It is the shorter road and it costs the fork: a branch whose arms
+    /// all read around it has nothing left reading its views.
     ///
     /// `ports[i]` is the fork input whose view the box's input `i` reads.
     ForkDedup {
@@ -404,6 +444,7 @@ impl Rule {
             Rule::DeadNode { .. } => Law::DeadNode,
             Rule::Dedup { .. } => Law::Dedup,
             Rule::NotNot => Law::NotNot,
+            Rule::ForkHoist { .. } => Law::ForkHoist,
             Rule::ForkDedup { .. } => Law::ForkDedup,
             Rule::SelectView { .. } => Law::SelectView,
             Rule::SelectSame { .. } => Law::SelectSame,
@@ -462,6 +503,7 @@ pub fn branching() -> Vec<Law> {
         Law::SelectConst,
         Law::SelectView,
         Law::SelectSame,
+        Law::ForkHoist,
         Law::ForkDedup,
         Law::SpecializeEqual,
         Law::SpecializeBool,
@@ -739,6 +781,53 @@ pub fn sides(rule: &Rule) -> Result<(Graph, Graph), Error> {
         }
 
         // ---- the branch layer ----
+        Rule::ForkHoist { arity, kind, ports } => {
+            let n = *arity;
+            // Refused for the reasons `fork-dedup` refuses: a fork or a
+            // select is the copy this is stated about, and a box reading
+            // none of the views is not about this fork at all.
+            if matches!(kind, NodeKind::Fork { .. } | NodeKind::Select { .. })
+                || ports.is_empty()
+                || ports.len() != kind.arity().inputs
+                || ports.iter().any(|&p| p >= n)
+            {
+                return Err(ill(Ill::Refused));
+            }
+            let handed: Vec<Source> = (0..=n).map(Source::Input).collect();
+
+            let mut apart = Graph::empty(n + 1);
+            let branch = apart.next_branch();
+            let views = apart.add(NodeKind::Fork { arity: n, branch }, handed.clone());
+            let this: Vec<Source> = ports.iter().map(|&p| views[p]).collect();
+            let that: Vec<Source> = ports.iter().map(|&p| views[n + p]).collect();
+            let mut out = views.clone();
+            out.extend(apart.add(kind.clone(), this));
+            out.extend(apart.add(kind.clone(), that));
+            apart.close(out);
+
+            // The box moves in front, and its answers become stack slots of
+            // the fork's own: arity `n` becomes `n + b`. What read the arms'
+            // boxes now reads the views of those slots, so the answer is
+            // still something the fork handed out.
+            let b = kind.arity().outputs;
+            let m = n + b;
+            let mut through = Graph::empty(n + 1);
+            let ahead: Vec<Source> = ports.iter().map(|&p| Source::Input(1 + p)).collect();
+            let shared = through.add(kind.clone(), ahead);
+            let branch = through.next_branch();
+            let mut carried = handed;
+            carried.extend(shared);
+            let views = through.add(NodeKind::Fork { arity: m, branch }, carried);
+            // The boundary `apart` states: the fork's `2n` views of the old
+            // slots, then the then answer, then the else answer.
+            let mut out: Vec<Source> = views[..n].to_vec();
+            out.extend(&views[m..m + n]);
+            out.extend(&views[n..m]);
+            out.extend(&views[m + n..2 * m]);
+            through.close(out);
+
+            (apart, through)
+        }
         Rule::ForkDedup { arity, kind, ports } => {
             let n = *arity;
             // A fork is a copy of the two kinds this refuses, and merging two
@@ -2193,6 +2282,40 @@ impl Search<'_> {
 /// a payload is read off the box a rule would be anchored at — its kind and
 /// its widths, and nothing deeper. Every proposal goes through [`apply`],
 /// so one that is wrong costs a refusal.
+/// The boxes in a fork's *then* arm that could have an opposite number in
+/// the else arm, with the fork inputs their own inputs read views of.
+///
+/// Both hoisting laws are anchored here and take the same payload; the
+/// matcher is what finds the opposite number and refuses if there is none.
+/// A box reading anything but this fork's then views is not a candidate —
+/// it is not one operation done in both arms.
+fn arms_agree(graph: &Graph, fork: NodeId, arity: usize) -> Vec<(NodeKind, Vec<usize>)> {
+    let mut readers: Vec<NodeId> = Vec::new();
+    for port in 0..arity {
+        for &sink in graph.sinks(Source::Port { node: fork, port }) {
+            if let Sink::Port { node, .. } = sink
+                && !readers.contains(&node)
+            {
+                readers.push(node);
+            }
+        }
+    }
+    readers
+        .into_iter()
+        .filter_map(|reader| {
+            let ports: Option<Vec<usize>> = graph
+                .sources(reader)
+                .iter()
+                .map(|src| match src {
+                    Source::Port { node, port } if *node == fork && *port < arity => Some(*port),
+                    _ => None,
+                })
+                .collect();
+            Some((graph.kind(reader).clone(), ports?))
+        })
+        .collect()
+}
+
 pub fn propose(graph: &Graph, laws: &[Law], id: NodeId) -> Vec<Step> {
     if !graph.is_live(id) {
         return Vec::new();
@@ -2869,42 +2992,38 @@ fn read_off(graph: &Graph, law: Law, id: NodeId) -> Vec<(Rule, NodeId)> {
             vec![(Rule::Retuple { n }, apart)]
         }
 
+        // One operation done in both arms, hoisted in front. The two laws
+        // sit at the same site and take the same payload — they differ only
+        // in whether the answer comes back through the fork.
+        (Law::ForkHoist, NodeKind::Fork { arity: n, .. }) => arms_agree(graph, id, *n)
+            .into_iter()
+            .map(|(kind, ports)| {
+                (
+                    Rule::ForkHoist {
+                        arity: *n,
+                        kind,
+                        ports,
+                    },
+                    id,
+                )
+            })
+            .collect(),
+
         // One operation done in both arms. Read off a box in the *then* arm;
         // the matcher is what finds its opposite number.
-        (Law::ForkDedup, NodeKind::Fork { arity: n, .. }) => {
-            let n = *n;
-            let mut readers: Vec<NodeId> = Vec::new();
-            for port in 0..n {
-                for &sink in graph.sinks(Source::Port { node: id, port }) {
-                    if let Sink::Port { node, .. } = sink
-                        && !readers.contains(&node)
-                    {
-                        readers.push(node);
-                    }
-                }
-            }
-            readers
-                .into_iter()
-                .filter_map(|reader| {
-                    let ports: Option<Vec<usize>> = graph
-                        .sources(reader)
-                        .iter()
-                        .map(|src| match src {
-                            Source::Port { node, port } if *node == id && *port < n => Some(*port),
-                            _ => None,
-                        })
-                        .collect();
-                    Some((
-                        Rule::ForkDedup {
-                            arity: n,
-                            kind: graph.kind(reader).clone(),
-                            ports: ports?,
-                        },
-                        id,
-                    ))
-                })
-                .collect()
-        }
+        (Law::ForkDedup, NodeKind::Fork { arity: n, .. }) => arms_agree(graph, id, *n)
+            .into_iter()
+            .map(|(kind, ports)| {
+                (
+                    Rule::ForkDedup {
+                        arity: *n,
+                        kind,
+                        ports,
+                    },
+                    id,
+                )
+            })
+            .collect(),
         _ => Vec::new(),
     }
 }
@@ -3246,6 +3365,24 @@ mod tests {
                 arity: 1,
                 kind: NodeKind::Op(Prim::Not),
                 ports: vec![0],
+            },
+        );
+        // The same equation, with the answer handed back to the fork rather
+        // than read around it. What it keeps is the anchor, not the meaning.
+        holds(
+            Law::ForkHoist,
+            Rule::ForkHoist {
+                arity: 1,
+                kind: NodeKind::Op(Prim::Not),
+                ports: vec![0],
+            },
+        );
+        holds(
+            Law::ForkHoist,
+            Rule::ForkHoist {
+                arity: 3,
+                kind: NodeKind::Op(Prim::Add),
+                ports: vec![2, 0],
             },
         );
         holds(
@@ -3897,6 +4034,11 @@ mod tests {
                 kind: NodeKind::Op(Prim::Add),
             },
             Rule::NotNot,
+            Rule::ForkHoist {
+                arity: 1,
+                kind: NodeKind::Op(Prim::Not),
+                ports: vec![0],
+            },
             Rule::ForkDedup {
                 arity: 1,
                 kind: NodeKind::Op(Prim::Not),
@@ -4125,11 +4267,17 @@ mod tests {
             &[Law::IdElim, Law::CopyElim, Law::ViewValue, Law::Shannon],
         );
         // One operation in both arms, on views the fork hands out in more
-        // than one port — which is where `fork-dedup`'s payload says
-        // something a one-port arm cannot check.
+        // than one port — which is where the hoisting payloads say something
+        // a one-port arm cannot check. Both readings offer: `fork-hoist`
+        // hands the answer back to the fork, `fork-dedup` reads it around.
         offers(
             "branch { add } { add }",
-            &[Law::CopyElim, Law::ForkDedup, Law::ViewValue],
+            &[
+                Law::CopyElim,
+                Law::ForkHoist,
+                Law::ForkDedup,
+                Law::ViewValue,
+            ],
         );
         offers(
             "push 1 pick 1 branch { add } { add }",
@@ -4137,6 +4285,7 @@ mod tests {
                 Law::IdElim,
                 Law::SwapElim,
                 Law::CopyElim,
+                Law::ForkHoist,
                 Law::ForkDedup,
                 Law::ViewValue,
             ],
