@@ -502,3 +502,64 @@ identity untupling_and_retupling_is_the_coercion { untuple 2 tuple 2 } = { as_tu
 identity specializing_a_tested_value
     { pick 0 push 7 equal branch { push 7 equal } { drop 0 push false } }
   = { pick 0 push 7 equal branch { drop 0 push true } { drop 0 push false } };
+
+// `as_tuple n ; untuple n ; tuple n` = `as_tuple n` — the coercion is stable
+// under the round trip that names it.
+//
+// `untupling_and_retupling_is_the_coercion` says the round trip *is* the
+// coercion; this says a value already coerced has nothing left to normalize.
+// `as_tuple n` leaves a tuple of exactly `n` elements on every input — that is
+// its codomain, and the whole of why it exists — so `untuple n` has `n` parts
+// to give back and `tuple n` puts back the very value.
+//
+// Not that law spent twice, though it looks it: spending it leaves a second
+// `as_tuple n` behind, and nothing in the table collapses the pair.
+test sentence coercing_a_tuple_survives_the_round_trip {
+    push (1, 2)    as_tuple 2 untuple 2 tuple 2    push (1, 2)   jump crate::prelude::check_equals ? drop 0
+    push 7         as_tuple 2 untuple 2 tuple 2    push ((), ()) jump crate::prelude::check_equals ? drop 0
+    push (1, 2, 3) as_tuple 2 untuple 2 tuple 2    push ((), ()) jump crate::prelude::check_equals
+}
+
+identity a_coerced_tuple_survives_the_round_trip
+    { as_tuple 2 untuple 2 tuple 2 } = { as_tuple 2 };
+
+// `as_bool` = `branch { push true } { push false }` — the coercion as the
+// decision it makes.
+//
+// `as_bool` is truthiness made into an instruction, and a `branch` keeps the
+// block truthiness picks, so the two are one program with the arms answering
+// the two values truthiness can report. Unpacking it is what puts a *case
+// split* where a coercion stood; nothing drives the law, since it grows the
+// graph, and the proof beside this file names it.
+test sentence coercing_to_bool_is_the_branch_it_makes {
+    push 7     as_bool   push true  jump crate::prelude::check_equals ? drop 0
+    push false as_bool   push false jump crate::prelude::check_equals ? drop 0
+    push ()    as_bool   push true  jump crate::prelude::check_equals
+}
+
+identity as_bool_is_the_branch_it_makes
+    { as_bool } = { branch { push true } { push false } };
+
+// A coercion is a guarded identity: the value where its test holds, and the
+// default where it does not.
+//
+// The instruction set says it in prose — each of the three "is the identity
+// where the value is already of that type, and hands back a default where it
+// is not" — and these are that sentence as two claims the engine can check.
+identity as_int_is_a_guarded_identity
+    { as_int } = { pick 0 is_int branch { } { drop 0 push 0 } };
+
+// The width belongs to the guard, and it is the whole difficulty: `is_tuple`
+// does not ask how wide, and a tuple of the wrong length is exactly what
+// `untuple n` could not take apart. A guard of `is_tuple` alone would claim
+// `as_tuple 2` is the identity on `(1, 2, 3)`, which it is not.
+test sentence coercing_a_tuple_asks_the_width {
+    push (1, 2)    as_tuple 2   push (1, 2)   jump crate::prelude::check_equals ? drop 0
+    push (1, 2, 3) as_tuple 2   push ((), ()) jump crate::prelude::check_equals ? drop 0
+    push some_sym  as_tuple 2   push ((), ()) jump crate::prelude::check_equals
+}
+
+identity as_tuple_is_a_guarded_identity
+    { as_tuple 2 }
+  = { pick 0 is_tuple pick 1 tuple_length push 2 equal and
+      branch { } { drop 0 push ((), ()) } };

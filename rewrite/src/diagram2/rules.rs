@@ -61,6 +61,36 @@
 //!   reads `not(not(x))` and `as_bool(x)` as different symbols — this law is
 //!   about what the machine computes, and `vm` is what measures it.
 //!
+//! ## The value layer, and the two rows no list drives
+//!
+//! [`folding`] is layer 3 of the sheet: what an operation *computes*, with
+//! the machine itself as the judge — [`Law::Fold`] runs a literal window on
+//! `vm`, and the rest are facts about particular instructions.
+//!
+//! Every row on that list **shrinks** a graph, which is what makes it a
+//! list a driver can run to fixpoint. Two rows in the table are about the
+//! same instructions and are deliberately on no list at all, because they
+//! grow one:
+//!
+//! - [`Law::AsBoolBranch`] — `as_bool` is the branch it makes,
+//!   `if x { true } else { false }`. The coercion *is*
+//!   [`truthy`](bytecode::Value::truthy) and a `select` keeps the block
+//!   `truthy` picks, so the two are one program by construction.
+//! - [`Law::CoercionGuard`] — a coercion is a guarded identity, which is
+//!   the instruction set's own sentence about all three of them: the value
+//!   where its test holds, a default where it does not. For `as_tuple n`
+//!   the width is part of the guard, since `is_tuple` does not ask how
+//!   wide and a tuple of the wrong length is exactly what `untuple n`
+//!   could not take apart.
+//!
+//! These are **unpackings**, and what they buy is the direction of reading
+//! the rest of the table cannot go: a coercion is opaque to every rule
+//! that wants to know what a value *is*, and these put the test that
+//! decides it into the graph where the branch layer and a `cases` split
+//! can spend it. Which is also why no list carries them — whether to
+//! unpack a coercion is a decision of the same kind `inline` is, so a
+//! strategy names the one it wants.
+//!
 //! ## The branch layer, and the one place it stops
 //!
 //! [`branching`] is layer 2 of the sheet: [`Law::ForkHoist`],
@@ -183,6 +213,11 @@ pub enum Law {
     Fold,
     TestedBool,
     Retuple,
+    AsTupleRoundTrip,
+    // The two unpackings: a coercion said as the program it is. Both grow
+    // a graph, so no list drives them — see [`folding`].
+    AsBoolBranch,
+    CoercionGuard,
 }
 
 impl Law {
@@ -220,6 +255,9 @@ impl Law {
             Law::Fold => "fold",
             Law::TestedBool => "tested-bool",
             Law::Retuple => "retuple",
+            Law::AsTupleRoundTrip => "as-tuple-round-trip",
+            Law::AsBoolBranch => "as-bool-branch",
+            Law::CoercionGuard => "coercion-guard",
         }
     }
 
@@ -256,6 +294,9 @@ impl Law {
             Law::Fold,
             Law::TestedBool,
             Law::Retuple,
+            Law::AsTupleRoundTrip,
+            Law::AsBoolBranch,
+            Law::CoercionGuard,
         ]
     }
 }
@@ -605,6 +646,75 @@ pub enum Rule {
     /// identity — the slots may have been junk-filled: `untuple n ; tuple
     /// n = as_tuple n`, whole or not at all.
     Retuple { n: usize },
+    /// A value already coerced survives the round trip: `as_tuple n ;
+    /// untuple n ; tuple n = as_tuple n`.
+    ///
+    /// [`Rule::Retuple`] says the round trip *is* the coercion; this says
+    /// the coercion is **stable** under it, which is the fact a guard
+    /// spends. `as_tuple n` leaves a tuple of exactly `n` elements on every
+    /// input — that is its codomain, and the whole of why it exists — so
+    /// taking that apart and putting it back answers the very value it
+    /// started from.
+    ///
+    /// Not derivable from the two rows next to it, though it looks it:
+    /// `retuple` turns the tail into a second `as_tuple n`, and the table
+    /// has no idempotence row to collapse the pair. Stating it whole is
+    /// also what keeps the window honest — the parts are **not** exported,
+    /// so the rule declines a round trip something else reads into.
+    ///
+    /// The coercion's own port *is* exported, on both sides, the way
+    /// [`Rule::AsTupleBuilt`] exports its tuple: it may have other readers,
+    /// and a window that claimed all of them would rarely match.
+    AsTupleRoundTrip { n: usize },
+    /// `as_bool` is the branch it is: `as_bool x = if x { true } else
+    /// { false }`.
+    ///
+    /// [`Instruction::AsBool`](bytecode::Instruction::AsBool) is
+    /// [`truthy`](bytecode::Value::truthy) made into an instruction, and a
+    /// `select` keeps the block `truthy` says — so the two are the same
+    /// program by construction, with the arms answering the two values
+    /// `truthy` can report. Nothing is read inside either arm, so the
+    /// branch needs no [`fork`](NodeKind::Fork) at all.
+    ///
+    /// This is the unpacking that puts a *decision* where a coercion
+    /// stood, which is what a proof about the two cases of a truthiness
+    /// test needs: after it, the ordinary branch layer can specialize each
+    /// arm, and `select-literal` can fold the whole branch away wherever
+    /// the condition turns out to be a literal.
+    ///
+    /// [`Rule::CoercionGuard`] unpacks the same box a different way — as
+    /// the guarded identity every coercion is. Both are true, they answer
+    /// different questions, and which one a proof wants is the proof's to
+    /// say.
+    AsBoolBranch,
+    /// A coercion is a guarded identity: `as_T x = if x is a T { x } else
+    /// { junk }`.
+    ///
+    /// The instruction set says it in prose —
+    /// [each coercion](bytecode::Instruction::AsTuple) "is the identity
+    /// where the value is already of that type, and hands back a default
+    /// where it is not" — and this is that sentence as an equation. The
+    /// payload is which coercion, and everything else is read off it: the
+    /// test that guards it, and the default it hands back.
+    ///
+    /// | `prim` | guard | junk |
+    /// |---|---|---|
+    /// | `as_bool` | `is_bool` | `true` — every non-bool is truthy, `false` being the one falsy value and a bool |
+    /// | `as_int` | `is_int` | `0` |
+    /// | `as_tuple n` | `is_tuple` **and** `tuple_length = n` | a tuple of `n` empty tuples |
+    ///
+    /// The width in that guard is not decoration. `is_tuple` does not ask
+    /// how wide, and the width is part of the type coerced to: a tuple of
+    /// the wrong length is exactly what `untuple n` could not take apart,
+    /// so a guard of `is_tuple` alone would claim `as_tuple 2` is the
+    /// identity on `(1, 2, 3)`, which it is not.
+    ///
+    /// Like [`Rule::AsBoolBranch`], this **grows** a graph, and it is on no
+    /// driven list for that reason. What it is for is the other direction
+    /// of reading: a coercion is opaque to every rule that wants to know
+    /// what a value *is*, and this puts the test that decides it into the
+    /// graph where a case split can spend it.
+    CoercionGuard { prim: Prim },
 }
 
 impl Rule {
@@ -636,6 +746,9 @@ impl Rule {
             Rule::PromisedBool { .. } => Law::PromisedBool,
             Rule::TestedBool { .. } => Law::TestedBool,
             Rule::Retuple { .. } => Law::Retuple,
+            Rule::AsTupleRoundTrip { .. } => Law::AsTupleRoundTrip,
+            Rule::AsBoolBranch => Law::AsBoolBranch,
+            Rule::CoercionGuard { .. } => Law::CoercionGuard,
         }
     }
 }
@@ -692,10 +805,22 @@ pub fn branching() -> Vec<Law> {
 /// The value layer: what an operation computes, measured on the machine.
 /// [`Law::NotNot`] is its elder — stated before the layer had a name — and
 /// is listed with it.
+///
+/// Every row here **shrinks** a graph, which is what makes the list one a
+/// driver can run to fixpoint. That is why [`Law::AsBoolBranch`] and
+/// [`Law::CoercionGuard`] are not on it: they unpack a coercion into the
+/// program it is, so they grow one, and *whether to spend an unpacking* is
+/// a strategy in a way that folding a computation is not. They are named
+/// by name — `fire(coercion-guard)`, `at(#7, as-bool-branch)` — and a
+/// driver that wanted them could list them itself.
 pub fn folding() -> Vec<Law> {
     vec![
         Law::Fold,
         Law::TestedBool,
+        // The longer window first: both are read off the same `tuple` box,
+        // and `retuple` alone would turn a round trip that began at a
+        // coercion into two coercions the table has no row to collapse.
+        Law::AsTupleRoundTrip,
         Law::Retuple,
         Law::NotNot,
         Law::AndLiteral,
@@ -729,6 +854,9 @@ pub fn is_wiring(law: Law) -> bool {
             | Law::Fold
             | Law::TestedBool
             | Law::Retuple
+            | Law::AsTupleRoundTrip
+            | Law::AsBoolBranch
+            | Law::CoercionGuard
     )
 }
 
@@ -1723,6 +1851,85 @@ pub fn sides(rule: &Rule) -> Result<(Graph, Graph), Error> {
 
             (roundabout, coerced)
         }
+        Rule::AsTupleRoundTrip { n } => {
+            let n = *n;
+            if n == 0 {
+                return Err(ill(Ill::Refused));
+            }
+            let mut roundabout = Graph::empty(1);
+            let coerced = roundabout.add(NodeKind::Op(Prim::AsTuple(n)), vec![Source::Input(0)]);
+            // The parts are not exported and the coercion is: the round
+            // trip has to be whole, and the value it starts from is free
+            // to have readers of its own.
+            let parts = roundabout.add(NodeKind::Op(Prim::Untuple(n)), coerced.clone());
+            let rebuilt = roundabout.add(NodeKind::Op(Prim::Tuple(n)), parts);
+            roundabout.close(vec![coerced[0], rebuilt[0]]);
+
+            let mut once = Graph::empty(1);
+            let coerced = once.add(NodeKind::Op(Prim::AsTuple(n)), vec![Source::Input(0)]);
+            once.close(vec![coerced[0], coerced[0]]);
+
+            (roundabout, once)
+        }
+        Rule::AsBoolBranch => {
+            let mut forced = Graph::empty(1);
+            let out = forced.add(NodeKind::Op(Prim::AsBool), vec![Source::Input(0)]);
+            forced.close(out);
+
+            // Neither arm reads anything, so the branch has no fork: the
+            // two blocks are the two answers `truthy` can give, and the
+            // value itself is spent as the condition.
+            let mut asked = Graph::empty(1);
+            let yes = asked.add(NodeKind::Op(Prim::Push(Value::Bool(true))), Vec::new());
+            let no = asked.add(NodeKind::Op(Prim::Push(Value::Bool(false))), Vec::new());
+            let branch = asked.next_branch();
+            let kept = asked.add(
+                NodeKind::Select { arity: 1, branch },
+                vec![Source::Input(0), yes[0], no[0]],
+            );
+            asked.close(kept);
+
+            (forced, asked)
+        }
+        Rule::CoercionGuard { prim } => {
+            let (test, junk) = match prim {
+                Prim::AsBool => (Prim::IsBool, Value::Bool(true)),
+                Prim::AsInt => (Prim::IsInt, Value::Int(0)),
+                Prim::AsTuple(n) => (Prim::IsTuple, Value::Tuple(vec![Value::unit(); *n])),
+                _ => return Err(ill(Ill::Refused)),
+            };
+
+            let mut forced = Graph::empty(1);
+            let out = forced.add(NodeKind::Op(prim.clone()), vec![Source::Input(0)]);
+            forced.close(out);
+
+            let mut guarded = Graph::empty(1);
+            let mut holds = guarded.add(NodeKind::Op(test), vec![Source::Input(0)])[0];
+            if let Prim::AsTuple(n) = prim {
+                // `is_tuple` does not ask how wide, and the width is part
+                // of the type: a tuple of the wrong length is exactly what
+                // `untuple n` could not take apart.
+                let Ok(n) = i64::try_from(*n) else {
+                    return Err(ill(Ill::Refused));
+                };
+                let counted = guarded.add(NodeKind::Op(Prim::TupleLength), vec![Source::Input(0)]);
+                let want = guarded.add(NodeKind::Op(Prim::Push(Value::Int(n))), Vec::new());
+                let fits = guarded.add(NodeKind::Op(Prim::Equal), vec![counted[0], want[0]]);
+                holds = guarded.add(NodeKind::Op(Prim::And), vec![holds, fits[0]])[0];
+            }
+            // The then block is the value itself — the identity half — and
+            // the else block the default. Neither arm computes anything,
+            // so again there is no fork to hand out views.
+            let junk = guarded.add(NodeKind::Op(Prim::Push(junk)), Vec::new());
+            let branch = guarded.next_branch();
+            let kept = guarded.add(
+                NodeKind::Select { arity: 1, branch },
+                vec![holds, Source::Input(0), junk[0]],
+            );
+            guarded.close(kept);
+
+            (forced, guarded)
+        }
     };
     if a.arity() != b.arity() {
         return Err(ill(Ill::Interface(a.arity(), b.arity())));
@@ -1824,6 +2031,29 @@ fn run_window(operands: &[Value], inst: &Instruction) -> Option<Vec<Value>> {
     let mut vm = vm::VM::new(library);
     vm.execute(start).ok()?;
     Some(vm.stack().to_vec())
+}
+
+/// The `untuple n` a `tuple n` rebuilds, slot for slot: every input of the
+/// tuple is port `i` of one untuple, in order, and no slot comes from
+/// anywhere else.
+///
+/// `None` where the round trip is not whole, which is the only shape
+/// either of the retupling laws states — [`Rule::Retuple`] and
+/// [`Rule::AsTupleRoundTrip`] read the same walk and differ in what they
+/// ask of the box behind it.
+fn taken_apart(graph: &Graph, takes: &[Source], n: usize) -> Option<NodeId> {
+    let apart = match (n > 0).then(|| takes[0])? {
+        Source::Port { node, port: 0 } => node,
+        _ => return None,
+    };
+    if !matches!(graph.kind(apart), NodeKind::Op(Prim::Untuple(m)) if *m == n) {
+        return None;
+    }
+    takes
+        .iter()
+        .enumerate()
+        .all(|(i, src)| matches!(*src, Source::Port { node, port } if node == apart && port == i))
+        .then_some(apart)
 }
 
 /// A branch id off a host graph means nothing in a rule, so a rule's side
@@ -3367,27 +3597,38 @@ fn read_off(graph: &Graph, law: Law, id: NodeId) -> Vec<(Rule, NodeId)> {
             )]
         }
 
-        // Rebuilding exactly what an `untuple` took apart.
-        (Law::Retuple, NodeKind::Op(Prim::Tuple(n))) => {
+        // Rebuilding exactly what an `untuple` took apart — and, one box
+        // further back, doing it to a value already coerced.
+        (Law::Retuple, NodeKind::Op(Prim::Tuple(n))) => match taken_apart(graph, takes, *n) {
+            Some(apart) => vec![(Rule::Retuple { n: *n }, apart)],
+            None => Vec::new(),
+        },
+        (Law::AsTupleRoundTrip, NodeKind::Op(Prim::Tuple(n))) => {
             let n = *n;
-            let apart = (n > 0).then(|| takes[0]).and_then(|src| match src {
-                Source::Port { node, port: 0 } => Some(node),
-                _ => None,
-            });
-            let Some(apart) = apart else {
+            let Some(apart) = taken_apart(graph, takes, n) else {
                 return Vec::new();
             };
-            if !matches!(graph.kind(apart), NodeKind::Op(Prim::Untuple(m)) if *m == n) {
+            // The pattern is built coercion-first, so that is the seed.
+            let Some(Source::Port {
+                node: coerced,
+                port: 0,
+            }) = graph.sources(apart).first().copied()
+            else {
+                return Vec::new();
+            };
+            if !matches!(graph.kind(coerced), NodeKind::Op(Prim::AsTuple(m)) if *m == n) {
                 return Vec::new();
             }
-            let whole = takes
-                .iter()
-                .enumerate()
-                .all(|(i, src)| matches!(*src, Source::Port { node, port } if node == apart && port == i));
-            if !whole {
-                return Vec::new();
-            }
-            vec![(Rule::Retuple { n }, apart)]
+            vec![(Rule::AsTupleRoundTrip { n }, coerced)]
+        }
+
+        // The two unpackings of a coercion, each read off the box it
+        // unpacks.
+        (Law::AsBoolBranch, NodeKind::Op(Prim::AsBool)) => one(Rule::AsBoolBranch),
+        (Law::CoercionGuard, NodeKind::Op(prim))
+            if matches!(prim, Prim::AsBool | Prim::AsInt | Prim::AsTuple(_)) =>
+        {
+            one(Rule::CoercionGuard { prim: prim.clone() })
         }
 
         // One operation done in both arms, hoisted in front. The two laws
@@ -3655,9 +3896,12 @@ mod tests {
 
     /// Every assignment of a handful of values to `width` inputs.
     ///
-    /// Five values, chosen to cover the truthiness table on both poles:
-    /// `false` is the one falsy value, and `unit` is junk, which is truthy
-    /// like everything else.
+    /// Chosen to cover the truthiness table on both poles — `false` is the
+    /// one falsy value, and `unit` is junk, which is truthy like everything
+    /// else — and the tuple widths on either side of the ones the coercion
+    /// laws name: `unit` is a tuple of width 0 and `(1, 2)` one of width 2,
+    /// so a law about `as_tuple 2` meets a value it is the identity on, a
+    /// tuple it is not, and three things that are no tuple at all.
     fn samples(width: usize) -> Vec<Vec<Value>> {
         let each = [
             Value::Bool(true),
@@ -3665,6 +3909,7 @@ mod tests {
             Value::Int(0),
             Value::Int(7),
             Value::unit(),
+            Value::Tuple(vec![Value::Int(1), Value::Int(2)]),
         ];
         let mut out: Vec<Vec<Value>> = vec![Vec::new()];
         for _ in 0..width {
@@ -4239,6 +4484,154 @@ mod tests {
         ));
     }
 
+    /// A value already coerced survives being taken apart and put back.
+    ///
+    /// The width is the whole content: `as_tuple n` leaves a tuple of
+    /// exactly `n` elements whatever it was handed, so `untuple n` has `n`
+    /// parts to give and `tuple n` puts back the very value — which the
+    /// sample list checks on a tuple of the right width, one of the wrong
+    /// width, and three values that are no tuple at all.
+    #[test]
+    fn a_coerced_tuple_survives_the_round_trip() {
+        for n in 1..=3 {
+            the_machine_agrees(Law::AsTupleRoundTrip, Rule::AsTupleRoundTrip { n });
+        }
+        // A round trip of nothing is not one, the same refusal `retuple`
+        // makes: `tuple 0` reads no part of the `untuple 0` in front of it,
+        // so the window would not hold a round trip at all.
+        assert!(matches!(
+            sides(&Rule::AsTupleRoundTrip { n: 0 }),
+            Err(Error::Ill {
+                why: Ill::Refused,
+                ..
+            })
+        ));
+    }
+
+    /// `as_bool` is the branch it is — the coercion `truthy` names, said as
+    /// the decision it makes.
+    #[test]
+    fn as_bool_is_a_branch_on_truthiness() {
+        the_machine_agrees(Law::AsBoolBranch, Rule::AsBoolBranch);
+    }
+
+    /// A coercion is a guarded identity: the value where its test holds,
+    /// and a default where it does not.
+    ///
+    /// The width guard is what this is really checking. `is_tuple` alone
+    /// would claim `as_tuple 2` is the identity on every tuple, so the
+    /// sample list carries a tuple of a width no `n` here names, and the
+    /// machine settles it.
+    #[test]
+    fn a_coercion_is_a_guarded_identity() {
+        for prim in [
+            Prim::AsBool,
+            Prim::AsInt,
+            Prim::AsTuple(0),
+            Prim::AsTuple(1),
+            Prim::AsTuple(2),
+        ] {
+            the_machine_agrees(Law::CoercionGuard, Rule::CoercionGuard { prim });
+        }
+        // Only the three coercions have a type to guard on; a payload that
+        // is any other prim states no equation.
+        for prim in [Prim::Not, Prim::IsTuple, Prim::Push(Value::Int(1))] {
+            assert!(
+                matches!(
+                    sides(&Rule::CoercionGuard { prim: prim.clone() }),
+                    Err(Error::Ill {
+                        why: Ill::Refused,
+                        ..
+                    })
+                ),
+                "{:?} is no coercion",
+                prim
+            );
+        }
+    }
+
+    /// The two unpackings are read off the box they unpack, and the round
+    /// trip off the shape it collapses — each where a proof would point.
+    #[test]
+    fn the_new_rows_are_proposed_where_they_apply() {
+        // Both readings of a coercion are offered at the one box they
+        // read, and neither is a list's to drive.
+        let mut graph = Graph::empty(1);
+        let forced = graph.add(NodeKind::Op(Prim::AsBool), vec![Source::Input(0)]);
+        graph.close(forced);
+        graph.check().unwrap();
+        let offered: Vec<Law> = propose(
+            &graph,
+            &Law::every(),
+            only(&NodeKind::Op(Prim::AsBool), &graph),
+        )
+        .iter()
+        .map(|step| step.rule.law())
+        .collect();
+        for law in [Law::AsBoolBranch, Law::CoercionGuard] {
+            assert!(
+                offered.contains(&law),
+                "{} is not offered at an `as_bool`",
+                law
+            );
+            assert!(
+                !folding().contains(&law)
+                    && !structural().contains(&law)
+                    && !branching().contains(&law),
+                "{} grows a graph; no list should drive it",
+                law
+            );
+        }
+
+        // The round trip, with the coercion's port read by something else
+        // as well — which is exactly what exporting it on both sides buys.
+        let mut graph = Graph::empty(1);
+        let coerced = graph.add(NodeKind::Op(Prim::AsTuple(2)), vec![Source::Input(0)]);
+        let parts = graph.add(NodeKind::Op(Prim::Untuple(2)), coerced.clone());
+        let rebuilt = graph.add(NodeKind::Op(Prim::Tuple(2)), parts);
+        let elsewhere = graph.add(NodeKind::Op(Prim::IsTuple), coerced);
+        graph.close(vec![rebuilt[0], elsewhere[0]]);
+        graph.check().unwrap();
+        assert!(
+            !graph.is_monogamous(),
+            "the coercion is read twice:\n{}",
+            graph
+        );
+
+        let steps = propose(
+            &graph,
+            &[Law::AsTupleRoundTrip],
+            only(&NodeKind::Op(Prim::Tuple(2)), &graph),
+        );
+        let [step] = &steps[..] else {
+            panic!("one round trip:\n{}", graph)
+        };
+        assert_eq!(step.rule, Rule::AsTupleRoundTrip { n: 2 });
+        assert_eq!(
+            step.at.nodes[0],
+            only(&NodeKind::Op(Prim::AsTuple(2)), &graph),
+            "the pattern is built coercion-first, so that is where it anchors"
+        );
+        apply(&mut graph, step).unwrap();
+        graph.check().unwrap();
+
+        // The untuple and the tuple went; the coercion stands, and both
+        // readers of it — the one outside the window, and the boundary
+        // output the rebuilt tuple used to serve — name it.
+        assert_eq!(graph.live_count(), 2, "two boxes left:\n{}", graph);
+        let coerced = Source::Port {
+            node: only(&NodeKind::Op(Prim::AsTuple(2)), &graph),
+            port: 0,
+        };
+        assert_eq!(graph.outputs()[0], coerced, "\n{}", graph);
+        assert_eq!(
+            graph.sources(only(&NodeKind::Op(Prim::IsTuple), &graph)),
+            [coerced],
+            "\n{}",
+            graph
+        );
+    }
+
     /// An arm that reads something from outside the branch is still an arm;
     /// what it reads becomes one of its own inputs, and the pattern's
     /// boundary carries it.
@@ -4606,19 +4999,23 @@ mod tests {
                 kind: NodeKind::Op(Prim::IsInt),
             },
             Rule::Retuple { n: 2 },
+            Rule::AsTupleRoundTrip { n: 2 },
+            Rule::AsBoolBranch,
+            Rule::CoercionGuard {
+                prim: Prim::AsTuple(2),
+            },
+            Rule::CoercionGuard { prim: Prim::AsInt },
+            Rule::CoercionGuard { prim: Prim::AsBool },
         ]
     }
 
-    /// Every law there is, including the one no list collects — a driver
-    /// holds `view-value` back on purpose, and no list should hand it out.
+    /// Every law there is, the lists included and the several they leave
+    /// out — a driver holds `view-value` back on purpose, and the two
+    /// unpackings grow a graph, so no list hands any of them out. Taken
+    /// from the enum rather than rebuilt here, so a law added to the table
+    /// is a law this file's round trips cover.
     fn every_law() -> Vec<Law> {
-        [
-            structural(),
-            branching(),
-            folding(),
-            vec![Law::ViewValue, Law::Shannon, Law::PromisedBool],
-        ]
-        .concat()
+        Law::every()
     }
 
     /// Every proposal at every box of `graph`, applied to a copy of it and
@@ -4853,7 +5250,7 @@ mod tests {
         let all = Law::every();
         assert_eq!(
             all.len(),
-            25,
+            28,
             "a law joined the table: name it, and list it in `Law::every`"
         );
         let mut names: Vec<&str> = all.iter().map(|law| law.name()).collect();

@@ -11,3 +11,11 @@ proof identities::testing_a_test_by_name = inline diagram;
 // case split on the one wire that remains decides both readings at once:
 // η, spent deliberately, where no rewrite window could.
 proof identities::specializing_a_tested_value = both(decide) cases(equal) diagram;
+
+// The two unpackings of a coercion. Both grow the graph — they say a
+// coercion as the program it is — so no list drives them and the proof
+// names the one it wants. What follows is the ordinary decision procedure:
+// once the branch is there, the branch layer takes it from both sides.
+proof identities::as_bool_is_the_branch_it_makes = lhs(fire(as-bool-branch)) diagram;
+proof identities::as_int_is_a_guarded_identity = lhs(fire(coercion-guard)) diagram;
+proof identities::as_tuple_is_a_guarded_identity = lhs(fire(coercion-guard)) diagram;
