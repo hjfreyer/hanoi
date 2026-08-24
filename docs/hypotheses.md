@@ -1,10 +1,12 @@
 # Hypotheses, compiled away
 
-*A design note. Nothing here is implemented; what it designs is an
-authoring construct, and the argument of the note is that the construct
-costs the checker nothing. [docs/proving.md](proving.md) describes the
-machinery this note leans on; [docs/tactics.md](tactics.md) names the
-seams it would land in.*
+*A design note, since landed: the structured `cases` of
+[docs/proving.md](proving.md) implements the authoring layer this note
+designs, `Region::Arm` in `rewrite/src/diagram2/tactic.rs` is the seam
+it took, and the corpus's biggest goal — the barista contract claim —
+closes as its worked example. The argument of the note stands as the
+argument of the implementation: the construct costs the checker
+nothing, and `Proof::check` never learned what a hypothesis is.*
 
 A traditional proof assistant would take the goal
 
@@ -138,21 +140,25 @@ custom equation admitted with a warrant, which is the
 `Rule::Lemma { lhs, rhs, warrant }` seam [docs/tactics.md](tactics.md)
 already reserves and deliberately leaves out of its first version.
 
-## What authorship would look like
+## What authorship looks like
 
 The compilation above fixes the design: hypotheses live in `hant.rs`
-and the report printer, and nowhere below.
+and the report printer, and nowhere below. (This section was written
+before the implementation and reads as its specification; what landed
+follows it, with two findings noted at the end.)
 
-**A structured `cases`.** Today `cases(op)` fires the Shannon row once
-per side and hands the expanded goal to whatever follows — the two
+**A structured `cases`.** The bare `cases(op)` fires the Shannon row
+once per side and hands the expanded goal to whatever follows — the two
 assumptions are simplified *together* by the next drive. The structured
-form carries a sub-strategy per case:
+form carries a sub-strategy per case, in the parenthesized-arm spelling
+`via` already uses (an arm holds side rewrites and nested `cases`; the
+goal is closed outside the split):
 
 ```text
-cases(equal) {
+cases(equal) (
     true:  both(decide),
-    false: fire(select-same) diagram,
-}
+    false: both(decide) cases(is_symbol) (true: both(decide)),
+)
 ```
 
 Elaboration: fire `shannon` exactly as today, then run each
@@ -194,6 +200,22 @@ lists; re-checking stays a blind replay plus isomorphism. A buggy
 elaboration produces a refused step or a stuck goal, never a wrong
 close — the same property the tactics layer was designed to and the
 reason the construct is free.
+
+**Two findings from the implementation.** First, the arm region wants
+to be the arm's *cone*, shared context included, not the arm's own
+boxes alone: a split duplicates only what lies downstream of its wire,
+so the tests a nested split must reach — the hypothesis's remaining
+unknowns — sit upstream, shared between the copies, and a region that
+evicted them would let an arm spend its hypothesis but never decompose
+it. Second, a hypothesis is spent *forward only*: the split pastes its
+literal into the readers its wire had at split time, so a reader
+created afterwards — say, by `tuple-cancel` taking a shape guard apart
+inside an arm — reads the wire undecided, and the move that decides it
+is to **split again inside the arm**, where the new readers are
+downstream and the drive dedups the re-test into the old wire. The
+barista proof does both, and its two `is_symbol` splits sit inside the
+`thirsty` arm for exactly this reason, deciding checks that only came
+into existence there.
 
 ## References
 

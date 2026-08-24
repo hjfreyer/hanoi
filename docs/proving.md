@@ -17,12 +17,12 @@ cargo run --bin prove -- tests --filter two_spellings
 ```
 
 ```
-Proving 14 identities...
+Proving 15 identities...
 identity identities::testing_a_test ... ok (the two sides are one diagram)
 identity identities::testing_a_test_by_name ... ok (inline; the two sides are one diagram)
-identity types_test::number_does_pre_and_post_is_constant ... ok (inline; both: 62 rewrite(s); cases (true: …; false: …))
+identity barista::customer_impl::emit_does_pre_and_post_is_constant ... ok (inline; both: 299 rewrite(s); cases: 1 split(s) (true: 209 rewrite(s); false: 0 rewrite(s)); the two sides are one diagram)
 ...
-identity result: ok. 14 passed; 0 failed; 0 problem(s); 0 filtered out
+identity result: ok. 15 passed; 0 failed; 0 problem(s); 0 filtered out
 ```
 
 Exit codes keep the old contract: `0` every identity proved, `1` a claim
@@ -106,6 +106,8 @@ proof identities::testing_a_test_by_name = inline diagram;
 | `exact` | claims the sides are one diagram — **isomorphic** — which the auto-close has already checked, so a reached `exact` fails and shows the goal exactly as it stands | always, when reached |
 | `via { body } (left: s, right: s)` | **cuts**: `A = B` splits into the goals `A = C` and `C = B`, the waypoint built as a graph | the waypoint's net stack change is not the goal's, or a side fails |
 | `cases(op)` | **case analysis** on an intermediate result: an `op` answer can only be `true` or `false`, so everything that depends on it is replaced by a branch holding one copy per case, the assumed answer pasted in as a literal — one checked rewrite per side, which the ordinary laws then simplify under each assumption (see below) | no side computes `op`, or nothing depends on its answer |
+| `cases(op(lit))` | the same split, with the wire addressed by what it tests: the outermost `op` one of whose operands is the pushed literal `lit` names — by any tail of its spelling, the way `inline` names a sentence | no such test |
+| `cases(op) (true: s, false: s)` | the same split, with a sub-strategy per case, each run with its rewrites scoped to its side of the fresh branch — hypothesis-style authorship, compiled to ordinary checked steps in the split's own record (see [docs/hypotheses.md](hypotheses.md)). An arm holds side rewrites and nested `cases`; either is omissible, and a goal side whose branch is already gone skips its arms quietly | the split fails, or an arm's tactic does — and the residual names whose case it stood in |
 | `diagram` | rewrites both sides by the whole table to fixpoint and asks whether they landed on one diagram — isomorphic | they did not — and the residual is both sides as they stand, listed box by box (or, with `--terms`, read back and narrowed to the difference) |
 
 Inside `lhs(…)`, `rhs(…)` and `both(…)` is the rewrite language of
@@ -226,11 +228,39 @@ Open the definitions, drive, split on `equal(x, t1)`, drive, split on
 know the literature: this is η — the case split on an opaque value that
 canonical forms cannot make — spent deliberately, as a checked rewrite.)
 
-A hypothesis-style surface over this step — one sub-strategy per case,
-the assumption printed above each subgoal — is designed in
-[docs/hypotheses.md](hypotheses.md), together with the argument that it
-compiles to the derivations this page describes and costs the checker
-nothing.
+The hypothesis-style surface over this step — one sub-strategy per
+case, its rewrites scoped to that case's side of the fresh branch — is
+designed in [docs/hypotheses.md](hypotheses.md), together with the
+argument that it compiles to the derivations this page describes and
+costs the checker nothing; it has since landed, and the corpus's biggest
+goal is its worked example. `barista::customer_impl::
+emit_does_pre_and_post_is_constant` — the contract claim over a
+four-state machine, 351 boxes against 2 once `inline` has opened it —
+closes as a decision tree of three hypotheses:
+
+```text
+proof barista::customer_impl::emit_does_pre_and_post_is_constant =
+    inline both(decide)
+    cases(equal(state::thirsty)) (
+        true: both(decide) cases(is_symbol) (
+            true: both(decide) cases(is_symbol) (
+                true: both(decide),
+                false: both(decide)),
+            false: both(decide)),
+        false: both(decide))
+    diagram;
+```
+
+The addressed split is what makes the tree writable at all: the goal
+holds two dozen `equal`s, and the outermost is the tuple-shape guard —
+splitting there is a fixpoint that decides nothing. `cases(equal(state::
+thirsty))` splits the one test `emit` dispatches on, which the drive has
+already identified with the precondition disjunction's own; its false
+case closes vacuously (the emitted flag is false, so the postcondition
+holds whatever the precondition said), and its true case resolves `emit`
+outright, leaving the nested `is_symbol` splits to decide the payload
+checks — by then the very boxes the precondition tested. The whole tree
+lands in one flat record per side, replayed blind by the checker.
 
 **Trust.** `sides` and `apply` are the whole of it — plus the machine
 itself, where a law is *about* what an operation computes (`fold` and the
@@ -265,13 +295,14 @@ a call is named (`call types_test::number`, or any unambiguous tail of that),
 which is also how a residual prints one when the report has the library to
 hand; `Display` alone can only say `call #3`.
 
-The current corpus needs three entries: `inline diagram` for
+The current corpus needs four entries: `inline diagram` for
 `identities::testing_a_test_by_name` (its right side is written as a
 call), `both(decide) cases(equal) diagram` for
 `identities::specializing_a_tested_value` (an arm recomputing the very
 test its branch decided — a case split, once the driver has identified the
-two computations as one wire), and the two-`cases` proof above for the
-contract claim. Every other identity closes with no entry at all.
+two computations as one wire), the two-`cases` proof above for
+`types_test`'s contract claim, and the structured tree for `barista`'s.
+Every other identity closes with no entry at all.
 
 ## The failure output is the point
 
@@ -326,11 +357,6 @@ off before anything prints it.
   collapsed coercion idempotences, and no law spells those yet. A claim
   that needs one fails honestly, and the row is a `sides` construction
   away.
-- **`cases` names an operation, not a wire.** The step expands the
-  outermost box of the named prim, which is right until a goal holds two
-  equally outermost tests of the same operation; the query language of
-  [docs/tactics.md](tactics.md) is the vocabulary a sharper `cases` would
-  take.
 - **Reify for the giants.** A read-back shares nothing a term cannot, so a
   handful of state-machine test sentences would print past any reasonable
   size if a residual ever needed one; scratch definitions for shared

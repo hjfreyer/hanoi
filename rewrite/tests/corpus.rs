@@ -20,13 +20,11 @@ fn the_corpus_identities_close() {
     let mut corpus = corpus::load(&tests).unwrap();
     assert_eq!(corpus.problems, Vec::<String>::new());
 
-    // One straggler, on purpose. `emit_does_pre_and_post_is_constant` is the
-    // corpus's biggest goal — 351 boxes on the left once `inline` has opened
-    // it — and it is here as the standing case for reporting a proof in
-    // progress: its `.hant` says `inline` and stops, so the run reliably ends
-    // with a large open goal to print. Its residual is what says the current
-    // report cannot be read, and it is the thing any new one is measured on.
-    let expected_stragglers = ["barista::customer_impl::emit_does_pre_and_post_is_constant"];
+    // Empty, and hard-won: `emit_does_pre_and_post_is_constant` — the
+    // corpus's biggest goal, 351 boxes against 2 once `inline` opened it,
+    // and the standing straggler while the report was being made readable —
+    // closes now, by the structured `cases` tree its `.hant` writes.
+    let expected_stragglers: [&str; 0] = [];
 
     let prover = Prover::new(&corpus.library);
     let mut stragglers = Vec::new();

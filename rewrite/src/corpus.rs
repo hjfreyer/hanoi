@@ -85,7 +85,17 @@ pub(crate) fn attach(
                     left: side(ctx, left, library)?,
                     right: side(ctx, right, library)?,
                 },
-                Step::Cases { prim } => Step::Cases { prim: prim.clone() },
+                Step::Cases {
+                    prim,
+                    literal,
+                    then_arm,
+                    else_arm,
+                } => Step::Cases {
+                    prim: prim.clone(),
+                    literal: literal.clone(),
+                    then_arm: side(ctx, then_arm, library)?,
+                    else_arm: side(ctx, else_arm, library)?,
+                },
             })
         })
         .collect()

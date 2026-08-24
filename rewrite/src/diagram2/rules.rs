@@ -160,6 +160,10 @@ pub enum Law {
     DeadNode,
     Dedup,
     NotNot,
+    AndLiteral,
+    TupleCancel,
+    AsTupleBuilt,
+    EqualRefl,
     // The branch layer. Every one of these is stated at an end of a branch
     // that has the condition in its own window — see the module docs for why
     // that is the only place some of them can be stated soundly at all.
@@ -214,6 +218,50 @@ pub enum Rule {
     Dedup { kind: NodeKind },
     /// `not ; not = as_bool` — the coercion spelled the long way round.
     NotNot,
+    /// `and` with a literal operand is decided by `truthy` alone —
+    /// short-circuiting, as an equation. A truthy literal contributes
+    /// nothing but the coercion: the answer is `Bool(truthy(other))`,
+    /// which is `as_bool` of the other operand. The one falsy value
+    /// decides the whole answer: `false`, the other operand discarded —
+    /// the discard licensed the way every discard here is, by totality
+    /// and purity.
+    ///
+    /// The literal stays **exported** on both sides, the way
+    /// [`Rule::Fold`] keeps its operands: a deduped literal is one box
+    /// with many readers, and a window that claimed all of them would
+    /// never match. A literal the `and` alone read is left reader-less,
+    /// and `dead-node` collects it.
+    ///
+    /// This is the row that lets a case split spend a **conjunction**: a
+    /// guard `and(a, b)` branch-tested as one opaque bool decomposes only
+    /// when a split on `a` can fold the `and` its literal leaves behind.
+    ///
+    /// `literal` names the operand the pushed value feeds — the payload
+    /// carries which, so the two sides of the equation agree on where the
+    /// boundary input sits.
+    AndLiteral { literal: Side, value: Value },
+    /// Taking apart what `tuple n` built answers the built elements:
+    /// `tuple n ; untuple n = id(n)` — the algebra sheet's tuple
+    /// cancellation, stated with the tuple **kept**, since its port may
+    /// have other readers: the equation re-points the untuple's readers
+    /// at the element wires and leaves the tuple standing for whoever
+    /// else holds it; a tuple nobody else reads falls to `dead-node`.
+    /// The machine's promise that `untuple` inverts `tuple` exactly is
+    /// what makes this a row rather than wiring.
+    TupleCancel { n: usize },
+    /// The coercion is a no-op on a value `tuple n` built: `tuple n ;
+    /// as_tuple n` answers the tuple itself. This is the witness a shape
+    /// guard spends when it reads a built value — the guard's `as_tuple`
+    /// collapses onto the built wire, and the comparison against it
+    /// becomes a comparison of one wire with itself.
+    AsTupleBuilt { n: usize },
+    /// `equal` on one wire read twice is `true`: `equal` is structural
+    /// identity and the language is deterministic and pure, so a value
+    /// compared with itself answers yes. The wire itself is a boundary
+    /// input — its other readers never entered the window — and the
+    /// answer side leaves it unread, the discard totality licenses. The
+    /// candidate law the algebra sheet names `equal_refl`.
+    EqualRefl,
 
     // ---- the branch layer ----
     /// The same operation done in both arms is one operation, done before
@@ -488,6 +536,10 @@ impl Rule {
             Rule::DeadNode { .. } => Law::DeadNode,
             Rule::Dedup { .. } => Law::Dedup,
             Rule::NotNot => Law::NotNot,
+            Rule::AndLiteral { .. } => Law::AndLiteral,
+            Rule::TupleCancel { .. } => Law::TupleCancel,
+            Rule::AsTupleBuilt { .. } => Law::AsTupleBuilt,
+            Rule::EqualRefl => Law::EqualRefl,
             Rule::ForkHoist { .. } => Law::ForkHoist,
             Rule::ForkDedup { .. } => Law::ForkDedup,
             Rule::SelectView { .. } => Law::SelectView,
@@ -560,7 +612,16 @@ pub fn branching() -> Vec<Law> {
 /// [`Law::NotNot`] is its elder — stated before the layer had a name — and
 /// is listed with it.
 pub fn folding() -> Vec<Law> {
-    vec![Law::Fold, Law::TestedBool, Law::Retuple, Law::NotNot]
+    vec![
+        Law::Fold,
+        Law::TestedBool,
+        Law::Retuple,
+        Law::NotNot,
+        Law::AndLiteral,
+        Law::TupleCancel,
+        Law::AsTupleBuilt,
+        Law::EqualRefl,
+    ]
 }
 
 /// Whether a law can be judged by reading every operation as opaque.
@@ -573,6 +634,10 @@ pub fn is_wiring(law: Law) -> bool {
     !matches!(
         law,
         Law::NotNot
+            | Law::AndLiteral
+            | Law::TupleCancel
+            | Law::AsTupleBuilt
+            | Law::EqualRefl
             | Law::PromisedBool
             | Law::SelectLiteral
             | Law::SelectConst
@@ -822,6 +887,79 @@ pub fn sides(rule: &Rule) -> Result<(Graph, Graph), Error> {
             let mut short = Graph::empty(1);
             let coerced = short.add(NodeKind::Op(Prim::AsBool), vec![Source::Input(0)]);
             short.close(coerced);
+
+            (long, short)
+        }
+        Rule::AndLiteral { literal, value } => {
+            let mut long = Graph::empty(1);
+            let lit = long.add(NodeKind::Op(Prim::Push(value.clone())), Vec::new());
+            let operands = match literal {
+                Side::Deep => vec![lit[0], Source::Input(0)],
+                Side::Top => vec![Source::Input(0), lit[0]],
+            };
+            let and = long.add(NodeKind::Op(Prim::And), operands);
+            long.close(vec![lit[0], and[0]]);
+
+            // The answer is `truthy`'s verdict on the literal, measured on
+            // the value itself: truthy leaves the other operand's
+            // coercion, the one falsy value leaves `false` and the other
+            // operand unread.
+            let mut short = Graph::empty(1);
+            let lit = short.add(NodeKind::Op(Prim::Push(value.clone())), Vec::new());
+            let answer = if value.truthy() {
+                short.add(NodeKind::Op(Prim::AsBool), vec![Source::Input(0)])
+            } else {
+                short.add(NodeKind::Op(Prim::Push(Value::Bool(false))), Vec::new())
+            };
+            short.close(vec![lit[0], answer[0]]);
+
+            (long, short)
+        }
+        Rule::TupleCancel { n } => {
+            let n = *n;
+            let elements: Vec<Source> = (0..n).map(Source::Input).collect();
+
+            let mut long = Graph::empty(n);
+            let tuple = long.add(NodeKind::Op(Prim::Tuple(n)), elements.clone());
+            let apart = long.add(NodeKind::Op(Prim::Untuple(n)), tuple.clone());
+            let mut out = tuple.clone();
+            out.extend(apart);
+            long.close(out);
+
+            let mut short = Graph::empty(n);
+            let tuple = short.add(NodeKind::Op(Prim::Tuple(n)), elements.clone());
+            let mut out = tuple;
+            out.extend(elements);
+            short.close(out);
+
+            (long, short)
+        }
+        Rule::AsTupleBuilt { n } => {
+            let n = *n;
+            let elements: Vec<Source> = (0..n).map(Source::Input).collect();
+
+            let mut long = Graph::empty(n);
+            let tuple = long.add(NodeKind::Op(Prim::Tuple(n)), elements.clone());
+            let coerced = long.add(NodeKind::Op(Prim::AsTuple(n)), tuple.clone());
+            long.close(vec![tuple[0], coerced[0]]);
+
+            let mut short = Graph::empty(n);
+            let tuple = short.add(NodeKind::Op(Prim::Tuple(n)), elements);
+            short.close(vec![tuple[0], tuple[0]]);
+
+            (long, short)
+        }
+        Rule::EqualRefl => {
+            let mut long = Graph::empty(1);
+            let same = long.add(
+                NodeKind::Op(Prim::Equal),
+                vec![Source::Input(0), Source::Input(0)],
+            );
+            long.close(same);
+
+            let mut short = Graph::empty(1);
+            let yes = short.add(NodeKind::Op(Prim::Push(Value::Bool(true))), Vec::new());
+            short.close(yes);
 
             (long, short)
         }
@@ -2112,15 +2250,22 @@ pub fn find_pinned(graph: &Graph, pattern: &Graph, pat: usize, host: NodeId) -> 
 
 /// Whether a pattern says enough about itself to be looked for: at least one
 /// box to anchor on, no source exported twice or exported straight from
-/// the boundary, and no branch id that no box witnesses.
+/// the boundary, no boundary input nothing in the pattern reads, and no
+/// branch id that no box witnesses.
 ///
-/// The last is `select-literal`'s kept side: it **skips** branch ids so a
-/// [`BranchId`] means the same branch on both sides of the equation, and an
-/// id no fork or select carries cannot be read off a match — its image in
-/// the host is a choice, exactly as a reader-split is, so the pattern has
-/// to be stated rather than searched for.
+/// The branch decline is `select-literal`'s kept side: it **skips** branch
+/// ids so a [`BranchId`] means the same branch on both sides of the
+/// equation, and an id no fork or select carries cannot be read off a
+/// match — its image in the host is a choice, exactly as a reader-split
+/// is, so the pattern has to be stated rather than searched for. The
+/// unread-input decline is `equal-refl`'s answer side: a discard's window
+/// still stands for the discarded wire, and which wire that is cannot be
+/// read off a pattern that never touches it.
 fn pins_itself(pattern: &Graph) -> bool {
     if pattern.nodes.is_empty() {
+        return false;
+    }
+    if pattern.inputs.iter().any(|readers| readers.is_empty()) {
         return false;
     }
     let mut witnessed: HashSet<BranchId> = HashSet::new();
@@ -2699,6 +2844,48 @@ fn read_off(graph: &Graph, law: Law, id: NodeId) -> Vec<(Rule, NodeId)> {
         (Law::Dedup, NodeKind::Fork { .. } | NodeKind::Select { .. }) => Vec::new(),
         (Law::Dedup, _) => one(Rule::Dedup { kind }),
         (Law::NotNot, NodeKind::Op(Prim::Not)) => one(Rule::NotNot),
+
+        // `and` with a literal operand: one rule per operand a pushed
+        // value feeds, seeded at the literal the pattern anchors on.
+        (Law::AndLiteral, NodeKind::Op(Prim::And)) => {
+            let mut out = Vec::new();
+            for (side, port) in [(Side::Deep, 0), (Side::Top, 1)] {
+                if let Some((lit, NodeKind::Op(Prim::Push(value)))) = made_by(takes[port]) {
+                    out.push((
+                        Rule::AndLiteral {
+                            literal: side,
+                            value: value.clone(),
+                        },
+                        lit,
+                    ));
+                }
+            }
+            out
+        }
+
+        // Taking apart, or coercing, what `tuple n` built — seeded at the
+        // tuple, which is where the pattern anchors.
+        (Law::TupleCancel, NodeKind::Op(Prim::Untuple(n))) => match made_by(takes[0]) {
+            Some((built, NodeKind::Op(Prim::Tuple(m)))) if m == n => {
+                vec![(Rule::TupleCancel { n: *n }, built)]
+            }
+            _ => Vec::new(),
+        },
+        (Law::AsTupleBuilt, NodeKind::Op(Prim::AsTuple(n))) => match made_by(takes[0]) {
+            Some((built, NodeKind::Op(Prim::Tuple(m)))) if m == n => {
+                vec![(Rule::AsTupleBuilt { n: *n }, built)]
+            }
+            _ => Vec::new(),
+        },
+
+        // One wire, compared with itself.
+        (Law::EqualRefl, NodeKind::Op(Prim::Equal)) => {
+            if takes[0] == takes[1] {
+                one(Rule::EqualRefl)
+            } else {
+                Vec::new()
+            }
+        }
 
         // A block that is really a value from before the fork.
         (
@@ -3867,6 +4054,41 @@ mod tests {
         ));
     }
 
+    /// `and` with a literal operand is decided by `truthy` alone: a truthy
+    /// literal leaves the other operand's coercion, the one falsy value
+    /// leaves `false` — short-circuiting, as an equation, held to the
+    /// machine over every sample and both operand positions.
+    #[test]
+    fn an_and_with_a_literal_is_decided_by_truthiness() {
+        for value in [
+            Value::Bool(true),
+            Value::Bool(false),
+            Value::Int(0),
+            Value::Int(7),
+        ] {
+            for literal in [Side::Deep, Side::Top] {
+                the_machine_agrees(
+                    Law::AndLiteral,
+                    Rule::AndLiteral {
+                        literal,
+                        value: value.clone(),
+                    },
+                );
+            }
+        }
+    }
+
+    /// The tuple rows: taking apart or coercing what `tuple n` built, and
+    /// one wire compared with itself — each held to the machine.
+    #[test]
+    fn a_built_tuple_cancels_coerces_and_equals_itself() {
+        for n in [1, 2, 3] {
+            the_machine_agrees(Law::TupleCancel, Rule::TupleCancel { n });
+            the_machine_agrees(Law::AsTupleBuilt, Rule::AsTupleBuilt { n });
+        }
+        the_machine_agrees(Law::EqualRefl, Rule::EqualRefl);
+    }
+
     /// A literal condition on a select no fork pairs with — including the
     /// shape a `dedup` makes, where the condition and a block are one
     /// pushed value.
@@ -4109,6 +4331,13 @@ mod tests {
                 rule.law()
             );
         }
+        // `equal-refl`'s answer side is a box, and still declines: its
+        // boundary input — the discarded wire — is one the pattern never
+        // touches, so its image is a choice.
+        let (_terms, graph) = built("push 1 push 2 add");
+        let (_, rhs) = sides(&Rule::EqualRefl).unwrap();
+        assert!(find(&graph, &rhs).is_empty());
+
         // `not-not` is the one right-hand side that is a box, and it reads
         // fine.
         let (_terms, graph) = built("as_bool");
@@ -4196,6 +4425,13 @@ mod tests {
                 kind: NodeKind::Op(Prim::Add),
             },
             Rule::NotNot,
+            Rule::AndLiteral {
+                literal: Side::Top,
+                value: Value::Bool(true),
+            },
+            Rule::TupleCancel { n: 2 },
+            Rule::AsTupleBuilt { n: 2 },
+            Rule::EqualRefl,
             Rule::ForkHoist {
                 arity: 1,
                 kind: NodeKind::Op(Prim::Not),

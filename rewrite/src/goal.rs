@@ -108,10 +108,17 @@ pub enum Proof {
     },
     /// A `cases` expanded a boolean-valued wire — η, spent as the table's
     /// own Shannon law — on each side that held one, and the expanded goal
-    /// closed. At most one step per side, recorded like any rewrite.
+    /// closed. The per-side records hold the split(s) and, when the step
+    /// carried per-case sub-strategies, every step those landed inside the
+    /// arms, in order — all ordinary rewrites, replayed blind by the
+    /// checker. `splits` and `arms` are presentation only: how many
+    /// expansions fired, and how many rewrites each case's sub-strategy
+    /// spent (both sides summed), when arms were written.
     Cases {
         lhs: Vec<Step>,
         rhs: Vec<Step>,
+        splits: usize,
+        arms: Option<(usize, usize)>,
         sub: Box<Proof>,
     },
     /// A `diagram` drove both sides to fixpoint and they were one diagram.
@@ -139,7 +146,7 @@ impl Proof {
                     Err("claimed trivial, and the sides are not one graph".to_string())
                 }
             }
-            Proof::Rewrote { lhs, rhs, sub, .. } | Proof::Cases { lhs, rhs, sub } => {
+            Proof::Rewrote { lhs, rhs, sub, .. } | Proof::Cases { lhs, rhs, sub, .. } => {
                 replay(&mut goal.lhs, lhs)
                     .map_err(|e| format!("a recorded left step does not re-apply: {}", e))?;
                 replay(&mut goal.rhs, rhs)
@@ -217,13 +224,18 @@ impl Proof {
                 left_sub.summary(),
                 right_sub.summary()
             ),
-            Proof::Cases { lhs, rhs, sub } => {
-                format!(
-                    "cases: {} split(s); {}",
-                    lhs.len() + rhs.len(),
+            Proof::Cases {
+                splits, arms, sub, ..
+            } => match arms {
+                None => format!("cases: {} split(s); {}", splits, sub.summary()),
+                Some((t, e)) => format!(
+                    "cases: {} split(s) (true: {} rewrite(s); false: {} rewrite(s)); {}",
+                    splits,
+                    t,
+                    e,
                     sub.summary()
-                )
-            }
+                ),
+            },
             Proof::Diagram { .. } => "the two sides are one diagram".to_string(),
         }
     }

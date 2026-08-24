@@ -69,7 +69,7 @@ use std::fmt;
 
 use super::query::{self, Bindings, Query, Var};
 use super::rules::{self, Derivation, Direction, Law, Rule, Step};
-use super::{Graph, NodeId, NodeKind, Sink, Source};
+use super::{BranchId, Graph, NodeId, NodeKind, Sink, Source};
 
 // ---- what a step says ------------------------------------------------------------
 
@@ -159,6 +159,15 @@ pub enum Region {
     /// joins the region: the region is what the focus produced **plus
     /// what rewriting produced from it**.
     LastImage,
+    /// One side of a branch: the boxes of the named arm — computed by
+    /// [`arm_nodes`], fresh at every entry — plus the branch's own ends,
+    /// since the branch layer's laws are read off the `select` and a
+    /// focus that excluded it could never specialize or discharge. A
+    /// branch no longer live resolves to the empty region, which binds
+    /// nothing. Runtime data, not surface syntax: a `BranchId` is only
+    /// known once a split has landed, so whoever fires the split builds
+    /// this from what [`Derivation::latest_undo`] recorded.
+    Arm { branch: BranchId, side: bool },
 }
 
 /// One strategy, as a value.
@@ -578,8 +587,84 @@ impl Runner<'_> {
                 .latest_undo()
                 .map(|back| back.at.nodes.iter().copied().collect())
                 .unwrap_or_default(),
+            Region::Arm { branch, side } => {
+                arm_nodes(self.graph, *branch, *side).unwrap_or_default()
+            }
         }
     }
+}
+
+// ---- arm membership --------------------------------------------------------------
+
+/// Everything a box reads, transitively — the box included.
+fn upstream(graph: &Graph, node: NodeId) -> HashSet<NodeId> {
+    let mut seen = HashSet::new();
+    let mut todo = vec![node];
+    while let Some(node) = todo.pop() {
+        if !seen.insert(node) {
+            continue;
+        }
+        for src in graph.sources(node) {
+            if let Source::Port { node, .. } = *src {
+                todo.push(node);
+            }
+        }
+    }
+    seen
+}
+
+/// The boxes one side of a branch reads, plus the branch's own ends: what
+/// a tactic scoped to an arm may anchor on. `None` when no live select
+/// carries the branch — the branch collapsed, or never was.
+///
+/// Membership is the arm's **cone**, computed fresh at every asking:
+/// everything upstream of this side's blocks, minus everything upstream
+/// of the condition — the decided test's own making is exactly what an
+/// arm must not touch again, and it is the one exclusion that matters,
+/// since an enclosing split's condition feeds nothing but its own select
+/// and so is never in a deeper arm's cone. The other side's boxes are out
+/// by the same reading (nothing here reads them); **shared context is
+/// deliberately in**: a split duplicates only what lies downstream of its
+/// wire, so the very tests a nested split must reach — the hypothesis's
+/// remaining unknowns — sit upstream, shared between the copies, and a
+/// region that evicted what both arms read would make an arm that can
+/// spend its hypothesis but never decompose it.
+///
+/// The select joins the region because every law of the branch layer is
+/// read off it; the fork, when the branch has one, joins for the same
+/// reason. The region scopes *anchors*, not windows — a law fired from
+/// inside may still hold boxes outside in its match, and soundness is
+/// [`rules::apply`]'s either way.
+pub fn arm_nodes(graph: &Graph, branch: BranchId, side: bool) -> Option<HashSet<NodeId>> {
+    let (select, arity) = graph.live().find_map(|(id, kind)| match kind {
+        NodeKind::Select { arity, branch: b } if *b == branch => Some((id, *arity)),
+        _ => None,
+    })?;
+    let sources = graph.sources(select).to_vec();
+    let blocks = if side {
+        &sources[1..1 + arity]
+    } else {
+        &sources[1 + arity..1 + 2 * arity]
+    };
+
+    let mut region: HashSet<NodeId> = HashSet::new();
+    for src in blocks {
+        if let Source::Port { node, .. } = *src {
+            region.extend(upstream(graph, node));
+        }
+    }
+    if let Source::Port { node, .. } = sources[0] {
+        for decided in upstream(graph, node) {
+            region.remove(&decided);
+        }
+    }
+
+    region.insert(select);
+    region.extend(graph.live().find_map(|(id, kind)| match kind {
+        NodeKind::Fork { branch: b, .. } if *b == branch => Some(id),
+        _ => None,
+    }));
+    Some(region)
 }
 
 // ---- resolving a stated match ----------------------------------------------------
@@ -923,6 +1008,104 @@ mod tests {
                 port: 0
             }]
         );
+    }
+
+    /// An arm region: after a Shannon split, each side of the fresh branch
+    /// is its own focus — the pinned literal and that side's copy of the
+    /// body in, the condition op and the other side out, the select in
+    /// because the branch layer's laws anchor there. A fire scoped to the
+    /// then side folds its copy and leaves the other standing.
+    #[test]
+    fn an_arm_region_holds_a_fire_to_its_side() {
+        let mut graph = built("is_bool not");
+        let mut deriv = Derivation::default();
+        let test = graph
+            .live()
+            .find(|(_, k)| matches!(k, NodeKind::Op(Prim::IsBool)))
+            .map(|(id, _)| id)
+            .expect("the split target");
+        let split = rules::propose(&graph, &[Law::Shannon], test)
+            .into_iter()
+            .next()
+            .expect("the Shannon row offers the split");
+        deriv.push(&mut graph, split).unwrap();
+        let branch = deriv
+            .latest_undo()
+            .and_then(|back| back.at.branches.last().copied())
+            .expect("the split minted a branch");
+
+        let is_bool = graph
+            .live()
+            .find(|(_, k)| matches!(k, NodeKind::Op(Prim::IsBool)))
+            .map(|(id, _)| id)
+            .expect("the answer box survives the split");
+        let then_region = arm_nodes(&graph, branch, true).expect("the branch is live");
+        let else_region = arm_nodes(&graph, branch, false).expect("the branch is live");
+        assert!(
+            !then_region.contains(&is_bool) && !else_region.contains(&is_bool),
+            "the condition belongs to no arm"
+        );
+        assert!(then_region.iter().all(|n| {
+            *graph.kind(*n) != NodeKind::Op(Prim::Push(bytecode::Value::Bool(false)))
+        }));
+        assert_eq!(
+            then_region.intersection(&else_region).count(),
+            1,
+            "the arms share only the select"
+        );
+
+        // A fold scoped to the then arm spends its copy of the body —
+        // `not` of the pinned `true` — and leaves the else copy standing.
+        let scoped = Tactic::Within(
+            Region::Arm { branch, side: true },
+            Box::new(fire_first(vec![Law::Fold])),
+        );
+        run(&mut graph, &mut deriv, &scoped).unwrap();
+        graph.check().unwrap();
+        let nots = graph
+            .live()
+            .filter(|(_, k)| matches!(k, NodeKind::Op(Prim::Not)))
+            .count();
+        assert_eq!(nots, 1, "only the then copy folded:\n{}", graph);
+        assert_eq!(deriv.len(), 2, "the split and the one scoped fold");
+    }
+
+    /// A branch that is gone resolves to the empty region, which binds
+    /// nothing: a fire scoped to it fails loudly and the graph stands.
+    #[test]
+    fn a_vanished_branch_is_an_empty_region() {
+        let mut graph = built("push true branch { push 1 } { push 2 }");
+        let branch = graph
+            .live()
+            .find_map(|(_, k)| match k {
+                NodeKind::Select { branch, .. } => Some(*branch),
+                _ => None,
+            })
+            .expect("the branch as built");
+        assert!(arm_nodes(&graph, branch, true).is_some());
+
+        let mut deriv = Derivation::default();
+        run(
+            &mut graph,
+            &mut deriv,
+            &fire_first(vec![Law::SelectLiteral]),
+        )
+        .unwrap();
+        assert!(
+            arm_nodes(&graph, branch, true).is_none(),
+            "the fold spent the branch"
+        );
+
+        let before = graph.clone();
+        let scoped = Tactic::Within(
+            Region::Arm { branch, side: true },
+            Box::new(fire_first(vec![Law::DeadNode])),
+        );
+        assert!(matches!(
+            run(&mut graph, &mut deriv, &scoped),
+            Err(TacticError::NothingFound { .. })
+        ));
+        assert_eq!(graph, before, "a scoped miss lands nothing");
     }
 
     /// A backward step, stated: the matcher rightly declines copy-elim's

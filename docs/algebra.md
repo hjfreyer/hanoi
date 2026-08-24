@@ -149,9 +149,17 @@ current corpus:
 | law | in terms | why it is true |
 |---|---|---|
 | `not_branch` | `not ; branch { A } { B } = branch { B } { A }` | `not v` is truthy iff `v = false`, the unique falsy value; foldable by branching on the argument of a `not`-shaped condition |
-| `and_branch` | `and ; branch { A } { B } = branch { branch { A } { B } } { drop-top ; B }` | short-circuiting as an equation; dual form for `or` |
-| `equal_refl` | `equal` on one wire read twice = `true` | `equal` is structural identity; a one-line fold in `apply` when both argument wires are one |
+| `or_literal` | the dual of `and-literal`, below | short-circuiting for `or`; arrives the day a proof needs it |
 | type-test family | `op ; is_int = op ; drop-top ; push false` for a `yields_bool` op, per (codomain, test) pair | the other five tests of the same codomain fact, table-driven off `Instruction::yields_*` |
+
+Three former candidates are rows now, landed for the contract claim's
+proof (see [docs/proving.md](proving.md)):
+
+| law | in terms | why it is true |
+|---|---|---|
+| `and-literal` | `and` with a literal operand = `as_bool` of the other (truthy literal), or `push false` with the other discarded (the one falsy value) | short-circuiting as an equation; what lets a case split spend a **conjunction**, one conjunct at a time |
+| `equal-refl` | `equal` on one wire read twice = `true` | `equal` is structural identity, and the language is deterministic and pure |
+| `tuple-cancel`, `as-tuple-built` | `tuple n ; untuple n = id(n)`, and `tuple n ; as_tuple n` = the tuple itself | `untuple` inverts `tuple` exactly, and the coercion is a no-op on a value already the shape it coerces to — stated with the tuple kept for its other readers |
 
 ## Layer 3: the signature — evaluation
 

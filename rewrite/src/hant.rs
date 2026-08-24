@@ -28,6 +28,7 @@
 //! | `exact` | claims the sides are one diagram — **isomorphic** — which the auto-close has already checked, so a reached `exact` fails and shows the goal exactly as it stands | always, when reached |
 //! | `via { body } (left: s, right: s)` | **cuts**: `A = B` splits into the goals `A = C` and `C = B`, the waypoint built as a graph | the waypoint's net stack change is not the goal's, or a side fails |
 //! | `cases(op)` | **case analysis** on an intermediate result: an `op` answer is `true` or `false` and nothing else, so everything depending on it becomes a branch holding one copy per case, the assumption pasted in as a literal — one checked rewrite per side, simplified under each assumption by the ordinary laws | no side computes `op`, or nothing depends on its answer |
+//! | `cases(op) (true: s, false: s)` | the same split, with a sub-strategy per case: each runs with its rewrites scoped to its side of the fresh branch — the hypothesis, spent as the structure it is. An arm holds side rewrites and nested `cases`; either is omissible, and a side whose branch is already gone skips its arm quietly | the split fails, or an arm's tactic does — and the residual names whose case it stood in |
 //! | `diagram` | rewrites both sides by the whole table to fixpoint; they land on one diagram — isomorphic — or they do not | they do not — and the residual is both sides read back, narrowed to the difference |
 //!
 //! `diagram`, `exact` and `via` end a strategy — the goal is closed or
@@ -173,7 +174,30 @@ pub enum Step<V> {
     /// assumption, and when both come out alike the introduced branch
     /// collapses as well. A manipulation, not a closer: what it leaves is
     /// a goal.
-    Cases { prim: crate::term::Prim },
+    ///
+    /// The arms, when written, are per-case sub-strategies: after the
+    /// split, `then_arm` runs with its rewrites scoped to the then side of
+    /// the fresh branch on each side of the goal that split, and
+    /// `else_arm` to the else side — the hypothesis ("the answer was
+    /// true") spent as the structure it is, never as a context the checker
+    /// would have to know about. An arm holds side rewrites and nested
+    /// `cases` and nothing else, so everything it lands is ordinary
+    /// checked steps in the same record as the split; the goal is closed
+    /// outside the split, by whatever follows.
+    ///
+    /// `literal`, when written — `cases(equal(state::thirsty))` — narrows
+    /// which wire the step picks: the outermost box of the operation
+    /// **one of whose operands is that pushed literal**, named by any
+    /// unambiguous tail of its spelling. This is the sharper addressing
+    /// [docs/proving.md](../../docs/proving.md) asks for: a goal that
+    /// holds several tests of one operation splits on the one the proof
+    /// means, not on whichever happens to sit outermost.
+    Cases {
+        prim: crate::term::Prim,
+        literal: Option<String>,
+        then_arm: Option<Strategy<V>>,
+        else_arm: Option<Strategy<V>>,
+    },
 }
 
 /// What a step's payload reads as, once the library it names things against
@@ -212,7 +236,12 @@ impl<V> fmt::Display for Step<V> {
             Step::Symm => write!(f, "symm"),
             Step::Exact => write!(f, "exact"),
             Step::Via { .. } => write!(f, "via {{ … }}"),
-            Step::Cases { .. } => write!(f, "cases(…)"),
+            Step::Cases {
+                then_arm: None,
+                else_arm: None,
+                ..
+            } => write!(f, "cases(…)"),
+            Step::Cases { .. } => write!(f, "cases(…) (…)"),
         }
     }
 }
@@ -327,14 +356,39 @@ fn parse_step(input: &str) -> Result<(Step<String>, &str), String> {
             ))
         }
         "cases" => {
-            let after = rest
-                .trim_start()
-                .strip_prefix('(')
-                .ok_or("`cases` expects `(operation)`")?;
-            let (name, after) = after.split_once(')').ok_or("`cases(` never closes")?;
+            let (inside, after) =
+                paren_block(rest.trim_start()).ok_or("`cases` expects `(operation)`")?;
+            let inside = inside.trim();
+            // `cases(equal(state::thirsty))` names the literal the picked
+            // test must hold — the wire, addressed by what it tests.
+            let (name, literal) = match inside.split_once('(') {
+                None => (inside, None),
+                Some((name, lit)) => {
+                    let lit = lit
+                        .trim_end()
+                        .strip_suffix(')')
+                        .ok_or("`cases(op(` never closes")?
+                        .trim();
+                    if lit.is_empty() {
+                        return Err("`cases` names no literal to split against".to_string());
+                    }
+                    (name.trim(), Some(lit.to_string()))
+                }
+            };
+            let prim = testing_prim(name)?;
+            // The arms, when written, ride the same spelling as `via`'s
+            // sides: parenthesized, labelled, either omissible.
+            let (arms, after) = if after.trim_start().starts_with('(') {
+                parse_arms("cases", "true", "false", after.trim_start())?
+            } else {
+                ((None, None), after)
+            };
             Ok((
                 Step::Cases {
-                    prim: testing_prim(name.trim())?,
+                    prim,
+                    literal,
+                    then_arm: arms.0,
+                    else_arm: arms.1,
                 },
                 after,
             ))
@@ -464,6 +518,10 @@ fn parse_laws(inside: &str) -> Result<Vec<Law>, String> {
             "dead-node" => vec![Law::DeadNode],
             "dedup" => vec![Law::Dedup],
             "not-not" => vec![Law::NotNot],
+            "and-literal" => vec![Law::AndLiteral],
+            "tuple-cancel" => vec![Law::TupleCancel],
+            "as-tuple-built" => vec![Law::AsTupleBuilt],
+            "equal-refl" => vec![Law::EqualRefl],
             "fork-hoist" => vec![Law::ForkHoist],
             "fork-dedup" => vec![Law::ForkDedup],
             "select-view" => vec![Law::SelectView],
@@ -541,12 +599,49 @@ fn validate<V>(strategy: &Strategy<V>) -> Result<(), String> {
                     validate(side)?;
                 }
             }
+            Step::Cases {
+                then_arm, else_arm, ..
+            } => {
+                for arm in [then_arm, else_arm].into_iter().flatten() {
+                    validate_arm(arm)?;
+                }
+            }
             // Swapping twice is the goal it started with, and a step that
             // says nothing is a step whose author lost the thread.
             Step::Symm if matches!(strategy.get(i + 1), Some(Step::Symm)) => {
                 return Err("`symm symm` is the goal unchanged".to_string());
             }
             _ => {}
+        }
+    }
+    Ok(())
+}
+
+/// A `cases` arm holds side rewrites and nested `cases` and nothing else.
+/// The restriction is the proof object's: everything an arm lands must be
+/// ordinary checked steps appended to the split's own record, and the
+/// steps refused here re-perform some other way — `inline` re-opens,
+/// `symm` turns the goal, the closers close it — none of which has a
+/// reading *inside* a branch. The goal is closed outside the split.
+fn validate_arm<V>(arm: &Strategy<V>) -> Result<(), String> {
+    for step in arm {
+        match step {
+            Step::Rewrite { .. } => {}
+            Step::Cases {
+                then_arm, else_arm, ..
+            } => {
+                for nested in [then_arm, else_arm].into_iter().flatten() {
+                    validate_arm(nested)?;
+                }
+            }
+            other => {
+                return Err(format!(
+                    "`{}` cannot appear inside a `cases` arm: an arm holds side \
+                     rewrites and nested `cases`, and the goal is closed outside \
+                     the split",
+                    other
+                ));
+            }
         }
     }
     Ok(())
@@ -706,8 +801,16 @@ mod tests {
             entries[0].strategy[..],
             [
                 Step::Inline(None),
-                Step::Cases { prim: Prim::Equal },
-                Step::Cases { prim: Prim::IsBool },
+                Step::Cases {
+                    prim: Prim::Equal,
+                    literal: None,
+                    then_arm: None,
+                    else_arm: None,
+                },
+                Step::Cases {
+                    prim: Prim::IsBool,
+                    ..
+                },
                 Step::Diagram
             ]
         ));
@@ -717,6 +820,117 @@ mod tests {
         assert!(err.contains("cannot split on `add`"), "{}", err);
         let err = parse_hant("proof p = cases();").unwrap_err();
         assert!(err.contains("names no operation"), "{}", err);
+    }
+
+    #[test]
+    fn a_structured_case_split_parses_its_arms() {
+        use crate::term::Prim;
+        // The arms ride `via`'s spelling: parenthesized, labelled, either
+        // omissible — and an arm may split again, which is how a proof
+        // writes a decision tree.
+        let entries = parse_hant(
+            "proof p = cases(equal) (true: both(decide), \
+             false: both(decide) cases(equal) (true: both(decide))) diagram;",
+        )
+        .unwrap();
+        let [
+            Step::Cases {
+                prim: Prim::Equal,
+                literal: None,
+                then_arm: Some(then_arm),
+                else_arm: Some(else_arm),
+            },
+            Step::Diagram,
+        ] = &entries[0].strategy[..]
+        else {
+            panic!("{:?}", entries[0].strategy);
+        };
+        assert!(matches!(then_arm[..], [Step::Rewrite { .. }]));
+        let [
+            Step::Rewrite { .. },
+            Step::Cases {
+                then_arm: Some(nested),
+                else_arm: None,
+                ..
+            },
+        ] = &else_arm[..]
+        else {
+            panic!("{:?}", else_arm);
+        };
+        assert!(matches!(nested[..], [Step::Rewrite { .. }]));
+
+        // An omitted pair of arms is the bare split, unchanged.
+        let entries = parse_hant("proof p = cases(equal) diagram;").unwrap();
+        assert!(matches!(
+            entries[0].strategy[..],
+            [
+                Step::Cases {
+                    then_arm: None,
+                    else_arm: None,
+                    ..
+                },
+                Step::Diagram
+            ]
+        ));
+
+        // A duplicated label is refused the way `via`'s is.
+        let err = parse_hant("proof p = cases(equal) (true: both(decide), true: both(decide));")
+            .unwrap_err();
+        assert!(err.contains("names a side twice"), "{}", err);
+    }
+
+    #[test]
+    fn a_case_split_may_name_the_literal_it_tests() {
+        use crate::term::Prim;
+        // The wire, addressed by what it tests: the outermost `equal`
+        // against that pushed value, not whichever sits outermost.
+        let entries =
+            parse_hant("proof p = cases(equal(state::thirsty)) (true: both(decide)) diagram;")
+                .unwrap();
+        let [
+            Step::Cases {
+                prim: Prim::Equal,
+                literal: Some(literal),
+                then_arm: Some(_),
+                else_arm: None,
+            },
+            Step::Diagram,
+        ] = &entries[0].strategy[..]
+        else {
+            panic!("{:?}", entries[0].strategy);
+        };
+        assert_eq!(literal, "state::thirsty");
+
+        let err = parse_hant("proof p = cases(equal()) diagram;").unwrap_err();
+        assert!(err.contains("names no literal"), "{}", err);
+    }
+
+    #[test]
+    fn an_arm_holds_rewrites_and_splits_only() {
+        // The goal is closed outside the split: everything an arm lands
+        // must be checked steps in the split's own record, and the steps
+        // that re-perform some other way have no reading inside a branch.
+        for refused in ["diagram", "exact", "inline", "symm", "via { push 1 }"] {
+            let err = parse_hant(&format!(
+                "proof p = cases(equal) (true: {}) diagram;",
+                refused
+            ))
+            .unwrap_err();
+            assert!(
+                err.contains("cannot appear inside a `cases` arm"),
+                "{}: {}",
+                refused,
+                err
+            );
+        }
+        // Nested arms are held to the same rule.
+        let err = parse_hant("proof p = cases(equal) (true: cases(and) (false: inline)) diagram;")
+            .unwrap_err();
+        assert!(
+            err.contains("cannot appear inside a `cases` arm"),
+            "{}",
+            err
+        );
     }
 
     #[test]
