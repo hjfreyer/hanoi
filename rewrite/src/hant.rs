@@ -464,6 +464,7 @@ fn parse_laws(inside: &str) -> Result<Vec<Law>, String> {
             "dead-node" => vec![Law::DeadNode],
             "dedup" => vec![Law::Dedup],
             "not-not" => vec![Law::NotNot],
+            "fork-hoist" => vec![Law::ForkHoist],
             "fork-dedup" => vec![Law::ForkDedup],
             "select-view" => vec![Law::SelectView],
             "select-same" => vec![Law::SelectSame],

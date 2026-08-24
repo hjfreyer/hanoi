@@ -8,34 +8,37 @@
 //! The route is: **widen, hoist, dedup.** The else arm drops its view of
 //! `x`; compute `is_symbol` on it first and drop *that* instead, so both
 //! arms do the same work — `dead-node`, backwards, which the table already
-//! states as an equation and so already runs in reverse. Then `fork-dedup`
+//! states as an equation and so already runs in reverse. Then `fork-hoist`
 //! lifts the pair out in front of the branch, because the same operation
 //! done in both arms was always one operation. Then `dedup` merges it with
 //! the condition's own test, since the two now read one source.
 //!
-//! Every one of those steps works today, and together they land the goal on
-//! `select(c, c, true)` — the select's then block reading the **condition's
-//! own port**. That is the whole hypothesis a rule would need, and no rule
-//! reads it:
+//! The hoist has to be `fork-hoist` rather than `fork-dedup`. The two state
+//! the same equation and differ in where the answer is read: `fork-dedup`
+//! reads it from outside the fork, which is a `view-value` spent in the same
+//! breath, and once every arm reads around the fork the fork is dead. The
+//! fact would then be true and the shape that can name it gone. `fork-hoist`
+//! hands the answer back as a stack slot of the fork's own, so the value
+//! stays inside the branch.
 //!
-//! - `specialize-bool` says exactly this, and says it of a block reading a
-//!   *fork view* of the condition. `fork-dedup` routes the value around the
-//!   fork rather than through it, so by the time the fact is true the shape
-//!   it is stated for is gone. It is not that the driver fires the laws in
-//!   an unlucky order — the hoist is what establishes the fact, and the
-//!   hoist is what empties the fork.
-//! - `select-const` reaches a fork-less select, and only with a *literal*
-//!   condition. This one is computed.
+//! Every one of those steps works today, and together they land the goal
+//! exactly on the shape `specialize-bool` is written for: the fork's slot
+//! *is* the condition, and the select's then block reads a view of that
+//! slot. One thing still stops it. The rule's pattern puts an `as_bool`
+//! between the view and the block — the coercion that makes an arbitrary
+//! truthy value into the bool the branch decided — and here the condition is
+//! `is_symbol`, which the instruction set already promises is a bool. There
+//! is no coercion to match, and no law says `as_bool` of a promised bool is
+//! that bool, so none can be introduced.
 //!
-//! So the missing row is `select-const`'s neighbour: at a select, a block
-//! reading the condition's own port is `true` on the then side and `false`
-//! on the else side, whenever the condition comes from an operation the
-//! instruction set promises yields a bool. The promise is load-bearing —
-//! with a truthy non-bool condition like `5` the then block is `5`, not
-//! `true`.
+//! So what is left is not a missing row but a rule that cannot see a
+//! condition already in the form it wants: `specialize-bool` needs to accept
+//! a block reading the view directly, when the condition's producer promises
+//! a bool. That promise has to be *stated* rather than tested, the way
+//! `tested-bool` states it — by carrying the producing kind in the payload.
 //!
-//! When that law lands, the last assertion here flips from "does not close"
-//! to "closes", and this file becomes its regression test.
+//! When that lands, the last assertion here flips from "does not close" to
+//! "closes", and this file becomes its regression test.
 
 use bytecode::assemble;
 use rewrite::diagram2::rules::{Direction, Law, Match, Rule, Step};
@@ -125,19 +128,30 @@ fn the_route_reaches_the_fact_and_stops() {
     );
 
     widen(&mut goal.lhs);
-    for law in [Law::ForkDedup, Law::Dedup] {
+    for law in [Law::ForkHoist, Law::Dedup] {
         drive(&mut goal.lhs, &tactic::fire_first(vec![law]));
     }
 
+    // The fork is still standing, and the slot it now carries is the
+    // condition itself — which is what `specialize-bool` is anchored on.
+    let (fork, arity) = fork_of(&goal.lhs).expect("the hoist keeps the fork");
     let (condition, then_block) = select(&goal.lhs);
     assert_eq!(
-        condition, then_block,
-        "the route did not identify the then block with the condition"
+        goal.lhs.sources(fork)[arity],
+        condition,
+        "the fork's hoisted slot is not the condition"
+    );
+    assert_eq!(
+        then_block,
+        Source::Port {
+            node: fork,
+            port: arity - 1
+        },
+        "the then block does not read the view of the hoisted slot"
     );
 
-    // And there it stops. Nothing in the table reads that fact: the whole
-    // branch layer, the wiring laws and the value layer, to fixpoint, do
-    // not turn `select(c, c, true)` into `true`.
+    // And there it stops. `specialize-bool` wants an `as_bool` between the
+    // view and the block, and a condition that is already a bool has none.
     drive(&mut goal.lhs, &tactic::decide());
     assert!(
         !diagram2::isomorphic(&goal.lhs, &goal.rhs),
@@ -145,16 +159,18 @@ fn the_route_reaches_the_fact_and_stops() {
     );
 }
 
+/// The fork a branch still has, and its arity.
+fn fork_of(graph: &Graph) -> Option<(rewrite::diagram2::NodeId, usize)> {
+    graph.live().find_map(|(id, kind)| match kind {
+        NodeKind::Fork { arity, .. } => Some((id, *arity)),
+        _ => None,
+    })
+}
+
 /// The else arm drops its view of the value; compute `is_symbol` on it
-/// first, so that both arms do the one thing `fork-dedup` can lift out.
+/// first, so that both arms do the one thing `fork-hoist` can lift out.
 fn widen(graph: &mut Graph) {
-    let (fork, arity) = graph
-        .live()
-        .find_map(|(id, kind)| match kind {
-            NodeKind::Fork { arity, .. } => Some((id, *arity)),
-            _ => None,
-        })
-        .expect("the wiring laws leave the fork standing");
+    let (fork, arity) = fork_of(graph).expect("the wiring laws leave the fork standing");
     // Outputs `0..arity` are the then view, `arity..2 * arity` the else.
     let step = Step {
         rule: Rule::DeadNode {
