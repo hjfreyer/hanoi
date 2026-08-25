@@ -340,8 +340,12 @@ comes in two spellings because reading a goal and answering one are
 different jobs.
 
 **The graphs are what it shows.** One line per box — its id, what it reads,
-what reads it — with a branch's arms indented between the `fork` and
-`select` that bracket them. This is what the tactics acted on, so a next
+what reads it — with a branch written as the block it is: `if <condition>`
+at the `fork` where there is one, `else` where the second arm begins, and
+`endif <condition>` at the `select`, the arms indented between them. The
+condition is named on all three lines, so a block deep in a nest says which
+wire it turns on; a line with an empty id column is one the listing drew
+rather than a box. This is what the tactics acted on, so a next
 step names the boxes it names — literally, with `at(#41, law)`, which is
 the one address in the tactic language that is a name rather than a
 description; and a `NodeId` is stable for the life of a graph (nodes are
