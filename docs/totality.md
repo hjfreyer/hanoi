@@ -143,7 +143,7 @@ it computes. `()` below is the empty tuple, `Value::unit()`.
 | instruction | arity | on its domain | off it |
 |---|---|---|---|
 | `push c`, `pick d`, `roll d`, `drop` | unchanged | — | no domain to be off |
-| `equal`, `is_int`, `is_bool`, `is_const_string`, `is_symbol`, `is_tuple` | unchanged | — | no domain to be off |
+| `equal`, `is_int`, `is_bool`, `is_const_string`, `is_symbol`, `is_tuple`, `is_tuple n` | unchanged | — | no domain to be off |
 | `not`, `and`, `or`, `tuple n` | unchanged | — | no domain to be off |
 | `as_bool`, `as_int`, `as_tuple n` | `1 -> 1` | — | the default of the type; see below |
 | `add`, `subtract`, `multiply` | `2 -> 1` | the sum | `Int 0` |
@@ -339,6 +339,32 @@ Both arms are exact: on the then side the parts rebuild `x` because `x` was an
 which is what the arm pushes. The guard is four instructions and states the
 domain exactly, where the old `is_tuple; tuple_length; push n; equal` prologue
 was five and stated it in pieces.
+
+That prologue has since become one instruction rather than four: `is_tuple`
+takes an optional width, and `is_tuple n` is the whole question. The width is
+part of the type in exactly the sense `untuple n` means it — a tuple of the
+wrong length is as much a mismatch as a symbol, being precisely what `untuple
+n` could not take apart — so the test that guards an `untuple n` or an
+`as_tuple n` asks it in one place instead of assembling it from three. The
+width stays *optional* on the test and required on the coercion: "a tuple of
+some length" is a question with an answer, and it is what the surface's bare
+`tuple` type spec means, but it is not a coercion anything could perform.
+
+The `type` and `enum` sugar has **not** moved to it, and the reason is worth
+recording rather than fixing quietly. `pick 0 ; is_tuple n` says exactly what
+`pick 0 ; pick 0 ; as_tuple n ; equal` says, in two instructions rather than
+four, with the value left under the answer either way — so the sugar wants it.
+What stops it is the *table*, not the semantics: the guard that coerces and
+compares hands the rewriter an `equal` against a value `tuple n` built, which
+`as-tuple-built` and the folding rows take apart, and `is_tuple n` on a built
+tuple has no row at all. Try it and the barista's contract claim stalls on a
+nest of `tuple n ; is_tuple n` nobody can decide.
+
+The missing row is the obvious sibling of `as-tuple-built`: `tuple n ;
+is_tuple n` = `tuple n ; push true`, the tuple kept for its other readers the
+way that law keeps it. With that in the table the sugar can shorten; without
+it, shortening the sugar costs a proof. It is a change to make on purpose,
+not as a side effect of an instruction gaining an operand.
 
 ### The single-arm hoist, which totality *did* buy
 

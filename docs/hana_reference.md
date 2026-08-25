@@ -131,6 +131,7 @@ These instructions test the runtime type of the top stack value, pushing a Bool.
 | `is_const_string` | `is_const_string` | `[..., v] -> [..., is_const_string]` | Pops a value and pushes `true` if it is a ConstString, else `false`. |
 | `is_symbol` | `is_symbol` | `[..., v] -> [..., is_symbol]` | Pops a value and pushes `true` if it is a Symbol, else `false`. |
 | `is_tuple` | `is_tuple` | `[..., v] -> [..., is_tuple]` | Pops a value and pushes `true` if it is a Tuple, else `false`. |
+| `is_tuple n` | `is_tuple 2` | `[..., v] -> [..., is_tuple_of_width]` | The same question with the width asked too: `true` only for a Tuple of exactly `n` elements — which is exactly the values `untuple n` has parts to give back. The width is optional here and required on `as_tuple`: a test can answer "a tuple of some length", and no coercion can perform it. |
 
 ## 7. Coercions
 

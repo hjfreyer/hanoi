@@ -79,9 +79,9 @@
 //! - [`Law::CoercionGuard`] — a coercion is a guarded identity, which is
 //!   the instruction set's own sentence about all three of them: the value
 //!   where its test holds, a default where it does not. For `as_tuple n`
-//!   the width is part of the guard, since `is_tuple` does not ask how
-//!   wide and a tuple of the wrong length is exactly what `untuple n`
-//!   could not take apart.
+//!   the test is `is_tuple n`, the width and all: a tuple of the wrong
+//!   length is exactly what `untuple n` could not take apart, so the
+//!   width-blind `is_tuple` would guard the wrong domain.
 //!
 //! These are **unpackings**, and what they buy is the direction of reading
 //! the rest of the table cannot go: a coercion is opaque to every rule
@@ -701,13 +701,15 @@ pub enum Rule {
     /// |---|---|---|
     /// | `as_bool` | `is_bool` | `true` — every non-bool is truthy, `false` being the one falsy value and a bool |
     /// | `as_int` | `is_int` | `0` |
-    /// | `as_tuple n` | `is_tuple` **and** `tuple_length = n` | a tuple of `n` empty tuples |
+    /// | `as_tuple n` | `is_tuple n` | a tuple of `n` empty tuples |
     ///
-    /// The width in that guard is not decoration. `is_tuple` does not ask
-    /// how wide, and the width is part of the type coerced to: a tuple of
-    /// the wrong length is exactly what `untuple n` could not take apart,
-    /// so a guard of `is_tuple` alone would claim `as_tuple 2` is the
-    /// identity on `(1, 2, 3)`, which it is not.
+    /// The width in that guard is not decoration, and it is why
+    /// [`IsTuple`](bytecode::Instruction::IsTuple) carries one. The width
+    /// is part of the type coerced to: a tuple of the wrong length is
+    /// exactly what `untuple n` could not take apart, so a guard of the
+    /// width-blind `is_tuple` would claim `as_tuple 2` is the identity on
+    /// `(1, 2, 3)`, which it is not. Asked with the width, the equation is
+    /// one box against one box on either side of the branch.
     ///
     /// Like [`Rule::AsBoolBranch`], this **grows** a graph, and it is on no
     /// driven list for that reason. What it is for is the other direction
@@ -1892,10 +1894,16 @@ pub fn sides(rule: &Rule) -> Result<(Graph, Graph), Error> {
             (forced, asked)
         }
         Rule::CoercionGuard { prim } => {
+            // One test per coercion, and the width rides along: `is_tuple
+            // n` asks the whole question a guard needs, so the equation is
+            // one box against one box either way.
             let (test, junk) = match prim {
                 Prim::AsBool => (Prim::IsBool, Value::Bool(true)),
                 Prim::AsInt => (Prim::IsInt, Value::Int(0)),
-                Prim::AsTuple(n) => (Prim::IsTuple, Value::Tuple(vec![Value::unit(); *n])),
+                Prim::AsTuple(n) => (
+                    Prim::IsTuple(Some(*n)),
+                    Value::Tuple(vec![Value::unit(); *n]),
+                ),
                 _ => return Err(ill(Ill::Refused)),
             };
 
@@ -1904,19 +1912,7 @@ pub fn sides(rule: &Rule) -> Result<(Graph, Graph), Error> {
             forced.close(out);
 
             let mut guarded = Graph::empty(1);
-            let mut holds = guarded.add(NodeKind::Op(test), vec![Source::Input(0)])[0];
-            if let Prim::AsTuple(n) = prim {
-                // `is_tuple` does not ask how wide, and the width is part
-                // of the type: a tuple of the wrong length is exactly what
-                // `untuple n` could not take apart.
-                let Ok(n) = i64::try_from(*n) else {
-                    return Err(ill(Ill::Refused));
-                };
-                let counted = guarded.add(NodeKind::Op(Prim::TupleLength), vec![Source::Input(0)]);
-                let want = guarded.add(NodeKind::Op(Prim::Push(Value::Int(n))), Vec::new());
-                let fits = guarded.add(NodeKind::Op(Prim::Equal), vec![counted[0], want[0]]);
-                holds = guarded.add(NodeKind::Op(Prim::And), vec![holds, fits[0]])[0];
-            }
+            let holds = guarded.add(NodeKind::Op(test), vec![Source::Input(0)])[0];
             // The then block is the value itself — the identity half — and
             // the else block the default. Neither arm computes anything,
             // so again there is no fork to hand out views.
@@ -4518,10 +4514,10 @@ mod tests {
     /// A coercion is a guarded identity: the value where its test holds,
     /// and a default where it does not.
     ///
-    /// The width guard is what this is really checking. `is_tuple` alone
-    /// would claim `as_tuple 2` is the identity on every tuple, so the
-    /// sample list carries a tuple of a width no `n` here names, and the
-    /// machine settles it.
+    /// The width guard is what this is really checking. The width-blind
+    /// `is_tuple` would claim `as_tuple 2` is the identity on every tuple,
+    /// so the sample list carries a tuple of a width no `n` here names, and
+    /// the machine settles it.
     #[test]
     fn a_coercion_is_a_guarded_identity() {
         for prim in [
@@ -4535,7 +4531,7 @@ mod tests {
         }
         // Only the three coercions have a type to guard on; a payload that
         // is any other prim states no equation.
-        for prim in [Prim::Not, Prim::IsTuple, Prim::Push(Value::Int(1))] {
+        for prim in [Prim::Not, Prim::IsTuple(Some(2)), Prim::Push(Value::Int(1))] {
             assert!(
                 matches!(
                     sides(&Rule::CoercionGuard { prim: prim.clone() }),
@@ -4589,7 +4585,7 @@ mod tests {
         let coerced = graph.add(NodeKind::Op(Prim::AsTuple(2)), vec![Source::Input(0)]);
         let parts = graph.add(NodeKind::Op(Prim::Untuple(2)), coerced.clone());
         let rebuilt = graph.add(NodeKind::Op(Prim::Tuple(2)), parts);
-        let elsewhere = graph.add(NodeKind::Op(Prim::IsTuple), coerced);
+        let elsewhere = graph.add(NodeKind::Op(Prim::IsTuple(None)), coerced);
         graph.close(vec![rebuilt[0], elsewhere[0]]);
         graph.check().unwrap();
         assert!(
@@ -4625,7 +4621,7 @@ mod tests {
         };
         assert_eq!(graph.outputs()[0], coerced, "\n{}", graph);
         assert_eq!(
-            graph.sources(only(&NodeKind::Op(Prim::IsTuple), &graph)),
+            graph.sources(only(&NodeKind::Op(Prim::IsTuple(None)), &graph)),
             [coerced],
             "\n{}",
             graph

@@ -117,7 +117,7 @@ pub enum Prim {
     IsBool,
     IsConstString,
     IsSymbol,
-    IsTuple,
+    IsTuple(Option<usize>),
     TupleLength,
 
     AsBool,
@@ -156,7 +156,7 @@ impl Prim {
             Instruction::IsBool => Prim::IsBool,
             Instruction::IsConstString => Prim::IsConstString,
             Instruction::IsSymbol => Prim::IsSymbol,
-            Instruction::IsTuple => Prim::IsTuple,
+            Instruction::IsTuple(n) => Prim::IsTuple(*n),
             Instruction::TupleLength => Prim::TupleLength,
             Instruction::AsBool => Prim::AsBool,
             Instruction::AsInt => Prim::AsInt,
@@ -196,7 +196,7 @@ impl Prim {
             Prim::IsBool => Instruction::IsBool,
             Prim::IsConstString => Instruction::IsConstString,
             Prim::IsSymbol => Instruction::IsSymbol,
-            Prim::IsTuple => Instruction::IsTuple,
+            Prim::IsTuple(n) => Instruction::IsTuple(*n),
             Prim::TupleLength => Instruction::TupleLength,
             Prim::AsBool => Instruction::AsBool,
             Prim::AsInt => Instruction::AsInt,
@@ -239,7 +239,7 @@ impl Prim {
             | Prim::IsBool
             | Prim::IsConstString
             | Prim::IsSymbol
-            | Prim::IsTuple
+            | Prim::IsTuple(_)
             | Prim::AsBool
             | Prim::AsInt
             | Prim::AsTuple(_) => Arity::new(1, 1),
@@ -278,7 +278,10 @@ impl Prim {
             Prim::IsBool,
             Prim::IsConstString,
             Prim::IsSymbol,
-            Prim::IsTuple,
+            // Both readings, since they are two questions and a walk that
+            // handled one and missed the other is the bug `all` is for.
+            Prim::IsTuple(None),
+            Prim::IsTuple(Some(2)),
             Prim::TupleLength,
             Prim::AsBool,
             Prim::AsInt,

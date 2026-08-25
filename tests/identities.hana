@@ -549,17 +549,29 @@ identity as_bool_is_the_branch_it_makes
 identity as_int_is_a_guarded_identity
     { as_int } = { pick 0 is_int branch { } { drop 0 push 0 } };
 
-// The width belongs to the guard, and it is the whole difficulty: `is_tuple`
-// does not ask how wide, and a tuple of the wrong length is exactly what
-// `untuple n` could not take apart. A guard of `is_tuple` alone would claim
-// `as_tuple 2` is the identity on `(1, 2, 3)`, which it is not.
+// The width belongs to the guard, and `is_tuple n` is where it belongs: a
+// tuple of the wrong length is exactly what `untuple n` could not take apart,
+// so a guard of the width-blind `is_tuple` would claim `as_tuple 2` is the
+// identity on `(1, 2, 3)`, which it is not. The two questions, side by side:
+test sentence a_tuple_is_asked_its_width {
+    push (1, 2)    is_tuple   push true  jump crate::prelude::check_equals ? drop 0
+    push (1, 2, 3) is_tuple   push true  jump crate::prelude::check_equals ? drop 0
+    push some_sym  is_tuple   push false jump crate::prelude::check_equals ? drop 0
+    push (1, 2)    is_tuple 2 push true  jump crate::prelude::check_equals ? drop 0
+    push (1, 2, 3) is_tuple 2 push false jump crate::prelude::check_equals ? drop 0
+    push some_sym  is_tuple 2 push false jump crate::prelude::check_equals ? drop 0
+    push ()        is_tuple 0 push true  jump crate::prelude::check_equals ? drop 0
+    push ()        is_tuple 2 push false jump crate::prelude::check_equals
+}
+
 test sentence coercing_a_tuple_asks_the_width {
     push (1, 2)    as_tuple 2   push (1, 2)   jump crate::prelude::check_equals ? drop 0
     push (1, 2, 3) as_tuple 2   push ((), ()) jump crate::prelude::check_equals ? drop 0
     push some_sym  as_tuple 2   push ((), ()) jump crate::prelude::check_equals
 }
 
+// One box against one box, now that the test carries the width the coercion
+// carries. The guard used to be `is_tuple ; tuple_length ; push n ; equal`
+// and three stack slots, stating in pieces what one question asks.
 identity as_tuple_is_a_guarded_identity
-    { as_tuple 2 }
-  = { pick 0 is_tuple pick 1 tuple_length push 2 equal and
-      branch { } { drop 0 push ((), ()) } };
+    { as_tuple 2 } = { pick 0 is_tuple 2 branch { } { drop 0 push ((), ()) } };

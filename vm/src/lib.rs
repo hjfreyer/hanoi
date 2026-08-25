@@ -330,9 +330,15 @@ impl VM {
                     self.stack
                         .push(Value::Bool(matches!(val, Value::Symbol(_))));
                 }
-                Instruction::IsTuple => {
+                Instruction::IsTuple(width) => {
+                    // A width asks the whole question: a tuple of the wrong
+                    // length is as much a mismatch as a symbol, being
+                    // exactly what `untuple n` could not take apart.
                     let val = self.pop()?;
-                    self.stack.push(Value::Bool(matches!(val, Value::Tuple(_))));
+                    self.stack.push(Value::Bool(matches!(
+                        val,
+                        Value::Tuple(elements) if width.is_none_or(|n| elements.len() == n)
+                    )));
                 }
                 Instruction::TupleLength => {
                     // A length is an `Int` whatever it was asked about, so a
@@ -600,7 +606,15 @@ mod tests {
             Instruction::Push(Value::Int(1)),
             Instruction::Push(Value::Int(2)),
             Instruction::Tuple(2),
-            Instruction::IsTuple,
+            Instruction::IsTuple(None),
+            Instruction::Push(Value::Int(1)),
+            Instruction::Push(Value::Int(2)),
+            Instruction::Tuple(2),
+            Instruction::IsTuple(Some(2)),
+            Instruction::Push(Value::Int(1)),
+            Instruction::Push(Value::Int(2)),
+            Instruction::Tuple(2),
+            Instruction::IsTuple(Some(3)),
             Instruction::Push(Value::Int(1)),
             Instruction::Push(Value::Int(2)),
             Instruction::Tuple(2),
@@ -618,6 +632,8 @@ mod tests {
                 Value::Bool(false), // true is not
                 Value::Bool(true),  // true is a bool
                 Value::Bool(true),  // (1, 2) is a tuple
+                Value::Bool(true),  // of exactly two
+                Value::Bool(false), // and so not of three
                 Value::Int(2),      // and two long
             ]
         );
@@ -1235,7 +1251,10 @@ mod totality_tests {
             Instruction::IsBool,
             Instruction::IsConstString,
             Instruction::IsSymbol,
-            Instruction::IsTuple,
+            // Both readings of the one test, so the sweep measures the
+            // width-blind question and the widthed one alike.
+            Instruction::IsTuple(None),
+            Instruction::IsTuple(Some(2)),
             Instruction::TupleLength,
             Instruction::Untuple(2),
             Instruction::Tuple(2),
@@ -1792,7 +1811,17 @@ mod totality_tests {
                     matches!(a, Value::ConstString(_)),
                 ),
                 (Instruction::IsSymbol, matches!(a, Value::Symbol(_))),
-                (Instruction::IsTuple, matches!(a, Value::Tuple(_))),
+                (Instruction::IsTuple(None), matches!(a, Value::Tuple(_))),
+                // The width is the whole question: a tuple of the wrong
+                // length answers no, the same no a symbol answers.
+                (
+                    Instruction::IsTuple(Some(0)),
+                    matches!(&a, Value::Tuple(t) if t.is_empty()),
+                ),
+                (
+                    Instruction::IsTuple(Some(2)),
+                    matches!(&a, Value::Tuple(t) if t.len() == 2),
+                ),
             ] {
                 assert_eq!(
                     apply(std::slice::from_ref(&a), inst.clone()),
