@@ -124,7 +124,7 @@ The Hanoi VM supports a rich instruction set categorized into five main domains:
 | **Arithmetic & Logic** | `Add`, `Subtract`, `Multiply`, `Divide`, `Modulo`, `Negate`, `Equal`, `Greater`, `Less`, `Not`, `And`, `Or` | Basic mathematical and Boolean logic operations. |
 | **Control Flow** | `Jump(S)`, `Dip(S)`, `Branch(S1, S2)` | A call, a call under **one** hidden value, and conditional branching. `dip 3 { ... }` is three frames nested: a hidden region's width is a shape rather than a number, so no equation does arithmetic on it. |
 | **Composite Types** | `Tuple(n)`, `Untuple(n)`, `ConstStringLen`, `ConstStringCharAt`, `TupleLength` | Constructing and destructuring tuples, and reading the length and characters of const strings. |
-| **Type Predicates** | `IsInt`, `IsBool`, `IsConstString`, `IsSymbol`, `IsTuple` | Runtime type tests, also used internally to compile `type`/`enum` predicates. |
+| **Type Predicates** | `IsInt`, `IsBool`, `IsConstString`, `IsSymbol`, `IsTuple(width?)` | Runtime type tests, also used internally to compile `type`/`enum` predicates. `is_tuple` asks whether a value is a tuple at all; `is_tuple n`, whether it is one of exactly that width — the width being part of the type in the sense `untuple n` means it. |
 
 ---
 

@@ -28,6 +28,7 @@
 //! | `exact` | claims the sides are one diagram — **isomorphic** — which the auto-close has already checked, so a reached `exact` fails and shows the goal exactly as it stands | always, when reached |
 //! | `via { body } (left: s, right: s)` | **cuts**: `A = B` splits into the goals `A = C` and `C = B`, the waypoint built as a graph | the waypoint's net stack change is not the goal's, or a side fails |
 //! | `cases(op)` | **case analysis** on an intermediate result: an `op` answer is `true` or `false` and nothing else, so everything depending on it becomes a branch holding one copy per case, the assumption pasted in as a literal — one checked rewrite per side, simplified under each assumption by the ordinary laws | no side computes `op`, or nothing depends on its answer |
+//! | `cases(is_tuple n)` | the same, on the one test that takes an operand: `is_tuple` asks whether a value is a tuple at all and `is_tuple n` whether it is one of exactly that width, and they are two questions | likewise |
 //! | `cases(op) (true: s, false: s)` | the same split, with a sub-strategy per case: each runs with its rewrites scoped to its side of the fresh branch — the hypothesis, spent as the structure it is. An arm holds side rewrites and nested `cases`; either is omissible, and a side whose branch is already gone skips its arm quietly | the split fails, or an arm's tactic does — and the residual names whose case it stood in |
 //! | `diagram` | rewrites both sides by the whole table to fixpoint; they land on one diagram — isomorphic — or they do not | they do not — and the residual is both sides read back, narrowed to the difference |
 //!
@@ -440,20 +441,35 @@ fn parse_step(input: &str) -> Result<(Step<String>, &str), String> {
 /// cases everything.
 fn testing_prim(name: &str) -> Result<crate::term::Prim, String> {
     use crate::term::Prim;
-    let prim = match name {
-        "equal" => Prim::Equal,
-        "less" => Prim::Less,
-        "greater" => Prim::Greater,
-        "not" => Prim::Not,
-        "and" => Prim::And,
-        "or" => Prim::Or,
-        "is_int" => Prim::IsInt,
-        "is_bool" => Prim::IsBool,
-        "is_const_string" => Prim::IsConstString,
-        "is_symbol" => Prim::IsSymbol,
-        "is_tuple" => Prim::IsTuple,
-        "" => return Err("`cases()` names no operation".to_string()),
-        other => return Err(format!("`cases` cannot split on `{}`", other)),
+    // `is_tuple` is the one test with an operand, and it is written here
+    // the way the instruction writes it: bare, it asks whether a value is a
+    // tuple at all; `is_tuple n`, whether it is one of exactly that width.
+    // Two different questions, so a proof splits on the one it means.
+    let widthed = name
+        .strip_prefix("is_tuple")
+        .filter(|rest| rest.is_empty() || rest.starts_with(char::is_whitespace));
+    let prim = match widthed {
+        Some("") => Prim::IsTuple(None),
+        Some(width) => Prim::IsTuple(Some(width.trim().parse::<usize>().map_err(|_| {
+            format!(
+                "`is_tuple` takes a width, and `{}` is not one",
+                width.trim()
+            )
+        })?)),
+        None => match name {
+            "equal" => Prim::Equal,
+            "less" => Prim::Less,
+            "greater" => Prim::Greater,
+            "not" => Prim::Not,
+            "and" => Prim::And,
+            "or" => Prim::Or,
+            "is_int" => Prim::IsInt,
+            "is_bool" => Prim::IsBool,
+            "is_const_string" => Prim::IsConstString,
+            "is_symbol" => Prim::IsSymbol,
+            "" => return Err("`cases()` names no operation".to_string()),
+            other => return Err(format!("`cases` cannot split on `{}`", other)),
+        },
     };
     debug_assert!(
         prim.to_instruction().yields_bool() && prim.arity().outputs == 1,
@@ -910,6 +926,25 @@ mod tests {
         assert!(err.contains("cannot split on `add`"), "{}", err);
         let err = parse_hant("proof p = cases();").unwrap_err();
         assert!(err.contains("names no operation"), "{}", err);
+
+        // `is_tuple` is the one test with an operand, and the two readings
+        // are two questions: a proof splits on the one it means.
+        for (written, want) in [
+            ("is_tuple", Prim::IsTuple(None)),
+            ("is_tuple 2", Prim::IsTuple(Some(2))),
+            ("is_tuple 0", Prim::IsTuple(Some(0))),
+        ] {
+            let entries = parse_hant(&format!("proof p = cases({}) diagram;", written)).unwrap();
+            let [Step::Cases { prim, .. }, _] = &entries[0].strategy[..] else {
+                panic!("{:?}", entries[0].strategy)
+            };
+            assert_eq!(*prim, want, "cases({})", written);
+        }
+        // The width still has to be one, and no other test takes one.
+        let err = parse_hant("proof p = cases(is_tuple wide);").unwrap_err();
+        assert!(err.contains("is not one"), "{}", err);
+        let err = parse_hant("proof p = cases(is_bool 2);").unwrap_err();
+        assert!(err.contains("cannot split on"), "{}", err);
     }
 
     #[test]

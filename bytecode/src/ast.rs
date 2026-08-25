@@ -78,7 +78,7 @@ pub enum ParsedInstruction {
     IsBool,
     IsConstString,
     IsSymbol,
-    IsTuple,
+    IsTuple(Option<usize>),
     TupleLength,
     AsBool,
     AsInt,

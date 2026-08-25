@@ -118,6 +118,50 @@ mod tests {
         assert!(assemble("sentence probe { as_tuple }").is_err());
     }
 
+    /// `is_tuple` takes a width or does not, and the two are different
+    /// questions rather than one with a default.
+    ///
+    /// This is where the test and the coercion part company. `as_tuple`
+    /// alone would have to mean "coerce to a tuple of some length", which
+    /// is not a coercion anything could perform; `is_tuple` alone means
+    /// "is it a tuple of some length", which is a question with an answer.
+    #[test]
+    fn is_tuple_takes_a_width_or_does_not() {
+        let res = assemble(
+            "sentence any { is_tuple } sentence pair { is_tuple 2 } sentence empty { is_tuple 0 }",
+        )
+        .unwrap();
+        for (i, want) in [
+            Instruction::IsTuple(None),
+            Instruction::IsTuple(Some(2)),
+            Instruction::IsTuple(Some(0)),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let idx = SentenceIndex::from(i);
+            assert_eq!(res.sentences[idx], vec![want]);
+            // Whichever way it is asked, one value in and one bool out.
+            assert_eq!(
+                arity::sentence_arity(&res, idx),
+                Some(Arity {
+                    inputs: 1,
+                    outputs: 1
+                })
+            );
+        }
+        // And the mnemonic it prints is the one it was written as.
+        assert_eq!(Instruction::IsTuple(None).to_string(), "is_tuple");
+        assert_eq!(Instruction::IsTuple(Some(2)).to_string(), "is_tuple 2");
+        // A width-blind test cannot be a widthed one: what follows a bare
+        // `is_tuple` is the next instruction, not its operand.
+        let res = assemble("sentence probe { is_tuple not }").unwrap();
+        assert_eq!(
+            res.sentences[SentenceIndex::from(0)],
+            vec![Instruction::IsTuple(None), Instruction::Not]
+        );
+    }
+
     // -----------------------------------------------------------------------
     // `?`
     // -----------------------------------------------------------------------

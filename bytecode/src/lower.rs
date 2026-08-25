@@ -441,7 +441,7 @@ fn compile_type_spec(spec: &TypeSpec) -> Result<Vec<ParsedInstruction>, String> 
             PrimitiveType::Bool => ParsedInstruction::IsBool,
             PrimitiveType::ConstString => ParsedInstruction::IsConstString,
             PrimitiveType::Symbol => ParsedInstruction::IsSymbol,
-            PrimitiveType::Tuple => ParsedInstruction::IsTuple,
+            PrimitiveType::Tuple => ParsedInstruction::IsTuple(None),
         }]),
         TypeSpec::Literal(val) => Ok(vec![
             ParsedInstruction::Push(val.clone()),

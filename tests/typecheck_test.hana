@@ -70,6 +70,12 @@ function test_is_tuple {
     is_tuple
 }
 
+// The width is optional, and asking with one is a different question: this
+// answers true only on a tuple of exactly two elements.
+function test_is_tuple_of_width {
+    is_tuple 2
+}
+
 function test_tuple_length {
     tuple_length
 }

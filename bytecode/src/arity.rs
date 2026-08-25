@@ -289,7 +289,7 @@ pub fn op_arity(inst: &Instruction) -> Option<(i64, i64)> {
         | Instruction::IsBool
         | Instruction::IsConstString
         | Instruction::IsSymbol
-        | Instruction::IsTuple
+        | Instruction::IsTuple(_)
         // The coercions replace a value with one of the type they name.
         | Instruction::AsBool
         | Instruction::AsInt

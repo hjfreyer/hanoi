@@ -631,7 +631,15 @@ fn parse_instruction(stream: &mut TokenStream) -> Result<ParsedInstruction, Erro
         "is_bool" => Ok(ParsedInstruction::IsBool),
         "is_const_string" => Ok(ParsedInstruction::IsConstString),
         "is_symbol" => Ok(ParsedInstruction::IsSymbol),
-        "is_tuple" => Ok(ParsedInstruction::IsTuple),
+        // Optional, where `as_tuple`'s is required: a test can answer "a
+        // tuple of some length" and no coercion can perform it.
+        "is_tuple" => {
+            let width = match stream.peek() {
+                Some(&Token::Int(_)) => Some(parse_usize(stream)?),
+                _ => None,
+            };
+            Ok(ParsedInstruction::IsTuple(width))
+        }
         "tuple_length" => Ok(ParsedInstruction::TupleLength),
         "as_bool" => Ok(ParsedInstruction::AsBool),
         "as_int" => Ok(ParsedInstruction::AsInt),
@@ -1480,7 +1488,7 @@ impl<'a> Compiler<'a> {
                 ParsedInstruction::IsBool => Instruction::IsBool,
                 ParsedInstruction::IsConstString => Instruction::IsConstString,
                 ParsedInstruction::IsSymbol => Instruction::IsSymbol,
-                ParsedInstruction::IsTuple => Instruction::IsTuple,
+                ParsedInstruction::IsTuple(n) => Instruction::IsTuple(n),
                 ParsedInstruction::TupleLength => Instruction::TupleLength,
                 ParsedInstruction::AsBool => Instruction::AsBool,
                 ParsedInstruction::AsInt => Instruction::AsInt,

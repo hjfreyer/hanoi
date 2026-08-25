@@ -164,8 +164,25 @@ pub enum Instruction {
     IsConstString,
     /// Pop the top value and push true if it is a Symbol, else false.
     IsSymbol,
-    /// Pop the top value and push true if it is a Tuple, else false.
-    IsTuple,
+    /// Pop the top value and push true if it is a Tuple, else false — and,
+    /// with a width, true only if it is a Tuple of exactly that many
+    /// elements.
+    ///
+    /// The width is **optional** here and required on
+    /// [`AsTuple`][Instruction::AsTuple], and the asymmetry is the
+    /// difference between asking and forcing. "A tuple of some length" is a
+    /// question with an answer, so `is_tuple` alone means it; it is not a
+    /// coercion anything could perform, so `as_tuple` alone means nothing
+    /// and is refused.
+    ///
+    /// `is_tuple n` is the guard the rest of the language is written
+    /// against, because the width is part of the type in exactly the sense
+    /// [`Untuple`][Instruction::Untuple] means it: a tuple of the wrong
+    /// length is as much a mismatch as a symbol, being precisely the values
+    /// `untuple n` could not take apart. Asking it in pieces — `is_tuple ;
+    /// tuple_length ; push n ; equal` — states the same domain in four
+    /// instructions and three stack slots, and the pieces can drift.
+    IsTuple(Option<usize>),
     /// Pop the top value and push its length as an Int: the element count of a
     /// Tuple, and `0` for anything else, which has no length to count.
     TupleLength,
@@ -285,7 +302,7 @@ impl Instruction {
                 | Instruction::IsBool
                 | Instruction::IsConstString
                 | Instruction::IsSymbol
-                | Instruction::IsTuple
+                | Instruction::IsTuple(_)
                 // A coercion's whole point is its codomain, and this one's is
                 // `Bool`. The other two leave an Int and a Tuple, which is the
                 // same fact about a different type and has nowhere to be said.
@@ -325,7 +342,8 @@ impl std::fmt::Display for Instruction {
             Instruction::IsBool => write!(f, "is_bool"),
             Instruction::IsConstString => write!(f, "is_const_string"),
             Instruction::IsSymbol => write!(f, "is_symbol"),
-            Instruction::IsTuple => write!(f, "is_tuple"),
+            Instruction::IsTuple(None) => write!(f, "is_tuple"),
+            Instruction::IsTuple(Some(n)) => write!(f, "is_tuple {}", n),
             Instruction::TupleLength => write!(f, "tuple_length"),
             Instruction::AsBool => write!(f, "as_bool"),
             Instruction::AsInt => write!(f, "as_int"),
