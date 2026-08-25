@@ -22,7 +22,7 @@
 //!
 //! ## What makes 351 boxes legible
 //!
-//! Four decisions, and the listing is a wall without any of them.
+//! Five decisions, and the listing is a wall without any of them.
 //!
 //! **Branch membership is computed.** A node is inside a branch when it is
 //! downstream of the [`Fork`](super::NodeKind::Fork) and upstream of the
@@ -31,18 +31,34 @@
 //! graph rather than a guess from what happens to sit between two lines, and
 //! an arm that reaches out of itself still reads as an arm.
 //!
-//! **The order stays inside a branch once it enters one.** The schedule
+//! **A branch's boxes come out as one run.** The schedule
 //! [`read_back`](super::read_back) uses is min-id-first, which is
 //! topological and nothing else: it hoists the constants an arm pushes out
-//! of the arm, and the arm stops reading as a unit. Of the boxes that are
-//! ready, this takes one that shares the most enclosing branches with the
-//! box just placed.
+//! of the arm, and the arm stops reading as a unit. Nor is a greedy "stay
+//! where you are" enough — preferring the ready box that shares the most
+//! branches with the last one *leaves* a region whenever nothing inside it
+//! is ready, and comes back later, which is what makes two brackets appear
+//! to open at one depth and close at another. The regions are **laminar**
+//! (any two disjoint or nested, since a branch's arms lie wholly between
+//! its ends), so [`schedule`] contracts each to a single unit at its
+//! parent's level and orders the units: a region is placed whole, and
+//! leaving one is not a move the schedule has.
 //!
-//! **A box that reads nothing sits just before the box that reads it.** A
-//! `push` is ready before everything, so left alone the whole constant pool
-//! lands in one slab at the top and an `equal`'s operand is forty lines from
-//! the `equal`. Every topological order may put such a box anywhere before
-//! its first reader, so it goes immediately before.
+//! **A box that reads nothing sits just before the box that reads it — but
+//! outside any branch it is not part of.** A `push` is ready before
+//! everything, so left alone the whole constant pool lands in one slab at
+//! the top and an `equal`'s operand is forty lines from the `equal`. Every
+//! topological order may put such a box anywhere before its first reader,
+//! so it goes immediately before — backing out first past any branch that
+//! reader is in and it is not, since a literal several arms share belongs
+//! to none of them and dropping it inside one would break the run the
+//! schedule just made.
+//!
+//! **A branch that owns no boxes still gets both brackets.** Its arms are
+//! wholly boxes a branch around it also holds, so `nesting` gives them to
+//! neither and there is no first box to hang an opening bracket on. The
+//! listing draws the pair against the `select` itself rather than printing
+//! a `└─` that closes nothing.
 //!
 //! **`id` and `copy` are read through.** They are what the structural laws
 //! delete, and a `copy` says what the links already say — a value read
@@ -193,6 +209,38 @@ fn nesting(graph: &Graph) -> HashMap<NodeId, BTreeSet<u32>> {
             break;
         }
     }
+
+    // A branch nested inside another is wholly inside it: its ends are, so
+    // its arms are too. Each branch above was asked on its own, and a
+    // forkless branch's arms can read nothing at all — no fork to be
+    // downstream of, so no reach to place them by — which leaves them
+    // knowing their own branch and no other. This is where they learn the
+    // rest, and it is what makes the depth a box is drawn at agree with
+    // the depth its brackets open at.
+    loop {
+        let mut moved = false;
+        for (&branch, &select) in &selects {
+            let branch = branch as u32;
+            let outer = inside.get(&select).cloned().unwrap_or_default();
+            if outer.is_empty() {
+                continue;
+            }
+            let held: Vec<NodeId> = inside
+                .iter()
+                .filter(|(_, mine)| mine.contains(&branch))
+                .map(|(&id, _)| id)
+                .collect();
+            for id in held {
+                let mine = inside.get_mut(&id).expect("it was just listed");
+                for enclosing in &outer {
+                    moved |= mine.insert(*enclosing);
+                }
+            }
+        }
+        if !moved {
+            break;
+        }
+    }
     inside
 }
 
@@ -245,14 +293,166 @@ fn armless(graph: &Graph, select: NodeId) -> HashSet<NodeId> {
     }
 }
 
-/// A topological order that stays inside a branch once it enters one.
+/// A topological order in which every branch's boxes come out as **one
+/// run**, so the brackets a listing draws nest instead of interleaving.
 ///
-/// Of the boxes that are ready, this takes one sharing the most enclosing
-/// branches with the box just placed, deeper before shallower, lower id
-/// last. Any order it produces is a valid schedule — the choice is only
-/// among boxes whose sources are all already placed — so this trades
-/// nothing but which valid order gets printed.
+/// The regions [`nesting`] computes are laminar — any two are disjoint or
+/// nested, since a branch's arms lie wholly between its ends — so they form
+/// a forest and a nested drawing is possible in principle. Getting one is
+/// [`nested_order`]: the forest is scheduled level by level with each
+/// region **contracted to a single unit** at its parent's level, so a
+/// region is placed as a whole and its insides are ordered only against
+/// each other.
+///
+/// A greedy "stay where you are" pass cannot do this, and the corpus's
+/// biggest goal is the proof: preferring the ready box that shares the most
+/// branches with the last one left a region and came back to it for 11 of
+/// its 20 branches, which is what made two brackets appear to open at one
+/// depth and close at another. Contraction cannot leave a region, because
+/// leaving is not a move it has.
+///
+/// [`nested_order`] answers `None` where contracting makes a cycle — two
+/// regions each feeding the other cannot both be a run — and the greedy
+/// pass is what runs then. No graph in the corpus needs it; it is here
+/// because "there is no contiguous order" is a real answer and a listing
+/// still has to print.
 fn schedule(graph: &Graph, inside: &HashMap<NodeId, BTreeSet<u32>>) -> Vec<NodeId> {
+    let order = nested_order(graph, inside).unwrap_or_else(|| wherever_ready(graph, inside));
+    debug_assert_eq!(order.len(), graph.live_count(), "the graph is acyclic");
+    operands_last(graph, inside, order)
+}
+
+/// A topological order in which every branch's boxes are contiguous, or
+/// `None` where contracting the regions makes a cycle.
+fn nested_order(graph: &Graph, inside: &HashMap<NodeId, BTreeSet<u32>>) -> Option<Vec<NodeId>> {
+    let mut held: HashMap<u32, usize> = HashMap::new();
+    for branches in inside.values() {
+        for &branch in branches {
+            *held.entry(branch).or_default() += 1;
+        }
+    }
+    // A box's branches, outermost first. The family is laminar, so a box's
+    // branches are a chain under containment and the bigger region is the
+    // enclosing one — which makes the size the depth.
+    let mut chains: HashMap<NodeId, Vec<u32>> = HashMap::new();
+    for (id, _) in graph.live() {
+        let mut mine: Vec<u32> = inside
+            .get(&id)
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .collect();
+        mine.sort_by_key(|branch| (std::cmp::Reverse(held[branch]), *branch));
+        chains.insert(id, mine);
+    }
+    let all: Vec<NodeId> = graph.live().map(|(id, _)| id).collect();
+    let mut order = Vec::with_capacity(all.len());
+    emit_level(graph, &chains, &all, 0, &mut order).then_some(order)
+}
+
+/// One level of [`nested_order`]: group these boxes by the region each
+/// enters next, order the groups, and recurse into every group that is one.
+///
+/// `false` when the groups at this level cannot be ordered — a cycle among
+/// the contracted regions, which is the one thing that makes a contiguous
+/// listing impossible.
+fn emit_level(
+    graph: &Graph,
+    chains: &HashMap<NodeId, Vec<u32>>,
+    members: &[NodeId],
+    depth: usize,
+    order: &mut Vec<NodeId>,
+) -> bool {
+    // A unit is one child region, or one box that enters none.
+    let mut units: Vec<(bool, Vec<NodeId>)> = Vec::new();
+    let mut which: HashMap<u32, usize> = HashMap::new();
+    for &id in members {
+        match chains[&id].get(depth).copied() {
+            Some(branch) => {
+                let at = *which.entry(branch).or_insert_with(|| {
+                    units.push((true, Vec::new()));
+                    units.len() - 1
+                });
+                units[at].1.push(id);
+            }
+            None => units.push((false, vec![id])),
+        }
+    }
+    let mut unit_of: HashMap<NodeId, usize> = HashMap::new();
+    for (at, (_, held)) in units.iter().enumerate() {
+        for &id in held {
+            unit_of.insert(id, at);
+        }
+    }
+    // Contracted edges: a link between two units is a link between the
+    // regions. Links leaving this level are the parent's business.
+    let mut ahead: Vec<HashSet<usize>> = vec![HashSet::new(); units.len()];
+    let mut unmet = vec![0usize; units.len()];
+    for (at, (_, held)) in units.iter().enumerate() {
+        for &id in held {
+            for port in 0..graph.kind(id).arity().outputs {
+                for &sink in graph.sinks(Source::Port { node: id, port }) {
+                    if let Sink::Port { node, .. } = sink
+                        && let Some(&to) = unit_of.get(&node)
+                        && to != at
+                        && ahead[at].insert(to)
+                    {
+                        unmet[to] += 1;
+                    }
+                }
+            }
+        }
+    }
+    // Ties by the least id a unit holds, so the order is a fact about the
+    // graph rather than about the hashing.
+    let least: Vec<usize> = units
+        .iter()
+        .map(|(_, held)| {
+            held.iter()
+                .map(|id| id.index())
+                .min()
+                .expect("a unit holds a box")
+        })
+        .collect();
+    let mut ready: Vec<usize> = (0..units.len()).filter(|&at| unmet[at] == 0).collect();
+    let mut placed = 0;
+    while !ready.is_empty() {
+        let pick = ready
+            .iter()
+            .enumerate()
+            .min_by_key(|(_, at)| least[**at])
+            .map(|(i, _)| i)
+            .expect("the list is not empty");
+        let at = ready.swap_remove(pick);
+        placed += 1;
+        if units[at].0 {
+            let held = std::mem::take(&mut units[at].1);
+            if !emit_level(graph, chains, &held, depth + 1, order) {
+                return false;
+            }
+            units[at].1 = held;
+        } else {
+            order.push(units[at].1[0]);
+        }
+        for &to in &ahead[at] {
+            unmet[to] -= 1;
+            if unmet[to] == 0 {
+                ready.push(to);
+            }
+        }
+    }
+    placed == units.len()
+}
+
+/// The fallback: of the boxes that are ready, take one sharing the most
+/// enclosing branches with the box just placed, deeper before shallower,
+/// lower id last.
+///
+/// This was the schedule, and it is kept for the one case
+/// [`nested_order`] declines. Any order it produces is valid — the choice
+/// is only among boxes whose sources are all already placed — so what it
+/// trades is legibility and nothing else.
+fn wherever_ready(graph: &Graph, inside: &HashMap<NodeId, BTreeSet<u32>>) -> Vec<NodeId> {
     let mut unmet: HashMap<NodeId, usize> = graph
         .live()
         .map(|(id, _)| {
@@ -302,53 +502,99 @@ fn schedule(graph: &Graph, inside: &HashMap<NodeId, BTreeSet<u32>>) -> Vec<NodeI
         }
     }
     debug_assert_eq!(order.len(), unmet.len(), "the graph is acyclic");
-    operands_last(graph, order)
+    order
 }
 
 /// Moves each box that reads nothing to just before the first box that
-/// reads it.
+/// reads it — but never **into** a branch it is not part of.
 ///
 /// Such a box is ready before everything, so any schedule is free to emit
 /// the whole constant pool first — and then an `equal`'s operand is forty
 /// lines from the `equal`. It is equally free to emit it immediately before
 /// its first reader, which is where the term spells it (`push X ; equal`)
 /// and where a reader looks.
-fn operands_last(graph: &Graph, order: Vec<NodeId>) -> Vec<NodeId> {
+///
+/// The caveat is the whole difference between this and the obvious version.
+/// A literal several arms share belongs to no branch — [`nesting`] gives it
+/// the *intersection* of its readers', which is empty — so dropping it in
+/// front of a reader that is inside one puts a box of no branch inside a
+/// branch, and the run [`schedule`] worked to make contiguous is broken by
+/// the pass that runs after it. So the box backs out first: it lands just
+/// before the outermost branch its reader is in and it is not, which is
+/// where the term would spell it too.
+fn operands_last(
+    graph: &Graph,
+    inside: &HashMap<NodeId, BTreeSet<u32>>,
+    order: Vec<NodeId>,
+) -> Vec<NodeId> {
     let floating: HashSet<NodeId> = order
         .iter()
         .copied()
         .filter(|&id| graph.sources(id).is_empty())
         .collect();
-    let mut feeds: HashMap<NodeId, Vec<NodeId>> = HashMap::new();
-    for &id in &floating {
+    let solid: Vec<NodeId> = order
+        .iter()
+        .copied()
+        .filter(|id| !floating.contains(id))
+        .collect();
+    let at: HashMap<NodeId, usize> = solid.iter().enumerate().map(|(i, &id)| (id, i)).collect();
+
+    // Where each branch's run begins, the ends of the branch included: they
+    // are the bracket lines, and a box between them reads as inside.
+    let mut opens: HashMap<u32, usize> = HashMap::new();
+    for (i, &id) in solid.iter().enumerate() {
+        let mut branches: BTreeSet<u32> = inside.get(&id).cloned().unwrap_or_default();
+        if let NodeKind::Fork { branch, .. } | NodeKind::Select { branch, .. } = graph.kind(id) {
+            branches.insert(branch.index() as u32);
+        }
+        for branch in branches {
+            opens.entry(branch).or_insert(i);
+        }
+    }
+
+    // One insertion point per floating box: before its first reader, backed
+    // out of every branch that reader is in and it is not.
+    let mut lands: HashMap<usize, Vec<NodeId>> = HashMap::new();
+    let mut tail: Vec<NodeId> = Vec::new();
+    for &id in &order {
+        if !floating.contains(&id) {
+            continue;
+        }
+        let mut first = None;
         for port in 0..graph.kind(id).arity().outputs {
             for &sink in graph.sinks(Source::Port { node: id, port }) {
-                if let Sink::Port { node, .. } = sink {
-                    feeds.entry(node).or_default().push(id);
+                if let Sink::Port { node, .. } = sink
+                    && let Some(&i) = at.get(&node)
+                {
+                    first = Some(first.map_or(i, |was: usize| was.min(i)));
                 }
             }
         }
-    }
-    let mut placed: HashSet<NodeId> = HashSet::new();
-    let mut moved = Vec::with_capacity(order.len());
-    for &id in &order {
-        if floating.contains(&id) {
+        // A constant the boundary reads, or one nothing reads at all, still
+        // has to appear: a listing that drops a live box is lying.
+        let Some(first) = first else {
+            tail.push(id);
             continue;
-        }
-        for &operand in feeds.get(&id).map(Vec::as_slice).unwrap_or_default() {
-            if placed.insert(operand) {
-                moved.push(operand);
-            }
-        }
+        };
+        let mine = inside.get(&id).cloned().unwrap_or_default();
+        let landing = inside
+            .get(&solid[first])
+            .into_iter()
+            .flatten()
+            .filter(|branch| !mine.contains(branch))
+            .filter_map(|branch| opens.get(branch).copied())
+            .min()
+            .unwrap_or(first)
+            .min(first);
+        lands.entry(landing).or_default().push(id);
+    }
+
+    let mut moved = Vec::with_capacity(order.len());
+    for (i, &id) in solid.iter().enumerate() {
+        moved.extend(lands.get(&i).map(Vec::as_slice).unwrap_or_default());
         moved.push(id);
     }
-    // A constant the boundary reads, or one nothing reads at all, still has
-    // to appear: a listing that drops a live box is lying.
-    for &id in &order {
-        if floating.contains(&id) && placed.insert(id) {
-            moved.push(id);
-        }
-    }
+    moved.extend(tail);
     debug_assert_eq!(moved.len(), order.len(), "every box is still listed");
     moved
 }
@@ -427,8 +673,19 @@ impl fmt::Display for Listing<'_> {
         // the listing draws one itself — with an empty id column, which is
         // how it says the line is a bracket rather than a box. Bigger region
         // first, so nested ones open outermost first.
+        //
+        // Every forkless branch is here, the ones holding no boxes at all
+        // included. Such a branch is real — its arms are wholly boxes some
+        // other branch also reads, so `nesting` gives them to neither — and
+        // a listing that skipped its opening bracket printed a `└─` closing
+        // nothing, which is the one thing a reader cannot make sense of.
         let forkless: BTreeMap<u32, usize> = {
             let mut held: BTreeMap<u32, usize> = BTreeMap::new();
+            for (_, kind) in graph.live() {
+                if let NodeKind::Select { branch, .. } = kind {
+                    held.insert(branch.index() as u32, 0);
+                }
+            }
             for branches in inside.values() {
                 for &branch in branches {
                     *held.entry(branch).or_default() += 1;
@@ -501,14 +758,38 @@ impl fmt::Display for Listing<'_> {
                 .filter(|branch| forkless.contains_key(branch) && !opened.contains(branch))
                 .collect();
             waiting.sort_by_key(|branch| std::cmp::Reverse(forkless[branch]));
-            for branch in waiting {
-                let depth = mine.iter().filter(|b| opened.contains(b)).count();
+            // This box sits at `mine.len()`, and every branch opening just
+            // above it holds it, so the brackets fill the last levels of
+            // that indent — outermost first, which the sort just arranged.
+            let base = mine.len() - waiting.len();
+            let mut brackets: Vec<(u32, usize)> = waiting
+                .into_iter()
+                .enumerate()
+                .map(|(step, branch)| (branch, base + step))
+                .collect();
+            // A forkless branch holding no boxes opens here, against its own
+            // `└─`: an empty pair of brackets says its arms are wholly
+            // boxes a branch around it also holds, which is the truth, and
+            // beats a `└─` that closes nothing. A branch's ends are not
+            // inside it, so this bracket sits at the select's own depth
+            // rather than one in from it.
+            if let NodeKind::Select { branch, .. } = kind {
+                let branch = branch.index() as u32;
+                if forkless.contains_key(&branch) && !opened.contains(&branch) {
+                    brackets.push((branch, mine.len()));
+                }
+            }
+            for (branch, depth) in brackets {
                 writeln!(
                     f,
-                    "  {:<5} {}┌─ branch #{}  (no fork: the arms read nothing)",
+                    "  {:<5} {}┌─ branch #{}  {}",
                     "",
                     "│  ".repeat(depth),
-                    branch
+                    branch,
+                    match forkless[&branch] {
+                        0 => "(no fork, and no box of its own)",
+                        _ => "(no fork: the arms read nothing)",
+                    }
                 )?;
                 opened.insert(branch);
             }
@@ -720,5 +1001,107 @@ mod tests {
             }
             placed.insert(id);
         }
+    }
+
+    /// The invariant the whole listing rests on: a branch's boxes are one
+    /// run, so the brackets nest instead of interleaving.
+    ///
+    /// Checked three ways over goals with branches inside branches — the
+    /// order is topological, every region is contiguous, and the drawn
+    /// brackets balance — because each catches a different way of getting
+    /// it wrong, and the third is what a reader actually sees.
+    #[test]
+    fn a_branch_is_one_run_and_its_brackets_nest() {
+        let bodies = [
+            "branch { branch { push 1 } { push 2 } } { drop 0 push 3 }",
+            "pick 0 is_tuple 2 branch { untuple 2 is_symbol swap drop 0 } { drop 0 push false }",
+            "pick 0 push 1 equal branch { pick 0 is_bool branch { not } { negate } } { negate }",
+            "push 1 pick 1 branch { add } { add }",
+        ];
+        let mut ever_nested = false;
+        for body in bodies {
+            let graph = built(body);
+            let inside = nesting(&graph);
+            let order = schedule(&graph, &inside);
+            ever_nested |= inside.values().any(|mine| mine.len() > 1);
+
+            assert_eq!(order.len(), graph.live_count(), "{}: every box once", body);
+            let mut placed: HashSet<NodeId> = HashSet::new();
+            for &id in &order {
+                for &source in graph.sources(id) {
+                    if let Source::Port { node, .. } = source {
+                        assert!(placed.contains(&node), "{}: {} before {}", body, id, node);
+                    }
+                }
+                placed.insert(id);
+            }
+
+            // Contiguous: between a region's first and last box sits
+            // nothing that is not the region's, its own ends aside.
+            let mut region: HashMap<u32, HashSet<NodeId>> = HashMap::new();
+            for (&id, branches) in &inside {
+                for &branch in branches {
+                    region.entry(branch).or_default().insert(id);
+                }
+            }
+            let at: HashMap<NodeId, usize> =
+                order.iter().enumerate().map(|(i, &id)| (id, i)).collect();
+            for (branch, held) in &region {
+                let lo = held.iter().map(|id| at[id]).min().expect("a box");
+                let hi = held.iter().map(|id| at[id]).max().expect("a box");
+                for &id in &order[lo..=hi] {
+                    let ends = matches!(graph.kind(id),
+                        NodeKind::Fork { branch: b, .. } | NodeKind::Select { branch: b, .. }
+                            if b.index() as u32 == *branch);
+                    assert!(
+                        held.contains(&id) || ends,
+                        "{}: {} sits inside branch #{}, which is not its own:\n{}",
+                        body,
+                        id,
+                        branch,
+                        listing(&graph, "left").all_boxes()
+                    );
+                }
+            }
+
+            // And the drawing balances: every bracket that opens closes, at
+            // the depth it opened, innermost first.
+            let text = listing(&graph, "left").all_boxes().to_string();
+            let mut stack: Vec<(String, usize)> = Vec::new();
+            for line in text.lines() {
+                for (mark, opening) in [("┌─ branch ", true), ("└─ branch ", false)] {
+                    let Some(at) = line.find(mark) else { continue };
+                    let depth = line[..at].matches('│').count();
+                    let name = line[at + mark.len()..]
+                        .split_whitespace()
+                        .next()
+                        .expect("a bracket names its branch")
+                        .trim_start_matches('#')
+                        .to_string();
+                    if opening {
+                        stack.push((name, depth));
+                    } else {
+                        assert_eq!(
+                            stack.pop(),
+                            Some((name.clone(), depth)),
+                            "{}: branch {} closes out of turn:\n{}",
+                            body,
+                            name,
+                            text
+                        );
+                    }
+                }
+            }
+            assert!(
+                stack.is_empty(),
+                "{}: a bracket never closes:\n{}",
+                body,
+                text
+            );
+        }
+        assert!(
+            ever_nested,
+            "the bodies must actually nest, or this proves nothing"
+        );
     }
 }
