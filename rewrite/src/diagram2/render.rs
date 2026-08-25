@@ -20,6 +20,30 @@
 //! written in, so a stuck goal still prints one to copy from; this is what
 //! is printed to *understand* the goal, and that is the split.
 //!
+//! ## A branch is a block
+//!
+//! The two ends of a branch are not boxes a reader wants to see as boxes.
+//! What they want is where the arms begin and end, and every reader of code
+//! already knows how to read that:
+//!
+//! ```text
+//!   #6    if #5.1                     on #3.0            → #7 #15
+//!   #7    | copy(1)                   ← #6.0             → #8 #9
+//!   ...
+//!         else #5.1
+//!   #15   | negate                    ← #6.1             → #16
+//!   #16   endif #5.1                  then #14.0  else #15.0   → out0
+//! ```
+//!
+//! The condition is named on all three lines, so a block deep in a nest
+//! says which wire it turns on without a reader counting bars. The `if` is
+//! the [`Fork`](super::NodeKind::Fork) where there is one and the `endif`
+//! is always the [`Select`](super::NodeKind::Select), so both keep their
+//! ids and their links: the right-hand columns still say what the box
+//! reads and who reads it, which is what a next proof step names. A line
+//! with an **empty id column** is one the listing drew rather than a box —
+//! every `else`, and the `if` of a branch with no fork.
+//!
 //! ## What makes 351 boxes legible
 //!
 //! Five decisions, and the listing is a wall without any of them.
@@ -37,8 +61,8 @@
 //! of the arm, and the arm stops reading as a unit. Nor is a greedy "stay
 //! where you are" enough — preferring the ready box that shares the most
 //! branches with the last one *leaves* a region whenever nothing inside it
-//! is ready, and comes back later, which is what makes two brackets appear
-//! to open at one depth and close at another. The regions are **laminar**
+//! is ready, and comes back later, which is what makes an `if` and its
+//! `endif` land at different depths. The regions are **laminar**
 //! (any two disjoint or nested, since a branch's arms lie wholly between
 //! its ends), so [`schedule`] contracts each to a single unit at its
 //! parent's level and orders the units: a region is placed whole, and
@@ -54,11 +78,20 @@
 //! to none of them and dropping it inside one would break the run the
 //! schedule just made.
 //!
-//! **A branch that owns no boxes still gets both brackets.** Its arms are
+//! **The arms come out in the order a reader reads them.** A branch's
+//! region splits in two — every box in it is upstream of one of the
+//! select's two block lists and never of both — so the schedule emits the
+//! then side, then the else side, and [`arms`] is the reading that says
+//! which is which. An `else` is drawn where the second begins, and left
+//! out where the else arm owns no boxes at all: the `endif` names both
+//! blocks, and a separator with nothing after it says only that the
+//! listing draws separators.
+//!
+//! **A branch that owns no boxes still gets its block.** Its arms are
 //! wholly boxes a branch around it also holds, so `nesting` gives them to
-//! neither and there is no first box to hang an opening bracket on. The
-//! listing draws the pair against the `select` itself rather than printing
-//! a `└─` that closes nothing.
+//! neither and there is no first box to hang an opening `if` on. The
+//! listing draws one against the `select` itself rather than printing an
+//! `endif` that closes nothing.
 //!
 //! **`id` and `copy` are read through.** They are what the structural laws
 //! delete, and a `copy` says what the links already say — a value read
@@ -293,6 +326,55 @@ fn armless(graph: &Graph, select: NodeId) -> HashSet<NodeId> {
     }
 }
 
+/// Which arm of each branch a box belongs to — `true` for the then side.
+///
+/// A branch's region splits cleanly in two. Every box in it is upstream of
+/// one of the `select`'s two block lists, and never of both: the sides are
+/// backward reaches from disjoint sets of blocks, so a box the then side
+/// reads is a then-side box by that very fact. That is what lets the
+/// listing draw an `else`, and it is why the split is a **reading** rather
+/// than a choice.
+fn arms(graph: &Graph, inside: &HashMap<NodeId, BTreeSet<u32>>) -> HashMap<(NodeId, u32), bool> {
+    let mut region: HashMap<u32, HashSet<NodeId>> = HashMap::new();
+    for (&id, branches) in inside {
+        for &branch in branches {
+            region.entry(branch).or_default().insert(id);
+        }
+    }
+    let mut out: HashMap<(NodeId, u32), bool> = HashMap::new();
+    for (select, kind) in graph.live() {
+        let NodeKind::Select { arity, branch } = kind else {
+            continue;
+        };
+        let branch = branch.index() as u32;
+        let Some(mine) = region.get(&branch) else {
+            continue;
+        };
+        let sources = graph.sources(select).to_vec();
+        for (blocks, side) in [(&sources[1..=*arity], true), (&sources[1 + arity..], false)] {
+            let mut todo: Vec<Source> = blocks.to_vec();
+            let mut seen: HashSet<NodeId> = HashSet::new();
+            while let Some(source) = todo.pop() {
+                let Source::Port { node, .. } = source else {
+                    continue;
+                };
+                if !mine.contains(&node) || !seen.insert(node) {
+                    continue;
+                }
+                let was = out.insert((node, branch), side);
+                debug_assert!(
+                    was.is_none_or(|was| was == side),
+                    "{} is on both sides of branch {}",
+                    node,
+                    branch
+                );
+                todo.extend(graph.sources(node).iter().copied());
+            }
+        }
+    }
+    out
+}
+
 /// A topological order in which every branch's boxes come out as **one
 /// run**, so the brackets a listing draws nest instead of interleaving.
 ///
@@ -316,15 +398,23 @@ fn armless(graph: &Graph, select: NodeId) -> HashSet<NodeId> {
 /// pass is what runs then. No graph in the corpus needs it; it is here
 /// because "there is no contiguous order" is a real answer and a listing
 /// still has to print.
-fn schedule(graph: &Graph, inside: &HashMap<NodeId, BTreeSet<u32>>) -> Vec<NodeId> {
-    let order = nested_order(graph, inside).unwrap_or_else(|| wherever_ready(graph, inside));
+fn schedule(
+    graph: &Graph,
+    inside: &HashMap<NodeId, BTreeSet<u32>>,
+    arms: &HashMap<(NodeId, u32), bool>,
+) -> Vec<NodeId> {
+    let order = nested_order(graph, inside, arms).unwrap_or_else(|| wherever_ready(graph, inside));
     debug_assert_eq!(order.len(), graph.live_count(), "the graph is acyclic");
     operands_last(graph, inside, order)
 }
 
 /// A topological order in which every branch's boxes are contiguous, or
 /// `None` where contracting the regions makes a cycle.
-fn nested_order(graph: &Graph, inside: &HashMap<NodeId, BTreeSet<u32>>) -> Option<Vec<NodeId>> {
+fn nested_order(
+    graph: &Graph,
+    inside: &HashMap<NodeId, BTreeSet<u32>>,
+    arms: &HashMap<(NodeId, u32), bool>,
+) -> Option<Vec<NodeId>> {
     let mut held: HashMap<u32, usize> = HashMap::new();
     for branches in inside.values() {
         for &branch in branches {
@@ -347,7 +437,7 @@ fn nested_order(graph: &Graph, inside: &HashMap<NodeId, BTreeSet<u32>>) -> Optio
     }
     let all: Vec<NodeId> = graph.live().map(|(id, _)| id).collect();
     let mut order = Vec::with_capacity(all.len());
-    emit_level(graph, &chains, &all, 0, &mut order).then_some(order)
+    emit_level(graph, &chains, arms, &all, 0, &mut order).then_some(order)
 }
 
 /// One level of [`nested_order`]: group these boxes by the region each
@@ -359,23 +449,24 @@ fn nested_order(graph: &Graph, inside: &HashMap<NodeId, BTreeSet<u32>>) -> Optio
 fn emit_level(
     graph: &Graph,
     chains: &HashMap<NodeId, Vec<u32>>,
+    arms: &HashMap<(NodeId, u32), bool>,
     members: &[NodeId],
     depth: usize,
     order: &mut Vec<NodeId>,
 ) -> bool {
     // A unit is one child region, or one box that enters none.
-    let mut units: Vec<(bool, Vec<NodeId>)> = Vec::new();
+    let mut units: Vec<(Option<u32>, Vec<NodeId>)> = Vec::new();
     let mut which: HashMap<u32, usize> = HashMap::new();
     for &id in members {
         match chains[&id].get(depth).copied() {
             Some(branch) => {
                 let at = *which.entry(branch).or_insert_with(|| {
-                    units.push((true, Vec::new()));
+                    units.push((Some(branch), Vec::new()));
                     units.len() - 1
                 });
                 units[at].1.push(id);
             }
-            None => units.push((false, vec![id])),
+            None => units.push((None, vec![id])),
         }
     }
     let mut unit_of: HashMap<NodeId, usize> = HashMap::new();
@@ -425,10 +516,19 @@ fn emit_level(
             .expect("the list is not empty");
         let at = ready.swap_remove(pick);
         placed += 1;
-        if units[at].0 {
+        if let Some(branch) = units[at].0 {
             let held = std::mem::take(&mut units[at].1);
-            if !emit_level(graph, chains, &held, depth + 1, order) {
-                return false;
+            // The then side, then the else side: the two are backward
+            // reaches from disjoint blocks, so no link crosses between them
+            // and either order is topological. Which one the listing wants
+            // is the one a reader reads — `if`, then arm, `else`, else arm.
+            let (yes, no): (Vec<NodeId>, Vec<NodeId>) = held
+                .iter()
+                .partition(|id| arms.get(&(**id, branch)).copied().unwrap_or(true));
+            for side in [yes, no] {
+                if !side.is_empty() && !emit_level(graph, chains, arms, &side, depth + 1, order) {
+                    return false;
+                }
             }
             units[at].1 = held;
         } else {
@@ -666,43 +766,59 @@ impl fmt::Display for Listing<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let graph = self.graph;
         let inside = nesting(graph);
-        let order = schedule(graph, &inside);
+        let arms = arms(graph, &inside);
+        let order = schedule(graph, &inside, &arms);
         let shown = |id: NodeId| !self.elide || !structural(graph.kind(id));
 
-        // A branch with no fork has no box to draw its opening bracket, so
-        // the listing draws one itself — with an empty id column, which is
-        // how it says the line is a bracket rather than a box. Bigger region
-        // first, so nested ones open outermost first.
-        //
-        // Every forkless branch is here, the ones holding no boxes at all
-        // included. Such a branch is real — its arms are wholly boxes some
-        // other branch also reads, so `nesting` gives them to neither — and
-        // a listing that skipped its opening bracket printed a `└─` closing
-        // nothing, which is the one thing a reader cannot make sense of.
-        let forkless: BTreeMap<u32, usize> = {
-            let mut held: BTreeMap<u32, usize> = BTreeMap::new();
-            for (_, kind) in graph.live() {
-                if let NodeKind::Select { branch, .. } = kind {
-                    held.insert(branch.index() as u32, 0);
-                }
+        // A box's branches, outermost first: the chain it is nested in, and
+        // so the depth it and each of its brackets are drawn at.
+        let mut held: HashMap<u32, usize> = HashMap::new();
+        for branches in inside.values() {
+            for &branch in branches {
+                *held.entry(branch).or_default() += 1;
             }
-            for branches in inside.values() {
-                for &branch in branches {
-                    *held.entry(branch).or_default() += 1;
-                }
-            }
-            let forked: HashSet<u32> = graph
-                .live()
-                .filter_map(|(_, kind)| match kind {
-                    NodeKind::Fork { branch, .. } => Some(branch.index() as u32),
-                    _ => None,
-                })
+        }
+        let chain = |id: NodeId| -> Vec<u32> {
+            let mut mine: Vec<u32> = inside
+                .get(&id)
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
                 .collect();
-            held.into_iter()
-                .filter(|(branch, _)| !forked.contains(branch))
-                .collect()
+            mine.sort_by_key(|branch| (std::cmp::Reverse(held.get(branch).copied()), *branch));
+            mine
         };
+        // What each branch decides on, named the way every other wire in
+        // the listing is named — so `if #12.0` and the `#12` line above are
+        // plainly the same wire.
+        let condition: HashMap<u32, String> = graph
+            .live()
+            .filter_map(|(id, kind)| match kind {
+                NodeKind::Select { branch, .. } => {
+                    let source = *graph.sources(id).first()?;
+                    let source = if self.elide {
+                        resolve(graph, source)
+                    } else {
+                        source
+                    };
+                    Some((branch.index() as u32, source.to_string()))
+                }
+                _ => None,
+            })
+            .collect();
+        let gutter = |depth: usize| "| ".repeat(depth);
+        // A branch whose else arm owns boxes needs an `else` to say where
+        // they start. One whose else arm owns none does not: the `endif`
+        // names both blocks, and a separator with nothing after it is a
+        // line that says only that the listing draws separators.
+        let parts: HashSet<u32> = arms
+            .iter()
+            .filter(|(_, then)| !**then)
+            .map(|(&(_, branch), _)| branch)
+            .collect();
+
         let mut opened: HashSet<u32> = HashSet::new();
+        let mut parted: HashSet<u32> = HashSet::new();
 
         let mut census: BTreeMap<String, usize> = BTreeMap::new();
         for (id, kind) in graph.live() {
@@ -751,54 +867,80 @@ impl fmt::Display for Listing<'_> {
                 continue;
             }
             let kind = graph.kind(id);
-            let mine = inside.get(&id).cloned().unwrap_or_default();
-            let mut waiting: Vec<u32> = mine
-                .iter()
-                .copied()
-                .filter(|branch| forkless.contains_key(branch) && !opened.contains(branch))
-                .collect();
-            waiting.sort_by_key(|branch| std::cmp::Reverse(forkless[branch]));
-            // This box sits at `mine.len()`, and every branch opening just
-            // above it holds it, so the brackets fill the last levels of
-            // that indent — outermost first, which the sort just arranged.
-            let base = mine.len() - waiting.len();
-            let mut brackets: Vec<(u32, usize)> = waiting
-                .into_iter()
-                .enumerate()
-                .map(|(step, branch)| (branch, base + step))
-                .collect();
-            // A forkless branch holding no boxes opens here, against its own
-            // `└─`: an empty pair of brackets says its arms are wholly
-            // boxes a branch around it also holds, which is the truth, and
-            // beats a `└─` that closes nothing. A branch's ends are not
-            // inside it, so this bracket sits at the select's own depth
-            // rather than one in from it.
-            if let NodeKind::Select { branch, .. } = kind {
-                let branch = branch.index() as u32;
-                if forkless.contains_key(&branch) && !opened.contains(&branch) {
-                    brackets.push((branch, mine.len()));
+            let mine = chain(id);
+            // The lines a reader needs before this one. A branch opens at
+            // its `fork` where it has one, so what is left to draw here is
+            // the opening of a forkless branch and every `else` — neither
+            // of which is a box, which is what the empty id column says.
+            //
+            // Each of them sits at the depth of the branch it belongs to,
+            // and that is its place in this box's chain: the box is drawn
+            // at `mine.len()`, and a branch `mine[k]` holds it from `k`.
+            let ends = match kind {
+                NodeKind::Fork { branch, .. } | NodeKind::Select { branch, .. } => {
+                    Some(branch.index() as u32)
+                }
+                _ => None,
+            };
+            let mut ahead: Vec<(&str, u32, usize)> = Vec::new();
+            for (depth, &branch) in mine.iter().enumerate() {
+                if !opened.contains(&branch) {
+                    ahead.push(("if", branch, depth));
+                }
+                let then = arms.get(&(id, branch)).copied().unwrap_or(true);
+                if !then && parts.contains(&branch) && !parted.contains(&branch) {
+                    ahead.push(("else", branch, depth));
                 }
             }
-            for (branch, depth) in brackets {
+            // A `select` closes its branch, so anything that branch still
+            // owes — an opening it never got because it has no fork and no
+            // box of its own, an `else` its else arm was too empty to
+            // trigger — is owed here, at the select's own depth. A
+            // branch's ends are not inside it, so that is `mine.len()`.
+            if let (Some(branch), NodeKind::Select { .. }) = (ends, kind)
+                && !opened.contains(&branch)
+            {
+                ahead.push(("if", branch, mine.len()));
+            }
+            for (word, branch, depth) in ahead {
                 writeln!(
                     f,
-                    "  {:<5} {}┌─ branch #{}  {}",
+                    "  {:<5} {}{} {}",
                     "",
-                    "│  ".repeat(depth),
-                    branch,
-                    match forkless[&branch] {
-                        0 => "(no fork, and no box of its own)",
-                        _ => "(no fork: the arms read nothing)",
-                    }
+                    gutter(depth),
+                    word,
+                    condition.get(&branch).map_or("?", String::as_str)
                 )?;
-                opened.insert(branch);
+                match word {
+                    "if" => opened.insert(branch),
+                    _ => parted.insert(branch),
+                };
             }
-            let indent = "│  ".repeat(mine.len());
+            let indent = gutter(mine.len());
             let label = match kind {
-                // The two ends of a branch are brackets, not boxes: what a
-                // reader wants from them is where the arms begin and end.
-                NodeKind::Fork { branch, .. } => format!("{}┌─ branch {}  ?", indent, branch),
-                NodeKind::Select { branch, .. } => format!("{}└─ branch {}  ⇒", indent, branch),
+                // The two ends of a branch are the block it opens and the
+                // block it closes: what a reader wants from them is where
+                // the arms begin and end, and `if`/`endif` is how a reader
+                // already knows how to read that.
+                NodeKind::Fork { .. } | NodeKind::Select { .. } => {
+                    let word = if matches!(kind, NodeKind::Fork { .. }) {
+                        "if"
+                    } else {
+                        "endif"
+                    };
+                    if matches!(kind, NodeKind::Fork { .. })
+                        && let Some(branch) = ends
+                    {
+                        opened.insert(branch);
+                    }
+                    format!(
+                        "{}{} {}",
+                        indent,
+                        word,
+                        ends.and_then(|branch| condition.get(&branch))
+                            .map_or("?", String::as_str)
+                    )
+                }
                 other => format!("{}{}", indent, other),
             };
             let label = match label.char_indices().nth(LABEL - 1) {
@@ -818,13 +960,21 @@ impl fmt::Display for Listing<'_> {
                     source.to_string()
                 })
                 .collect();
-            // Both ends of a branch read the condition at port 0, and
-            // saying so apart from the stack is the whole reason it is
-            // there: a rule anchored at either end names the same wire.
+            // Both ends of a branch read the condition at port 0, and the
+            // label has already said so — a rule anchored at either end
+            // names the same wire — so what is left for this column is
+            // what the box does with the rest: the stack a fork hands out,
+            // and the two blocks a select chooses between.
             let reads = match kind {
-                NodeKind::Fork { .. } | NodeKind::Select { .. } if !sources.is_empty() => {
-                    format!("if {}  on {}", sources[0], sources[1..].join(" "))
+                NodeKind::Fork { .. } if sources.len() > 1 => {
+                    format!("on {}", sources[1..].join(" "))
                 }
+                NodeKind::Select { arity, .. } if sources.len() > 1 => format!(
+                    "then {}  else {}",
+                    sources[1..=*arity].join(" "),
+                    sources[1 + arity..].join(" ")
+                ),
+                NodeKind::Fork { .. } | NodeKind::Select { .. } => String::new(),
                 _ if sources.is_empty() => String::new(),
                 _ => format!("← {}", sources.join(" ")),
             };
@@ -889,7 +1039,7 @@ mod tests {
     use crate::term::Context;
 
     /// The graph a body builds, and the arena its term lives in.
-    fn built(body: &str) -> Graph {
+    pub(super) fn built(body: &str) -> Graph {
         let mut terms = Context::new();
         let term = term_of(&mut terms, body);
         let graph = build(&terms, term);
@@ -944,19 +1094,29 @@ mod tests {
     fn an_arm_reads_as_an_arm() {
         let graph = built("branch { push 1 } { push 2 }");
         let text = listing(&graph, "left").to_string();
+        // A branch reads as the block it is: the condition named on all
+        // three lines, an arm indented under each, and the `endif` naming
+        // the two blocks it chooses between.
+        for want in ["if in0", "else in0", "endif in0", "| push 1", "| push 2"] {
+            assert!(text.contains(want), "no `{}` in\n{}", want, text);
+        }
+        // The arms come out in the order a reader reads them.
+        let lines: Vec<&str> = text.lines().collect();
+        let at = |want: &str| {
+            lines
+                .iter()
+                .position(|line| line.contains(want))
+                .unwrap_or_else(|| panic!("no `{}` in\n{}", want, text))
+        };
+        assert!(at("if in0") < at("| push 1"), "\n{}", text);
+        assert!(at("| push 1") < at("else in0"), "\n{}", text);
+        assert!(at("else in0") < at("| push 2"), "\n{}", text);
+        assert!(at("| push 2") < at("endif in0"), "\n{}", text);
+        // The opening has no box behind it — this branch has no fork —
+        // and the empty id column is how the listing says so.
         assert!(
-            text.contains("┌─ branch"),
-            "no opening bracket in\n{}",
-            text
-        );
-        assert!(
-            text.contains("└─ branch"),
-            "no closing bracket in\n{}",
-            text
-        );
-        assert!(
-            text.lines().any(|line| line.contains("│  push")),
-            "no arm indented under its branch in\n{}",
+            lines[at("if in0")].starts_with("        "),
+            "a forkless opening names a box:\n{}",
             text
         );
     }
@@ -991,7 +1151,7 @@ mod tests {
     fn a_box_is_listed_after_what_it_reads() {
         let graph = built("push 1 pick 0 add branch { push 3 } { push 4 }");
         let inside = nesting(&graph);
-        let order = schedule(&graph, &inside);
+        let order = schedule(&graph, &inside, &arms(&graph, &inside));
         let mut placed: HashSet<NodeId> = HashSet::new();
         for id in order {
             for &source in graph.sources(id) {
@@ -1022,7 +1182,7 @@ mod tests {
         for body in bodies {
             let graph = built(body);
             let inside = nesting(&graph);
-            let order = schedule(&graph, &inside);
+            let order = schedule(&graph, &inside, &arms(&graph, &inside));
             ever_nested |= inside.values().any(|mine| mine.len() > 1);
 
             assert_eq!(order.len(), graph.live_count(), "{}: every box once", body);
@@ -1064,37 +1224,57 @@ mod tests {
                 }
             }
 
-            // And the drawing balances: every bracket that opens closes, at
-            // the depth it opened, innermost first.
+            // And the drawing balances: every `if` reaches an `endif` at
+            // the depth it opened, innermost first, with any `else` in
+            // between at that same depth.
             let text = listing(&graph, "left").all_boxes().to_string();
             let mut stack: Vec<(String, usize)> = Vec::new();
+            let mut blocks = 0;
             for line in text.lines() {
-                for (mark, opening) in [("┌─ branch ", true), ("└─ branch ", false)] {
-                    let Some(at) = line.find(mark) else { continue };
-                    let depth = line[..at].matches('│').count();
-                    let name = line[at + mark.len()..]
-                        .split_whitespace()
-                        .next()
-                        .expect("a bracket names its branch")
-                        .trim_start_matches('#')
-                        .to_string();
-                    if opening {
-                        stack.push((name, depth));
-                    } else {
-                        assert_eq!(
-                            stack.pop(),
-                            Some((name.clone(), depth)),
-                            "{}: branch {} closes out of turn:\n{}",
-                            body,
-                            name,
-                            text
-                        );
-                    }
+                // Past the id column is the gutter, and past that the word.
+                let Some(rest) = line.get(8..) else { continue };
+                let depth = rest.matches("| ").count();
+                let word = rest.trim_start_matches("| ");
+                let condition = |word: &str| {
+                    word.split_whitespace()
+                        .nth(1)
+                        .expect("a block names its condition")
+                        .to_string()
+                };
+                if word.starts_with("if ") {
+                    blocks += 1;
+                    stack.push((condition(word), depth));
+                } else if word.starts_with("else ") {
+                    assert_eq!(
+                        stack.last(),
+                        Some(&(condition(word), depth)),
+                        "{}: an `else` outside the block it parts:\n{}",
+                        body,
+                        text
+                    );
+                } else if word.starts_with("endif ") {
+                    assert_eq!(
+                        stack.pop(),
+                        Some((condition(word), depth)),
+                        "{}: an `endif` out of turn:\n{}",
+                        body,
+                        text
+                    );
                 }
             }
             assert!(
                 stack.is_empty(),
-                "{}: a bracket never closes:\n{}",
+                "{}: a block never closes:\n{}",
+                body,
+                text
+            );
+            assert_eq!(
+                blocks,
+                graph
+                    .live()
+                    .filter(|(_, kind)| matches!(kind, NodeKind::Select { .. }))
+                    .count(),
+                "{}: a branch got no block, or got two:\n{}",
                 body,
                 text
             );
