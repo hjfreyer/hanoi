@@ -164,6 +164,32 @@
 //! have not been rewritten that way yet, and that is the next thing to do,
 //! not a thing that cannot be done.
 //!
+//! ## The one check that is not local
+//!
+//! Everything [`check_match`] does reads one port at a time, and a side
+//! condition that can be *carried by the interface* needs nothing else.
+//! One cannot be. A rewrite only touches the inside of its window, so a
+//! **cycle** can appear exactly one way: the outside already carries a
+//! path from something the window leaves to something the window takes,
+//! and the replacement adds the missing link by making the taker depend on
+//! the leaver. Neither half is visible at a port, and
+//! [`closes_a_loop`] is where the two are put together.
+//!
+//! Plain **convexity** — no path leaving the window and returning — is the
+//! familiar test and it is the wrong one here: sufficient, and too strong.
+//! [`Law::SpecializeChoice`] fires on windows the outside does loop
+//! around, soundly, because its replacement never adds the closing link;
+//! requiring convexity costs `identities::a_value_tested_twice`, measured
+//! rather than argued. What the guard asks is the exact question instead,
+//! per (boundary output, boundary input) pair.
+//!
+//! No law in the table as it stands can trip it — every window is small
+//! enough that the outside path would already be a cycle in the host — and
+//! `the_guard_refuses_nothing_the_table_states` holds that. It is here for
+//! the rows that would: any rule whose replacement reads into a box that
+//! the pattern exports from, a `select` of two ports merged out of two
+//! `select`s of one being the case it was written for.
+//!
 //! ## Where the trust sits
 //!
 //! [`sides`] and [`apply`] are the whole of it: one builds the table, the
@@ -973,6 +999,10 @@ pub enum Ill {
 /// that disagreed, because that is the whole content of the check.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Mismatch {
+    /// The replacement would close a loop the outside already half-closes:
+    /// what the window leaves reaches what the window takes, out there, and
+    /// the other side of the rule would hang the second off the first.
+    Loop { leaves: Source, takes: Source },
     /// The match names a different number of boxes, inputs, outputs or
     /// branches than the pattern has, or names one box twice.
     Shape,
@@ -1023,6 +1053,13 @@ impl fmt::Display for Error {
                     Direction::Backward => "right",
                 };
                 match at {
+                    Mismatch::Loop { leaves, takes } => write!(
+                        f,
+                        "{:?}'s {} side would close a loop: {} already reaches {} \
+                         outside the window, and the other side hangs the second \
+                         off the first",
+                        law, side, leaves, takes
+                    ),
                     Mismatch::Shape => {
                         write!(f, "the match is not the shape of {:?}'s {} side", law, side)
                     }
@@ -2152,6 +2189,11 @@ pub fn apply(graph: &mut Graph, step: &Step) -> Result<Step, Error> {
         dir: step.dir,
         at,
     })?;
+    closes_a_loop(graph, pattern, replacement, &step.at).map_err(|at| Error::NotThere {
+        law: step.rule.law(),
+        dir: step.dir,
+        at,
+    })?;
     let back = splice(graph, replacement, &step.at);
     Ok(Step {
         rule: step.rule.clone(),
@@ -2297,6 +2339,120 @@ pub fn replay(graph: &mut Graph, steps: &[Step]) -> Result<Derivation, Error> {
 /// every source it names is a source it has. What is *not* trusted is the
 /// match, and every field of it is measured against the pattern before it
 /// is used to index anything.
+/// Whether the replacement would close a loop the host already half-closes
+/// — the one thing a local rewrite can get wrong that reading one port at a
+/// time cannot see.
+///
+/// A rewrite is a swap inside a window, and the outside is untouched. So a
+/// cycle can only appear one way: the outside already carries a path from
+/// something the window **leaves** to something the window **takes**, and
+/// the replacement adds the missing link by making the box that takes it
+/// depend on the box that leaves it. Pattern output `k` reaches pattern
+/// input `j` out there; put a dependency from `j` back to `k` in here, and
+/// the two halves meet.
+///
+/// This is why plain **convexity** — no path leaving the window and
+/// returning — is the wrong test even though it is the familiar one. It is
+/// sufficient and it is too strong: [`Law::SpecializeChoice`] fires on
+/// windows the outside does loop around, soundly, because its replacement
+/// never adds the link that would close them. Measured on the corpus, not
+/// argued: requiring convexity costs `identities::a_value_tested_twice`.
+///
+/// Both directions of a rule get the same test, which is what makes a law
+/// stateable without a "forward only" flag. A law whose two sides differ in
+/// what depends on what — a `select` split into two, read backwards, is the
+/// case — simply finds the merge refused wherever it would bite.
+fn closes_a_loop(
+    graph: &Graph,
+    pattern: &Graph,
+    replacement: &Graph,
+    at: &Match,
+) -> Result<(), Mismatch> {
+    let inside: HashSet<NodeId> = at.nodes.iter().copied().collect();
+    let image = |src: Source| match src {
+        Source::Input(i) => at.inputs[i],
+        Source::Port { node, port } => Source::Port {
+            node: at.nodes[node.index()],
+            port,
+        },
+    };
+    // Which pattern inputs the outside reaches from each pattern output.
+    // The walk stops at the window: a path back inside is the window's own
+    // business, and what matters is where it comes *out*.
+    for (k, &leaves) in pattern.outputs().iter().enumerate() {
+        let Source::Port { node, port } = image(leaves) else {
+            // The window leaves one of its own inputs, so whatever reads it
+            // was already reading something outside: no new link is made.
+            continue;
+        };
+        let mut beyond: HashSet<NodeId> = HashSet::new();
+        let mut todo: Vec<Source> = vec![Source::Port { node, port }];
+        while let Some(source) = todo.pop() {
+            for &sink in graph.sinks(source) {
+                let Sink::Port { node, .. } = sink else {
+                    continue;
+                };
+                if inside.contains(&node) || !beyond.insert(node) {
+                    continue;
+                }
+                for port in 0..graph.kind(node).arity().outputs {
+                    todo.push(Source::Port { node, port });
+                }
+            }
+        }
+        if beyond.is_empty() {
+            continue;
+        }
+        for (j, &takes) in at.inputs.iter().enumerate() {
+            let Source::Port { node, .. } = takes else {
+                continue;
+            };
+            if !beyond.contains(&node) {
+                continue;
+            }
+            // The outside closes `k` to `j`. The replacement must not.
+            if reaches_input(replacement, leaves_at(replacement, k), j) {
+                return Err(Mismatch::Loop { leaves, takes });
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The box a side's boundary output `k` comes out of, if it is a box.
+fn leaves_at(side: &Graph, k: usize) -> Option<NodeId> {
+    match side.outputs().get(k) {
+        Some(&Source::Port { node, .. }) => Some(node),
+        _ => None,
+    }
+}
+
+/// Whether some reader of boundary input `j` is `from` or lies downstream of
+/// it — which is what it means for the replacement to hang input `j` off
+/// output `k`.
+fn reaches_input(side: &Graph, from: Option<NodeId>, j: usize) -> bool {
+    let Some(from) = from else { return false };
+    let mut seen: HashSet<NodeId> = HashSet::new();
+    let mut todo = vec![from];
+    while let Some(node) = todo.pop() {
+        if !seen.insert(node) {
+            continue;
+        }
+        // A box reading boundary input `j` closes it.
+        if side.sources(node).contains(&Source::Input(j)) {
+            return true;
+        }
+        for port in 0..side.kind(node).arity().outputs {
+            for &sink in side.sinks(Source::Port { node, port }) {
+                if let Sink::Port { node, .. } = sink {
+                    todo.push(node);
+                }
+            }
+        }
+    }
+    false
+}
+
 fn check_match(graph: &Graph, pattern: &Graph, at: &Match) -> Result<(), Mismatch> {
     debug_assert!(
         pattern.nodes.iter().all(Option::is_some),
@@ -5449,6 +5605,131 @@ mod tests {
             for rule in instances(&graph, law) {
                 assert_eq!(rule.law(), law);
                 sides(&rule).unwrap_or_else(|e| panic!("{:?}: {:?}", rule, e));
+            }
+        }
+    }
+
+    /// The one thing reading one port at a time cannot see: a rewrite that
+    /// closes a loop the outside already half-closes.
+    ///
+    /// `select-same` backward widens a `select` by re-reading a block it
+    /// answers with either way. Point that block at something the select
+    /// itself feeds, and the widened box would read its own answer. Every
+    /// other check passes — the shapes fit, the kinds fit, every edge and
+    /// every reader is what the pattern says, and the block's box is
+    /// outside the window, so the match is induced. Only [`closes_a_loop`]
+    /// says no.
+    #[test]
+    fn a_rewrite_that_would_read_its_own_answer_is_refused() {
+        // `select-same` at width 2, block 0: the pattern keeps one block in
+        // the select and hands the shared one straight out, and the
+        // replacement reads it back into the select.
+        let rule = Rule::SelectSame { arity: 2, at: 0 };
+        let (both, fewer) = sides(&rule).unwrap();
+        assert_eq!(both.arity(), fewer.arity());
+
+        // A host where the block is downstream of the select's own answer.
+        let mut graph = Graph::empty(0);
+        let cond = graph.add(NodeKind::Op(Prim::Push(Value::Bool(true))), Vec::new());
+        let then = graph.add(NodeKind::Op(Prim::Push(Value::Int(1))), Vec::new());
+        let els = graph.add(NodeKind::Op(Prim::Push(Value::Int(2))), Vec::new());
+        let branch = graph.next_branch();
+        let chosen = graph.add(
+            NodeKind::Select { arity: 1, branch },
+            vec![cond[0], then[0], els[0]],
+        );
+        let after = graph.add(NodeKind::Op(Prim::Not), chosen.clone());
+        graph.close(vec![after[0]]);
+        graph.check().unwrap();
+
+        let select = only(&NodeKind::Select { arity: 1, branch }, &graph);
+        let looping = Step {
+            rule: rule.clone(),
+            dir: Direction::Backward,
+            at: Match {
+                nodes: vec![select],
+                // Input 1 is the shared block, and here it is the very
+                // value the select feeds.
+                inputs: vec![cond[0], after[0], then[0], els[0]],
+                outputs: vec![
+                    vec![Sink::Output(0)],
+                    vec![Sink::Port {
+                        node: only(&NodeKind::Op(Prim::Not), &graph),
+                        port: 0,
+                    }],
+                ],
+                branches: vec![branch],
+            },
+        };
+        // The match itself is impeccable; the rewrite is not.
+        assert_eq!(check_match(&graph, &fewer, &looping.at), Ok(()));
+        assert!(
+            matches!(
+                apply(&mut graph.clone(), &looping),
+                Err(Error::NotThere {
+                    at: Mismatch::Loop { .. },
+                    ..
+                })
+            ),
+            "a rewrite that reads its own answer was accepted:\n{}",
+            graph
+        );
+
+        // The control: the same rule, the same width, a block that is not
+        // downstream of the select. Nothing to close, so it lands.
+        let mut graph = Graph::empty(0);
+        let cond = graph.add(NodeKind::Op(Prim::Push(Value::Bool(true))), Vec::new());
+        let then = graph.add(NodeKind::Op(Prim::Push(Value::Int(1))), Vec::new());
+        let els = graph.add(NodeKind::Op(Prim::Push(Value::Int(2))), Vec::new());
+        let loose = graph.add(NodeKind::Op(Prim::Push(Value::Int(9))), Vec::new());
+        let branch = graph.next_branch();
+        let chosen = graph.add(
+            NodeKind::Select { arity: 1, branch },
+            vec![cond[0], then[0], els[0]],
+        );
+        graph.close(vec![loose[0], chosen[0]]);
+        graph.check().unwrap();
+
+        let select = only(&NodeKind::Select { arity: 1, branch }, &graph);
+        let sound = Step {
+            rule,
+            dir: Direction::Backward,
+            at: Match {
+                nodes: vec![select],
+                inputs: vec![cond[0], loose[0], then[0], els[0]],
+                outputs: vec![vec![Sink::Output(0)], vec![Sink::Output(1)]],
+                branches: vec![branch],
+            },
+        };
+        apply(&mut graph, &sound).expect("nothing to close");
+        graph.check().unwrap();
+    }
+
+    /// And the guard is **inert** on the table as it stands: every law,
+    /// matched against its own side, passes it.
+    ///
+    /// Which is the point. Plain convexity — no path leaving the window and
+    /// returning — would be sufficient and is too strong:
+    /// `specialize-choice` fires on windows the outside does loop around,
+    /// soundly, because its replacement never adds the link that would
+    /// close them. Requiring convexity costs
+    /// `identities::a_value_tested_twice`, measured.
+    #[test]
+    fn the_guard_refuses_nothing_the_table_states() {
+        for rule in table() {
+            let (lhs, rhs) = sides(&rule).unwrap();
+            for (dir, pattern, replacement) in [
+                (Direction::Forward, &lhs, &rhs),
+                (Direction::Backward, &rhs, &lhs),
+            ] {
+                let at = identity(pattern);
+                assert_eq!(
+                    closes_a_loop(pattern, pattern, replacement, &at),
+                    Ok(()),
+                    "{:?} {:?} closes a loop against its own side",
+                    rule.law(),
+                    dir
+                );
             }
         }
     }
