@@ -450,20 +450,16 @@ fn compile_type_spec(spec: &TypeSpec) -> Result<Vec<ParsedInstruction>, String> 
         TypeSpec::Path(path) => Ok(vec![ParsedInstruction::TypeCheckPath(path.clone())]),
         TypeSpec::Union(variants) => compile_union(variants),
         TypeSpec::Tuple(elements) => {
-            // A value is of this shape exactly when coercing it to the shape
-            // changes nothing, so `pick 0 ; pick 0 ; as_tuple n ; equal` is the
-            // whole test — one question rather than the `is_tuple ;
-            // tuple_length ; equal` prologue it replaced, and the same one
-            // `untuple n` used to answer for itself.
+            // `is_tuple n` is the whole test. The width is part of the type
+            // in exactly the sense `untuple n` means it, so one question asks
+            // what the `is_tuple ; tuple_length ; equal` prologue asked in
+            // pieces, and what the `pick 0 ; pick 0 ; as_tuple n ; equal`
+            // that replaced it asked by coercing a copy and comparing.
             let n = elements.len();
             if n == 0 {
-                // At width zero the coercion is the constant `()`, so the test
-                // is `equal` against that literal and there is nothing left to
-                // take apart.
-                return Ok(vec![
-                    ParsedInstruction::Push(ParsedValue::Tuple(Vec::new())),
-                    ParsedInstruction::Equal,
-                ]);
+                // At width zero there is nothing left to take apart, so the
+                // test is the whole check.
+                return Ok(vec![ParsedInstruction::IsTuple(Some(0))]);
             }
 
             // `untuple n` leaves the last element on top and element 0 in the
@@ -500,12 +496,11 @@ fn compile_type_spec(spec: &TypeSpec) -> Result<Vec<ParsedInstruction>, String> 
             };
 
             Ok(vec![
-                // Two copies: `as_tuple` coerces one and `equal` compares it
-                // against the other, so the value survives into both arms.
+                // The test is asked on a copy, so the value survives into
+                // both arms: the then arm has it to take apart, and the else
+                // arm has it to discard.
                 ParsedInstruction::Pick(0),
-                ParsedInstruction::Pick(0),
-                ParsedInstruction::AsTuple(n),
-                ParsedInstruction::Equal,
+                ParsedInstruction::IsTuple(Some(n)),
                 ParsedInstruction::Branch(
                     Target::Inline(then_untupled),
                     Target::Inline(else_wrong_shape),

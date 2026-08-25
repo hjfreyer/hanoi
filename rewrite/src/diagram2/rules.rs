@@ -67,6 +67,15 @@
 //! the machine itself as the judge — [`Law::Fold`] runs a literal window on
 //! `vm`, and the rest are facts about particular instructions.
 //!
+//! Two of them are about a value the window watched being **built**, which
+//! is a shape the window knows without asking the machine anything:
+//! [`Law::AsTupleBuilt`] says coercing it changes nothing, and
+//! [`Law::IsTupleBuilt`] says testing its width answers. The second is what
+//! lets the compiler's `type` and `enum` guard be `pick 0 ; is_tuple n`
+//! rather than a coercion compared against a copy — see
+//! [docs/totality.md](../../../docs/totality.md), where that guard has now
+//! shortened twice.
+//!
 //! Every row on that list **shrinks** a graph, which is what makes it a
 //! list a driver can run to fixpoint. Two rows in the table are about the
 //! same instructions and are deliberately on no list at all, because they
@@ -214,6 +223,7 @@ pub enum Law {
     TestedBool,
     Retuple,
     AsTupleRoundTrip,
+    IsTupleBuilt,
     // The two unpackings: a coercion said as the program it is. Both grow
     // a graph, so no list drives them — see [`folding`].
     AsBoolBranch,
@@ -256,6 +266,7 @@ impl Law {
             Law::TestedBool => "tested-bool",
             Law::Retuple => "retuple",
             Law::AsTupleRoundTrip => "as-tuple-round-trip",
+            Law::IsTupleBuilt => "is-tuple-built",
             Law::AsBoolBranch => "as-bool-branch",
             Law::CoercionGuard => "coercion-guard",
         }
@@ -295,6 +306,7 @@ impl Law {
             Law::TestedBool,
             Law::Retuple,
             Law::AsTupleRoundTrip,
+            Law::IsTupleBuilt,
             Law::AsBoolBranch,
             Law::CoercionGuard,
         ]
@@ -666,6 +678,28 @@ pub enum Rule {
     /// [`Rule::AsTupleBuilt`] exports its tuple: it may have other readers,
     /// and a window that claimed all of them would rarely match.
     AsTupleRoundTrip { n: usize },
+    /// Asking a value `tuple m` built whether it is a tuple of width `n`
+    /// is asking whether `m` is `n`: `tuple m ; is_tuple n` = `tuple m ;
+    /// push (m == n)`.
+    ///
+    /// The sibling of [`Rule::AsTupleBuilt`], and it exists for the same
+    /// reason: a value the window watched being built has a shape the
+    /// window knows, so a test of that shape is decided rather than
+    /// computed. `as-tuple-built` says the coercion changes nothing; this
+    /// says the test answers, and both keep the tuple **exported**, since
+    /// its port may have readers the window never held.
+    ///
+    /// Both widths ride in the payload rather than one, because both cases
+    /// are useful and neither is harder than the other: the equal widths
+    /// answer `true`, and a mismatch answers `false` — which is the whole
+    /// of what `is_tuple n` computes on a value whose width is known.
+    ///
+    /// This is the row the `type` and `enum` sugar's guard needs. That
+    /// guard used to coerce a copy and compare it, which handed the
+    /// rewriter an `equal` the folding rows could take apart; asked as
+    /// `pick 0 ; is_tuple n` it hands over a test instead, and without
+    /// this row a built tuple meeting one is a question nothing decides.
+    IsTupleBuilt { built: usize, asked: usize },
     /// `as_bool` is the branch it is: `as_bool x = if x { true } else
     /// { false }`.
     ///
@@ -749,6 +783,7 @@ impl Rule {
             Rule::TestedBool { .. } => Law::TestedBool,
             Rule::Retuple { .. } => Law::Retuple,
             Rule::AsTupleRoundTrip { .. } => Law::AsTupleRoundTrip,
+            Rule::IsTupleBuilt { .. } => Law::IsTupleBuilt,
             Rule::AsBoolBranch => Law::AsBoolBranch,
             Rule::CoercionGuard { .. } => Law::CoercionGuard,
         }
@@ -824,6 +859,7 @@ pub fn folding() -> Vec<Law> {
         // coercion into two coercions the table has no row to collapse.
         Law::AsTupleRoundTrip,
         Law::Retuple,
+        Law::IsTupleBuilt,
         Law::NotNot,
         Law::AndLiteral,
         Law::TupleCancel,
@@ -857,6 +893,7 @@ pub fn is_wiring(law: Law) -> bool {
             | Law::TestedBool
             | Law::Retuple
             | Law::AsTupleRoundTrip
+            | Law::IsTupleBuilt
             | Law::AsBoolBranch
             | Law::CoercionGuard
     )
@@ -1872,6 +1909,28 @@ pub fn sides(rule: &Rule) -> Result<(Graph, Graph), Error> {
             once.close(vec![coerced[0], coerced[0]]);
 
             (roundabout, once)
+        }
+        Rule::IsTupleBuilt { built, asked } => {
+            let (built, asked) = (*built, *asked);
+            let elements: Vec<Source> = (0..built).map(Source::Input).collect();
+
+            let mut question = Graph::empty(built);
+            let tuple = question.add(NodeKind::Op(Prim::Tuple(built)), elements.clone());
+            let answer = question.add(NodeKind::Op(Prim::IsTuple(Some(asked))), tuple.clone());
+            // The tuple stays exported, the way `as-tuple-built` keeps its
+            // own: a deduped tuple is one box with many readers, and a
+            // window claiming all of them would rarely match.
+            question.close(vec![tuple[0], answer[0]]);
+
+            let mut settled = Graph::empty(built);
+            let tuple = settled.add(NodeKind::Op(Prim::Tuple(built)), elements);
+            let answer = settled.add(
+                NodeKind::Op(Prim::Push(Value::Bool(built == asked))),
+                Vec::new(),
+            );
+            settled.close(vec![tuple[0], answer[0]]);
+
+            (question, settled)
         }
         Rule::AsBoolBranch => {
             let mut forced = Graph::empty(1);
@@ -3215,6 +3274,20 @@ fn read_off(graph: &Graph, law: Law, id: NodeId) -> Vec<(Rule, NodeId)> {
             _ => Vec::new(),
         },
 
+        // Asking a value the window watched being built what shape it is.
+        // Either width answers, so there is no `m == n` to check here —
+        // that comparison is the law's answer, not its side condition.
+        (Law::IsTupleBuilt, NodeKind::Op(Prim::IsTuple(Some(asked)))) => match made_by(takes[0]) {
+            Some((tuple, NodeKind::Op(Prim::Tuple(m)))) => vec![(
+                Rule::IsTupleBuilt {
+                    built: *m,
+                    asked: *asked,
+                },
+                tuple,
+            )],
+            _ => Vec::new(),
+        },
+
         // One wire, compared with itself.
         (Law::EqualRefl, NodeKind::Op(Prim::Equal)) => {
             if takes[0] == takes[1] {
@@ -4504,6 +4577,73 @@ mod tests {
         ));
     }
 
+    /// A tuple the window watched being built answers what shape it is.
+    ///
+    /// Both widths are payload and both cases are the law: equal widths
+    /// answer `true`, a mismatch `false`. The machine settles each, and
+    /// the sample list's own tuple is beside the point here — the operand
+    /// under test is built inside the window, from whatever the boundary
+    /// hands in.
+    #[test]
+    fn a_built_tuple_answers_what_shape_it_is() {
+        for built in 0..=2 {
+            for asked in 0..=3 {
+                the_machine_agrees(Law::IsTupleBuilt, Rule::IsTupleBuilt { built, asked });
+            }
+        }
+
+        // And it is read off the test, at the tuple the pattern anchors on.
+        let mut graph = Graph::empty(2);
+        let tuple = graph.add(
+            NodeKind::Op(Prim::Tuple(2)),
+            vec![Source::Input(0), Source::Input(1)],
+        );
+        let asked = graph.add(NodeKind::Op(Prim::IsTuple(Some(3))), tuple.clone());
+        graph.close(vec![tuple[0], asked[0]]);
+        graph.check().unwrap();
+
+        let steps = propose(
+            &graph,
+            &[Law::IsTupleBuilt],
+            only(&NodeKind::Op(Prim::IsTuple(Some(3))), &graph),
+        );
+        let [step] = &steps[..] else {
+            panic!("one built tuple, one test:\n{}", graph)
+        };
+        assert_eq!(
+            step.rule,
+            Rule::IsTupleBuilt { built: 2, asked: 3 },
+            "the mismatch is the law's answer, not a reason to decline"
+        );
+        apply(&mut graph, step).unwrap();
+        graph.check().unwrap();
+        assert!(
+            graph
+                .live()
+                .any(|(_, kind)| kind == &NodeKind::Op(Prim::Push(Value::Bool(false)))),
+            "a `tuple 2` is no tuple of three:\n{}",
+            graph
+        );
+
+        // A width-blind `is_tuple` is a different question, and this law
+        // does not answer it: the row is about what the width decides.
+        let mut graph = Graph::empty(2);
+        let tuple = graph.add(
+            NodeKind::Op(Prim::Tuple(2)),
+            vec![Source::Input(0), Source::Input(1)],
+        );
+        let asked = graph.add(NodeKind::Op(Prim::IsTuple(None)), tuple.clone());
+        graph.close(vec![tuple[0], asked[0]]);
+        assert!(
+            propose(
+                &graph,
+                &[Law::IsTupleBuilt],
+                only(&NodeKind::Op(Prim::IsTuple(None)), &graph)
+            )
+            .is_empty()
+        );
+    }
+
     /// `as_bool` is the branch it is — the coercion `truthy` names, said as
     /// the decision it makes.
     #[test]
@@ -4996,6 +5136,8 @@ mod tests {
             },
             Rule::Retuple { n: 2 },
             Rule::AsTupleRoundTrip { n: 2 },
+            Rule::IsTupleBuilt { built: 2, asked: 2 },
+            Rule::IsTupleBuilt { built: 2, asked: 3 },
             Rule::AsBoolBranch,
             Rule::CoercionGuard {
                 prim: Prim::AsTuple(2),
@@ -5246,7 +5388,7 @@ mod tests {
         let all = Law::every();
         assert_eq!(
             all.len(),
-            28,
+            29,
             "a law joined the table: name it, and list it in `Law::every`"
         );
         let mut names: Vec<&str> = all.iter().map(|law| law.name()).collect();

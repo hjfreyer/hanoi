@@ -70,8 +70,10 @@ laws (`id-elim`, `swap-elim`, `copy-elim`, `dead-node`, `dedup`), the
 branch layer (`select-literal` and its kin, the specializing rules,
 `view-value` held to last), and the value layer — a literal window runs on
 the real `vm` (one `run_window`, no second semantics, `fold`), a promised
-bool tests true (`tested-bool`), retupling is the coercion (`retuple`), and
-a value already coerced survives that round trip (`as-tuple-round-trip`).
+bool tests true (`tested-bool`), retupling is the coercion (`retuple`), a
+value already coerced survives that round trip (`as-tuple-round-trip`), and a
+tuple the window watched being built answers what shape it is
+(`is-tuple-built`).
 
 Two rows sit outside every list, because they **grow** a graph: `as-bool-branch`
 (`as_bool` is the branch it makes) and `coercion-guard` (a coercion is the
