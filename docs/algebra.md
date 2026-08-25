@@ -179,7 +179,7 @@ implementation of the semantics at all.
 | the coercion — `untuple n ; tuple n = as_tuple n` | fold |
 | coercion idempotence — `as_X ; as_X = as_X` | fold — **candidate still**; `as-tuple-round-trip` below is what a proof wanted it for |
 
-Four more are rows now. The first folds; the last two are **unpackings** —
+Five more are rows now. The first two fold; the last two are **unpackings** —
 they say a coercion as the program it is, so they grow a graph, and
 [`folding`](../rewrite/src/diagram2/rules.rs) does not carry them. A
 strategy names the one it wants (`fire(coercion-guard)`, `at(#7,
@@ -189,6 +189,7 @@ in front of the other laws, and that is a decision.
 | law | in terms | why it is true |
 |---|---|---|
 | `as-tuple-round-trip` | `as_tuple n ; untuple n ; tuple n = as_tuple n` | the coercion's codomain *is* "a tuple of exactly `n`", so the round trip that junk-normalizes has nothing left to normalize. Not `retuple` twice over: spending `retuple` leaves a second `as_tuple n`, and the idempotence row above is still a candidate |
+| `is-tuple-built` | `tuple m ; is_tuple n = tuple m ; push (m == n)` | a value the window watched being built has a shape the window knows, so a test of that shape is decided rather than computed — `as-tuple-built`'s sibling, and stated with the tuple kept for its other readers the same way. It is the row that lets a `type` or `enum` guard be written `pick 0 ; is_tuple n` |
 | `as-bool-branch` | `as_bool = if x { true } else { false }` | `as_bool` is `truthy` made into an instruction and a `select` keeps the block `truthy` picks; the arms answer the two values `truthy` can report, and read nothing, so the branch needs no `fork` |
 | `coercion-guard` | `as_T = if x is a T { x } else { junk }` — `is_bool`/`true`, `is_int`/`0`, `is_tuple n`/a tuple of `n` empty tuples | the instruction set's own sentence, as an equation: each coercion "is the identity where the value is already of that type, and hands back a default where it is not". The width belongs in the guard, and `is_tuple n` is where it lives: the width-blind `is_tuple` would claim `as_tuple 2` is the identity on `(1, 2, 3)` |
 

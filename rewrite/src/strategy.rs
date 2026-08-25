@@ -1317,6 +1317,8 @@ mod tests {
                 "identities::comparing_two_built_tuples",
                 "identities::untupling_and_retupling_is_the_coercion",
                 "identities::a_coerced_tuple_survives_the_round_trip",
+                "identities::a_built_tuple_is_the_width_it_was_built",
+                "identities::a_built_tuple_is_no_other_width",
             ],
             "the table's reach changed"
         );

@@ -1597,13 +1597,13 @@ impl<'a> Compiler<'a> {
             in_sentence: self.current_sentence.clone(),
         });
         Ok(vec![
-            // Two copies: one for `as_tuple` to coerce and one for `equal` to
-            // compare it against, so the value itself is still there whichever
-            // arm the answer picks.
+            // One copy, for the test to consume, so the value itself is
+            // still there whichever arm the answer picks. `is_tuple 2` asks
+            // the whole question — the width is part of the type, the way
+            // `untuple 2` means it — where coercing a second copy and
+            // comparing took three instructions to ask the same one.
             Instruction::Copy,
-            Instruction::Copy,
-            Instruction::AsTuple(2),
-            Instruction::Equal,
+            Instruction::IsTuple(Some(2)),
             Instruction::Branch(is_ok, not_a_result),
             Instruction::Branch(rest, fail),
         ])

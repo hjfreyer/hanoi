@@ -350,21 +350,27 @@ width stays *optional* on the test and required on the coercion: "a tuple of
 some length" is a question with an answer, and it is what the surface's bare
 `tuple` type spec means, but it is not a coercion anything could perform.
 
-The `type` and `enum` sugar has **not** moved to it, and the reason is worth
-recording rather than fixing quietly. `pick 0 ; is_tuple n` says exactly what
-`pick 0 ; pick 0 ; as_tuple n ; equal` says, in two instructions rather than
-four, with the value left under the answer either way — so the sugar wants it.
-What stops it is the *table*, not the semantics: the guard that coerces and
-compares hands the rewriter an `equal` against a value `tuple n` built, which
-`as-tuple-built` and the folding rows take apart, and `is_tuple n` on a built
-tuple has no row at all. Try it and the barista's contract claim stalls on a
-nest of `tuple n ; is_tuple n` nobody can decide.
+So the guard is shorter again, and the sugar is written with it:
 
-The missing row is the obvious sibling of `as-tuple-built`: `tuple n ;
-is_tuple n` = `tuple n ; push true`, the tuple kept for its other readers the
-way that law keeps it. With that in the table the sugar can shorten; without
-it, shortening the sugar costs a proof. It is a change to make on purpose,
-not as a side effect of an instruction gaining an operand.
+```
+pick 0 ; is_tuple n
+branch { untuple n; ...element checks... }
+       { drop; push false }
+```
+
+The `?` operator's guard is the same question and is written the same way —
+`copy ; is_tuple 2`, where it used to copy twice, coerce one copy and compare.
+
+Shortening it took a **law**, not just an instruction, and that is the part
+worth recording. The coercing guard handed the rewriter an `equal` against a
+value `tuple n` built, which `as-tuple-built` and the folding rows take apart;
+a guard that asks `is_tuple n` hands over a test instead, and a test of a
+built tuple had no row at all. Written without one, the barista's contract
+claim stalls on a nest of `tuple n ; is_tuple n` nobody can decide. The row is
+`as-tuple-built`'s sibling — `tuple m ; is_tuple n` = `tuple m ; push (m ==
+n)`, the tuple kept for its other readers the way that law keeps it — and with
+it in the table the claim closes in fewer rewrites than it did before, there
+being less guard to rewrite.
 
 ### The single-arm hoist, which totality *did* buy
 

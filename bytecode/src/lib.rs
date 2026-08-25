@@ -188,9 +188,7 @@ mod tests {
         // `?` moved into an arm.
         let [
             Instruction::Copy,
-            Instruction::Copy,
-            Instruction::AsTuple(2),
-            Instruction::Equal,
+            Instruction::IsTuple(Some(2)),
             Instruction::Branch(is_ok, junk),
             Instruction::Branch(rest, fail),
         ] = res.sentences[SentenceIndex::from(0)][..]
@@ -1259,12 +1257,13 @@ mod tests {
             type Empty ();
         "#;
         let res = assemble(code).unwrap();
-        // A tuple spec is one `untuple` and a branch, so it contributes two
-        // arms rather than the four the old `is_tuple`/`tuple_length` guards
-        // nested. `Empty` contributes none at all: `untuple 0` leaves exactly
-        // the answer. Each tuple spec past its first element still contributes
-        // one dip block, which is flattened into a sentence of its own: one for
-        // `Pair`, one for `Nested`.
+        // A tuple spec is `pick 0 ; is_tuple n` and a branch, so it
+        // contributes two arms rather than the four the old
+        // `is_tuple`/`tuple_length` guards nested. `Empty` contributes none
+        // at all: at width zero the test is the whole check. Each tuple spec
+        // past its first element still contributes one dip block, which is
+        // flattened into a sentence of its own: one for `Pair`, one for
+        // `Nested`.
         assert_eq!(res.sentences.len(), 14);
     }
 

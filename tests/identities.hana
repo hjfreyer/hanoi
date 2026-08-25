@@ -575,3 +575,25 @@ test sentence coercing_a_tuple_asks_the_width {
 // and three stack slots, stating in pieces what one question asks.
 identity as_tuple_is_a_guarded_identity
     { as_tuple 2 } = { pick 0 is_tuple 2 branch { } { drop 0 push ((), ()) } };
+
+// `tuple m ; is_tuple n` = `tuple m ; push (m == n)` — a value the window
+// watched being built has a shape the window knows, so a test of that shape is
+// decided rather than computed.
+//
+// The sibling of `tuple n ; as_tuple n = tuple n`: that one says the coercion
+// changes nothing, this one says the test answers. It is what lets a `type`
+// or `enum` guard be written as `pick 0 ; is_tuple n` — the shorter spelling
+// hands the rewriter a test where the old one handed it an `equal` against a
+// built tuple, and without this row that test is a question nothing decides.
+test sentence a_built_tuple_knows_its_own_shape {
+    push 1 push 2 tuple 2 is_tuple 2   push true  jump crate::prelude::check_equals ? drop 0
+    push 1 push 2 tuple 2 is_tuple 3   push false jump crate::prelude::check_equals ? drop 0
+    push 1 push 2 tuple 2 is_tuple 0   push false jump crate::prelude::check_equals ? drop 0
+    push 1 push 2 tuple 2 is_tuple     push true  jump crate::prelude::check_equals
+}
+
+identity a_built_tuple_is_the_width_it_was_built
+    { tuple 2 is_tuple 2 } = { drop 0 drop 0 push true };
+
+identity a_built_tuple_is_no_other_width
+    { tuple 2 is_tuple 3 } = { drop 0 drop 0 push false };
