@@ -33,6 +33,30 @@ jobs:
       # Builds test-runner and runs every .hana file under tests/.
       - run: ./run_tests.sh
 
+  prove:
+    name: prove the corpus
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # Built first, so that what the next step captures is the prover's own
+      # report and not the build's.
+      - run: cargo build --bin prove
+      # `cargo test` asserts that every identity closes; this says which one
+      # did not, and prints the residual — the two sides as the tactics left
+      # them — that says what a next step would name. The report is echoed
+      # into the job summary as well, so a stuck goal reads off the checks
+      # page without opening the log.
+      - name: cargo run --bin prove -- tests
+        run: |
+          set +e
+          cargo run --quiet --bin prove -- tests >"$RUNNER_TEMP/prove.log" 2>&1
+          status=$?
+          cat "$RUNNER_TEMP/prove.log"
+          { echo '```'; cat "$RUNNER_TEMP/prove.log"; echo '```'; } >>"$GITHUB_STEP_SUMMARY"
+          exit $status
+
   fmt:
     name: cargo fmt
     runs-on: ubuntu-latest
