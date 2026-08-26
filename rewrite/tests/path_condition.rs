@@ -45,10 +45,10 @@
 //! out here.
 
 use bytecode::assemble;
-use rewrite::diagram2::rules::{Direction, Law, Match, Rule, Step};
+use rewrite::diagram2::rules::{Law, Rule, Step};
 use rewrite::diagram2::{rules, tactic};
 use rewrite::goal::Goal;
-use rewrite::graph::{Graph, NodeId, NodeKind, Source, isomorphic};
+use rewrite::graph::{Direction, Graph, Match, NodeId, NodeKind, Source, isomorphic};
 use rewrite::term::{Context, Prim, TermIndex, lower};
 
 fn term_of(terms: &mut Context, body: &str) -> TermIndex {

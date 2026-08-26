@@ -11,8 +11,8 @@
 //! belongs to whoever is proving something rather than to the module the
 //! graph lives in. What is left here is the page — this module is the thing
 //! `rewrite/src/rules.rs` was for terms, over graphs instead — and the
-//! handful of operations a driver is built out of: [`sides`], [`find`],
-//! [`propose`], [`apply`], [`replay`].
+//! handful of operations a driver is built out of: [`sides`],
+//! [`find`](crate::graph::find), [`propose`], [`apply`], [`replay`].
 //!
 //! ## A rule states its equation; the checker only compares
 //!
@@ -195,24 +195,30 @@
 //!
 //! ## Where the trust sits
 //!
-//! [`sides`] and [`apply`] are the whole of it: one builds the table, the
-//! other holds a claimed embedding to agreeing at every port and then
-//! re-points. [`find`] and [`propose`] are search, they are wrong the way a
-//! bad guess is wrong, and every answer they give goes through `apply`
-//! anyway.
+//! [`sides`] is the whole of this module's share: it builds the table, and
+//! what it builds is a [`Pair`], which [`crate::graph`] holds to being
+//! splice-able before anything is put down. The checking a rewrite needs —
+//! a claimed embedding held to agreeing at every port, then the re-pointing
+//! — is [`Pair::apply`], and [`apply`] is that with a law's name attached.
+//! [`find`](crate::graph::find) and [`propose`] are search, they are wrong
+//! the way a bad guess is wrong, and every answer they give goes through
+//! `apply` anyway.
 //!
-//! [`find`] is partial, in the two places a pattern does not pin its own
-//! match: a pattern with **no boxes** has nothing to anchor on (which is
-//! every rule's right-hand side but `not-not`'s), and a pattern that exports
-//! **one port twice** leaves the split of that port's readers a choice
-//! rather than a reading. Those are decisions, and they belong to whatever
-//! writes a derivation — which is exactly why [`Match`] carries the split
-//! rather than deriving it.
+//! [`find`](crate::graph::find) is partial, in the two places a pattern does
+//! not pin its own match: a pattern with **no boxes** has nothing to anchor
+//! on (which is every rule's right-hand side but `not-not`'s), and a pattern
+//! that exports **one port twice** leaves the split of that port's readers a
+//! choice rather than a reading. Those are decisions, and they belong to
+//! whatever writes a derivation — which is exactly why [`Match`] carries the
+//! split rather than deriving it.
 
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 
-use crate::graph::{BranchId, Graph, NodeId, NodeKind, Sink, Source};
+use crate::graph::{
+    BranchId, Direction, Graph, Match, Mismatch, NodeId, NodeKind, Pair, Sink, Source, Unpaired,
+    find_at,
+};
 use bytecode::{Instruction, Library, Value};
 
 use crate::term::{Arity, Prim};
@@ -992,52 +998,7 @@ pub fn is_wiring(law: Law) -> bool {
     )
 }
 
-/// Which side of a rule's equation to match.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Direction {
-    /// Match the left-hand side, leave the right.
-    Forward,
-    /// Match the right-hand side, leave the left.
-    Backward,
-}
-
-impl Direction {
-    fn flipped(self) -> Direction {
-        match self {
-            Direction::Forward => Direction::Backward,
-            Direction::Backward => Direction::Forward,
-        }
-    }
-}
-
 // ---- where a step lands ----------------------------------------------------------
-
-/// A subgraph, pointed at: the claim that this part of a host graph *is* one
-/// side of a rule.
-///
-/// Not a path. A term's subterm has a name in the term; a graph's subgraph
-/// has none, so the embedding itself is the name — which box is which, what
-/// the pattern's boundary stands for outside, and who reads what it leaves.
-///
-/// [`outputs`](Match::outputs) is the one field that is a **choice** rather
-/// than a reading. When two of a pattern's boundary outputs name one port,
-/// nothing in the host says which of that port's outside readers belong to
-/// which; the split is the matcher's business, and [`apply`] only holds it
-/// to being consistent.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Match {
-    /// Image of the pattern's boxes, indexed by the pattern's own node
-    /// index. A rule's side deletes nothing, so those indices are dense.
-    pub nodes: Vec<NodeId>,
-    /// What the pattern's boundary input `i` stands for in the host.
-    pub inputs: Vec<Source>,
-    /// The host sinks the pattern's boundary output `j` serves.
-    pub outputs: Vec<Vec<Sink>>,
-    /// Image of the pattern's branch ids, by the pattern's own id. A branch
-    /// id is graph-local, so the correspondence is recorded rather than
-    /// compared.
-    pub branches: Vec<BranchId>,
-}
 
 /// One rewrite: an equation, which way round, and where.
 #[derive(Debug, Clone, PartialEq)]
@@ -1057,32 +1018,20 @@ pub enum Ill {
     /// The two sides do not take and leave the same thing, so no rewrite by
     /// them could keep a graph's arity.
     Interface(Arity, Arity),
-    /// A side of the rule is not a graph. A rule that cannot be built cannot
-    /// be applied.
+    /// A side of the rule, or a graph the payload carries, is not a graph. A
+    /// rule that cannot be built cannot be applied.
     Broken(crate::graph::Error),
 }
 
-/// How a claimed embedding failed to be one. Every variant names the port
-/// that disagreed, because that is the whole content of the check.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Mismatch {
-    /// The match names a different number of boxes, inputs, outputs or
-    /// branches than the pattern has, or names one box twice.
-    Shape,
-    /// A box the match names is not there.
-    Gone(NodeId),
-    /// The box at that node is not the one the pattern has in its place.
-    Kind(NodeId),
-    /// That input port reads something other than what the pattern says.
-    Edge(Sink),
-    /// That port's readers are not the ones the match accounts for — a
-    /// reader the pattern does not export, or one it claims twice, or one it
-    /// claims that reads something else.
-    Readers(Source),
-    /// A link the pattern does not have: the match sends a boundary of its
-    /// own into the very subgraph it is matching, so what it points at is
-    /// not isomorphic to the pattern but to the pattern plus an edge.
-    Induced(Source),
+/// The two ways a [`Pair`] refuses to be one, said as a payload's fault —
+/// which is what they are, since a rule builds both sides itself.
+impl From<Unpaired> for Ill {
+    fn from(why: Unpaired) -> Ill {
+        match why {
+            Unpaired::Interface(l, r) => Ill::Interface(l, r),
+            Unpaired::Broken(e) => Ill::Broken(e),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1159,26 +1108,31 @@ impl std::error::Error for Error {}
 /// The two graphs a rule says are the same program, built from its payload
 /// alone.
 ///
-/// This is the table. It reads no graph it was not handed, tests nothing,
-/// and decides nothing: a payload that states no equation comes back as
-/// [`Error::Ill`] rather than as a silently wrong pair.
+/// This is the table, and after it the rest is [`crate::graph`]'s: what
+/// comes back is a [`Pair`], which knows nothing of laws and everything
+/// about being splice-able, and every rewrite in this module is that pair
+/// applied somewhere.
+///
+/// It reads no graph it was not handed, tests nothing, and decides nothing:
+/// a payload that states no equation comes back as [`Error::Ill`] rather
+/// than as a silently wrong pair.
 ///
 /// The two sides share a branch-id namespace — a [`BranchId`] means the same
 /// branch on both — which is what lets a rule keep a branch across a
 /// rewrite rather than only make or delete one.
-pub fn sides(rule: &Rule) -> Result<(Graph, Graph), Error> {
+pub fn sides(rule: &Rule) -> Result<Pair, Error> {
     let law = rule.law();
     let ill = |why| Error::Ill { law, why };
     let (a, b) = match rule {
         Rule::IdElim { n } => {
             let n = *n;
             (
-                one_box(NodeKind::Id(n)),
+                Graph::of_box(NodeKind::Id(n)),
                 wires(n, (0..n).map(Source::Input).collect()),
             )
         }
         Rule::SwapElim => (
-            one_box(NodeKind::Op(Prim::Swap)),
+            Graph::of_box(NodeKind::Op(Prim::Swap)),
             // Output 0 is what came in on top, which is what a crossing is.
             wires(2, vec![Source::Input(1), Source::Input(0)]),
         ),
@@ -1187,7 +1141,7 @@ pub fn sides(rule: &Rule) -> Result<(Graph, Graph), Error> {
             // Block-wise, as the box is: output `i` and output `n + i` both
             // stand for input `i`, so the right side names one source twice.
             let both = (0..n).chain(0..n).map(Source::Input).collect();
-            (one_box(NodeKind::Copy(n)), wires(n, both))
+            (Graph::of_box(NodeKind::Copy(n)), wires(n, both))
         }
         Rule::DeadNode { kind } => {
             let inputs = kind.arity().inputs;
@@ -1536,10 +1490,10 @@ pub fn sides(rule: &Rule) -> Result<(Graph, Graph), Error> {
             };
             let mut takes = views[..f].to_vec();
             takes.extend(outside(f, t_extra));
-            let this = implant(&mut whole, then_arm, &takes);
+            let this = whole.implant(then_arm, &takes);
             let mut takes = views[f..].to_vec();
             takes.extend(outside(f + t_extra, e_extra));
-            let that = implant(&mut whole, else_arm, &takes);
+            let that = whole.implant(else_arm, &takes);
             let mut chooses = vec![lit[0]];
             chooses.extend(this);
             chooses.extend(that);
@@ -1561,13 +1515,17 @@ pub fn sides(rule: &Rule) -> Result<(Graph, Graph), Error> {
             let lit = kept.add(NodeKind::Op(Prim::Push(value.clone())), Vec::new());
             // A branch id means the same branch on both sides, so the ids
             // this side does not use are skipped over rather than reused.
-            let skip = if taken { 1 } else { 1 + then_arm.branches };
+            let skip = if taken {
+                1
+            } else {
+                1 + then_arm.branch_count()
+            };
             for _ in 0..skip {
                 kept.next_branch();
             }
             let mut takes: Vec<Source> = outside(0, f).collect();
             takes.extend(outside(at, arm.arity().inputs - f));
-            let mut answers = implant(&mut kept, arm, &takes);
+            let mut answers = kept.implant(arm, &takes);
             answers.push(lit[0]);
             kept.close(answers);
 
@@ -1830,7 +1788,7 @@ pub fn sides(rule: &Rule) -> Result<(Graph, Graph), Error> {
             let answer = asked.add(kind.clone(), handed.clone());
             let mut takes = vec![answer[0]];
             takes.extend(outside.iter().copied());
-            let mut out = implant(&mut asked, body, &takes);
+            let mut out = asked.implant(body, &takes);
             out.push(answer[0]);
             asked.close(out);
 
@@ -1843,7 +1801,7 @@ pub fn sides(rule: &Rule) -> Result<(Graph, Graph), Error> {
                 let lit = split.add(NodeKind::Op(Prim::Push(Value::Bool(value))), Vec::new());
                 let mut takes = vec![lit[0]];
                 takes.extend(outside.iter().copied());
-                implant(split, body, &takes)
+                split.implant(body, &takes)
             };
             let sure = copy(&mut split, true);
             let doubted = copy(&mut split, false);
@@ -1888,21 +1846,13 @@ pub fn sides(rule: &Rule) -> Result<(Graph, Graph), Error> {
             takes.extend((0..n).map(block(true)));
             takes.extend((0..n).map(block(false)));
             let answers = chosen.add(NodeKind::Select { arity: n, branch }, takes);
-            let out = implant(&mut chosen, body, &feeds(answers));
+            let out = chosen.implant(body, &feeds(answers));
             chosen.close(out);
 
             let mut hoisted = Graph::empty(width);
             let branch = hoisted.next_branch();
-            let sure = implant(
-                &mut hoisted,
-                body,
-                &feeds((0..n).map(block(true)).collect()),
-            );
-            let doubted = implant(
-                &mut hoisted,
-                body,
-                &feeds((0..n).map(block(false)).collect()),
-            );
+            let sure = hoisted.implant(body, &feeds((0..n).map(block(true)).collect()));
+            let doubted = hoisted.implant(body, &feeds((0..n).map(block(false)).collect()));
             let mut chooses = vec![Source::Input(0)];
             chooses.extend(sure);
             chooses.extend(doubted);
@@ -2133,23 +2083,7 @@ pub fn sides(rule: &Rule) -> Result<(Graph, Graph), Error> {
             (forced, guarded)
         }
     };
-    if a.arity() != b.arity() {
-        return Err(ill(Ill::Interface(a.arity(), b.arity())));
-    }
-    a.check().map_err(|e| ill(Ill::Broken(e)))?;
-    b.check().map_err(|e| ill(Ill::Broken(e)))?;
-    Ok((a, b))
-}
-
-/// One box, its inputs the boundary's and every output port exported in
-/// order: the window one node fills.
-fn one_box(kind: NodeKind) -> Graph {
-    let arity = kind.arity();
-    let mut g = Graph::empty(arity.inputs);
-    let kind = refresh(&mut g, kind);
-    let ports = g.add(kind, (0..arity.inputs).map(Source::Input).collect());
-    g.close(ports);
-    g
+    Pair::new(a, b).map_err(|why| ill(why.into()))
 }
 
 /// The same box with **nothing exported**, which is how "nothing reads this"
@@ -2157,7 +2091,7 @@ fn one_box(kind: NodeKind) -> Graph {
 fn dead_box(kind: NodeKind) -> Graph {
     let arity = kind.arity();
     let mut g = Graph::empty(arity.inputs);
-    let kind = refresh(&mut g, kind);
+    let kind = g.refresh(kind);
     g.add(kind, (0..arity.inputs).map(Source::Input).collect());
     g.close(Vec::new());
     g
@@ -2168,50 +2102,6 @@ fn wires(inputs: usize, outputs: Vec<Source>) -> Graph {
     let mut g = Graph::empty(inputs);
     g.close(outputs);
     g
-}
-
-/// One graph's boxes added to another, its boundary inputs standing for the
-/// sources given, answering with the sources its boundary outputs name.
-///
-/// This is what lets an **arm** be a payload rather than part of a fixed
-/// pattern. A rule about a whole branch cannot spell its arms out — they are
-/// whatever the program put there — so it carries them, exactly as the term
-/// version carried subterms, and [`sides`] implants them between the two
-/// ends.
-fn implant(into: &mut Graph, arm: &Graph, inputs: &[Source]) -> Vec<Source> {
-    debug_assert_eq!(inputs.len(), arm.inputs.len(), "one source per input");
-    let base = into.branches;
-    let mut fresh: Vec<NodeId> = Vec::with_capacity(arm.nodes.len());
-    let carry = |src: Source, fresh: &[NodeId]| match src {
-        Source::Input(i) => inputs[i],
-        Source::Port { node, port } => Source::Port {
-            node: fresh[node.index()],
-            port,
-        },
-    };
-    for slot in &arm.nodes {
-        let node = slot.as_ref().expect("an arm keeps every box it builds");
-        let takes = node.inputs.iter().map(|&s| carry(s, &fresh)).collect();
-        fresh.push(into.add_node(lift(&node.kind, base), takes));
-    }
-    into.branches += arm.branches;
-    arm.outputs.iter().map(|&s| carry(s, &fresh)).collect()
-}
-
-/// An arm's own branch ids, moved clear of the ones its host has already
-/// handed out.
-fn lift(kind: &NodeKind, base: u32) -> NodeKind {
-    match kind {
-        NodeKind::Fork { arity, branch } => NodeKind::Fork {
-            arity: *arity,
-            branch: BranchId(base + branch.0),
-        },
-        NodeKind::Select { arity, branch } => NodeKind::Select {
-            arity: *arity,
-            branch: BranchId(base + branch.0),
-        },
-        other => other.clone(),
-    }
 }
 
 /// Runs one instruction on the operands it wants, on the machine itself.
@@ -2258,48 +2148,28 @@ fn taken_apart(graph: &Graph, takes: &[Source], n: usize) -> Option<NodeId> {
         .then_some(apart)
 }
 
-/// A branch id off a host graph means nothing in a rule, so a rule's side
-/// mints its own; [`Match::branches`] is what carries the correspondence
-/// back.
-fn refresh(g: &mut Graph, kind: NodeKind) -> NodeKind {
-    match kind {
-        NodeKind::Fork { arity, .. } => NodeKind::Fork {
-            arity,
-            branch: g.next_branch(),
-        },
-        NodeKind::Select { arity, .. } => NodeKind::Select {
-            arity,
-            branch: g.next_branch(),
-        },
-        other => other,
-    }
-}
-
 // ---- applying a step -------------------------------------------------------------
 
 /// One rewrite, and the step that undoes it.
 ///
-/// The whole of the checking is here, and none of it searches: build both
-/// sides, hold the match to being an isomorphism onto an induced subgraph,
-/// then delete that subgraph and put the other side in its place.
+/// A step is a law's name, a direction and a place; this is where those
+/// three become a rewrite. [`sides`] turns the payload into a [`Pair`] and
+/// [`Pair::apply`] does the rest — checking the match, deleting what it
+/// points at, putting the other side down — so the whole of what this adds
+/// is the law's name, on the way in to say which pair and on the way out to
+/// say what was spent.
 ///
-/// The answer is the **inverse step**. This is the one place a graph cannot
-/// copy the term version: a path survived a rewrite unchanged, but a
-/// [`Match`] names host [`NodeId`]s and the replacement's boxes are freshly
-/// allocated, so the way back has to be handed over rather than derived by
-/// flipping a bit.
+/// The answer is the **inverse step**, which [`Pair::apply`] hands back as
+/// the embedding of what it just put down.
 pub fn apply(graph: &mut Graph, step: &Step) -> Result<Step, Error> {
-    let (lhs, rhs) = sides(&step.rule)?;
-    let (pattern, replacement) = match step.dir {
-        Direction::Forward => (&lhs, &rhs),
-        Direction::Backward => (&rhs, &lhs),
-    };
-    check_match(graph, pattern, &step.at).map_err(|at| Error::NotThere {
-        law: step.rule.law(),
-        dir: step.dir,
-        at,
-    })?;
-    let back = splice(graph, replacement, &step.at);
+    let pair = sides(&step.rule)?;
+    let back = pair
+        .apply(graph, step.dir, &step.at)
+        .map_err(|at| Error::NotThere {
+            law: step.rule.law(),
+            dir: step.dir,
+            at,
+        })?;
     Ok(Step {
         rule: step.rule.clone(),
         dir: step.dir.flipped(),
@@ -2361,7 +2231,7 @@ impl Derivation {
             let here = Step {
                 rule: back.rule.clone(),
                 dir: back.dir,
-                at: rebase(&back.at, &moved),
+                at: back.at.rebase(&moved),
             };
             let restored = apply(graph, &here)?;
             // What this undo put back is what the step had matched, under
@@ -2377,36 +2247,6 @@ impl Derivation {
     }
 }
 
-/// A match said again in terms of the boxes that stand where its own used
-/// to.
-fn rebase(at: &Match, moved: &HashMap<NodeId, NodeId>) -> Match {
-    let now = |id: NodeId| moved.get(&id).copied().unwrap_or(id);
-    let port = |src: Source| match src {
-        Source::Port { node, port } => Source::Port {
-            node: now(node),
-            port,
-        },
-        boundary => boundary,
-    };
-    let reader = |sink: Sink| match sink {
-        Sink::Port { node, port } => Sink::Port {
-            node: now(node),
-            port,
-        },
-        boundary => boundary,
-    };
-    Match {
-        nodes: at.nodes.iter().map(|&id| now(id)).collect(),
-        inputs: at.inputs.iter().map(|&src| port(src)).collect(),
-        outputs: at
-            .outputs
-            .iter()
-            .map(|sinks| sinks.iter().map(|&sink| reader(sink)).collect())
-            .collect(),
-        branches: at.branches.clone(),
-    }
-}
-
 /// Every step applied in order, answering with the run that did it.
 ///
 /// A derivation replays against the graph it was written for and no other:
@@ -2419,589 +2259,6 @@ pub fn replay(graph: &mut Graph, steps: &[Step]) -> Result<Derivation, Error> {
         run.push(graph, step.clone())?;
     }
     Ok(run)
-}
-
-/// Whether the match points at a subgraph isomorphic to the pattern.
-///
-/// Five conditions, and between them they say "isomorphic onto an induced
-/// subgraph, with every loose end accounted for":
-///
-/// 1. **Shape** — one image per box, one source per boundary input, one
-///    reader list per boundary output, and no box named twice.
-/// 2. **Kinds** — the same box, modulo the branch renaming the match
-///    carries.
-/// 3. **Edges** — every input port of a matched box reads what the pattern
-///    says it reads.
-/// 4. **Fullness** — every output port's readers in the host are *exactly*
-///    the pattern's own readers plus the ones the match hands to the
-///    boundary. A port the pattern does not export therefore has no reader
-///    at all, which is what makes `dead-node` a rule rather than a test, and
-///    a reader nobody claimed is a loose end the rewrite would strand.
-/// 5. **Inducedness** — no boundary of the match points back inside it.
-///
-/// The indexing here is unchecked on purpose: a pattern comes from
-/// [`sides`], which holds it to [`Graph::check`](crate::graph::Graph::check), so
-/// every source it names is a source it has. What is *not* trusted is the
-/// match, and every field of it is measured against the pattern before it
-/// is used to index anything.
-fn check_match(graph: &Graph, pattern: &Graph, at: &Match) -> Result<(), Mismatch> {
-    debug_assert!(
-        pattern.nodes.iter().all(Option::is_some),
-        "a rule's side deletes nothing, so its boxes are dense"
-    );
-    let boxes = pattern.nodes.len();
-    if at.nodes.len() != boxes
-        || at.inputs.len() != pattern.inputs.len()
-        || at.outputs.len() != pattern.outputs.len()
-        || at.branches.len() != pattern.branches as usize
-    {
-        return Err(Mismatch::Shape);
-    }
-    let inside: HashSet<NodeId> = at.nodes.iter().copied().collect();
-    if inside.len() != at.nodes.len()
-        || at.branches.iter().collect::<HashSet<_>>().len() != at.branches.len()
-    {
-        return Err(Mismatch::Shape);
-    }
-    for &id in &at.nodes {
-        if !graph.is_live(id) {
-            return Err(Mismatch::Gone(id));
-        }
-    }
-    // A pattern source, read in the host.
-    let image = |src: Source| match src {
-        Source::Input(i) => at.inputs[i],
-        Source::Port { node, port } => Source::Port {
-            node: at.nodes[node.index()],
-            port,
-        },
-    };
-
-    for i in 0..boxes {
-        let here = NodeId::at(i);
-        let host = at.nodes[i];
-        if !same_kind(pattern.kind(here), graph.kind(host), &at.branches) {
-            return Err(Mismatch::Kind(host));
-        }
-        // Edges.
-        for (port, &src) in pattern.sources(here).iter().enumerate() {
-            let sink = Sink::Port { node: host, port };
-            if graph.sources(host).get(port) != Some(&image(src)) {
-                return Err(Mismatch::Edge(sink));
-            }
-        }
-        // Fullness.
-        for port in 0..pattern.kind(here).arity().outputs {
-            let mine = Source::Port { node: here, port };
-            let theirs = Source::Port { node: host, port };
-            let mut want: Vec<Sink> = Vec::new();
-            for &sink in pattern.sinks(mine) {
-                match sink {
-                    Sink::Port { node, port } => want.push(Sink::Port {
-                        node: at.nodes[node.index()],
-                        port,
-                    }),
-                    Sink::Output(j) => want.extend(at.outputs[j].iter().copied()),
-                }
-            }
-            if !same_readers(&want, graph.sinks(theirs)) {
-                return Err(Mismatch::Readers(theirs));
-            }
-        }
-    }
-
-    // Every reader the match hands to a boundary output really does read
-    // what that output names — which is the whole check for an output that
-    // names a boundary *input*, since no box's port covers those.
-    for (j, &src) in pattern.outputs().iter().enumerate() {
-        let want = image(src);
-        for &sink in &at.outputs[j] {
-            if reads(graph, sink) != Some(want) {
-                return Err(Mismatch::Readers(want));
-            }
-            if let Sink::Port { node, .. } = sink
-                && inside.contains(&node)
-            {
-                return Err(Mismatch::Induced(want));
-            }
-        }
-    }
-    for &src in &at.inputs {
-        if let Source::Port { node, .. } = src
-            && inside.contains(&node)
-        {
-            return Err(Mismatch::Induced(src));
-        }
-    }
-    Ok(())
-}
-
-/// The subgraph out, the replacement in, and the embedding of what went in —
-/// which is where the inverse step lands.
-fn splice(graph: &mut Graph, replacement: &Graph, at: &Match) -> Match {
-    let inside: HashSet<NodeId> = at.nodes.iter().copied().collect();
-
-    // Out. A link to a box that is also going away needs no unlinking: the
-    // list it would be removed from goes with it.
-    for &id in &at.nodes {
-        let sources = graph.node(id).inputs.clone();
-        for (port, &src) in sources.iter().enumerate() {
-            let doomed = matches!(src, Source::Port { node, .. } if inside.contains(&node));
-            if !doomed {
-                graph.unlink(src, Sink::Port { node: id, port });
-            }
-        }
-    }
-    for &id in &at.nodes {
-        graph.nodes[id.index()] = None;
-    }
-
-    // A branch the replacement keeps is the one the match named; a branch it
-    // introduces is new to the host.
-    let mut branches = at.branches.clone();
-    while branches.len() < replacement.branches as usize {
-        branches.push(graph.next_branch());
-    }
-
-    // In. A rule's side builds its boxes producers-first, so its own order
-    // is one the host can add them in.
-    let mut fresh: Vec<NodeId> = Vec::with_capacity(replacement.nodes.len());
-    let carry = |src: Source, at: &Match, fresh: &[NodeId]| match src {
-        Source::Input(i) => at.inputs[i],
-        Source::Port { node, port } => Source::Port {
-            node: fresh[node.index()],
-            port,
-        },
-    };
-    for slot in &replacement.nodes {
-        let node = slot.as_ref().expect("a rule's side deletes nothing");
-        let kind = rename(&node.kind, &branches);
-        let inputs = node.inputs.iter().map(|&s| carry(s, at, &fresh)).collect();
-        fresh.push(graph.add_node(kind, inputs));
-    }
-
-    // And the loose ends, re-pointed: everything the match handed to a
-    // boundary output now names what the replacement leaves there. This is
-    // the one move that grows a port's readers, and where `copy-elim` turns
-    // a wiring diagram into a cartesian one.
-    for (j, &src) in replacement.outputs().iter().enumerate() {
-        let target = carry(src, at, &fresh);
-        for &sink in &at.outputs[j] {
-            // Whatever the reader named before has to be told it is no
-            // longer read there — unless it was one of the boxes that just
-            // went away, which took its reader list with it. A rule whose
-            // side exports a boundary *input* is where this bites: the
-            // source survives the rewrite, so the stale link would too.
-            if let Some(old) = reads(graph, sink)
-                && graph.valid(old)
-            {
-                graph.unlink(old, sink);
-            }
-            graph.set_source(sink, target);
-            graph.sinks_mut(target).push(sink);
-        }
-    }
-
-    Match {
-        nodes: fresh,
-        // The pattern's boundary was outside the match and is untouched, and
-        // the readers that were handed to output `j` now read the
-        // replacement's output `j` — so the way back is the same embedding
-        // over the other side.
-        inputs: at.inputs.clone(),
-        outputs: at.outputs.clone(),
-        branches: branches[..replacement.branches as usize].to_vec(),
-    }
-}
-
-/// The same box, modulo the branch renaming — which is what a derived
-/// `PartialEq` on [`NodeKind`] cannot be, since a branch id is graph-local
-/// and two graphs that mean the same thing need not have hit on the same
-/// numbers.
-fn same_kind(pattern: &NodeKind, host: &NodeKind, branches: &[BranchId]) -> bool {
-    let named = |b: &BranchId| branches.get(b.index()).copied();
-    match (pattern, host) {
-        (
-            NodeKind::Fork { arity, branch },
-            NodeKind::Fork {
-                arity: n,
-                branch: b,
-            },
-        ) => arity == n && named(branch) == Some(*b),
-        (
-            NodeKind::Select { arity, branch },
-            NodeKind::Select {
-                arity: n,
-                branch: b,
-            },
-        ) => arity == n && named(branch) == Some(*b),
-        (NodeKind::Fork { .. } | NodeKind::Select { .. }, _) => false,
-        (_, NodeKind::Fork { .. } | NodeKind::Select { .. }) => false,
-        (a, b) => a == b,
-    }
-}
-
-/// The same box **ignoring** branch ids — what the search prunes on, since
-/// it binds the renaming as it goes and [`same_kind`] is what holds the
-/// binding it settled on.
-fn kinds_fit(pattern: &NodeKind, host: &NodeKind) -> bool {
-    match (pattern, host) {
-        (NodeKind::Fork { arity, .. }, NodeKind::Fork { arity: n, .. })
-        | (NodeKind::Select { arity, .. }, NodeKind::Select { arity: n, .. }) => arity == n,
-        (NodeKind::Fork { .. } | NodeKind::Select { .. }, _) => false,
-        (_, NodeKind::Fork { .. } | NodeKind::Select { .. }) => false,
-        (a, b) => a == b,
-    }
-}
-
-/// A replacement's box, with its branch ids read as the host's.
-fn rename(kind: &NodeKind, branches: &[BranchId]) -> NodeKind {
-    match kind {
-        NodeKind::Fork { arity, branch } => NodeKind::Fork {
-            arity: *arity,
-            branch: branches[branch.index()],
-        },
-        NodeKind::Select { arity, branch } => NodeKind::Select {
-            arity: *arity,
-            branch: branches[branch.index()],
-        },
-        other => other.clone(),
-    }
-}
-
-/// Two reader lists holding the same sinks the same number of times. Order
-/// is not part of what a port's readers are.
-fn same_readers(want: &[Sink], have: &[Sink]) -> bool {
-    if want.len() != have.len() {
-        return false;
-    }
-    let mut tally: HashMap<Sink, isize> = HashMap::new();
-    for &s in want {
-        *tally.entry(s).or_default() += 1;
-    }
-    for &s in have {
-        *tally.entry(s).or_default() -= 1;
-    }
-    tally.values().all(|&n| n == 0)
-}
-
-/// What one sink reads, or `None` if it is not a port of this graph.
-fn reads(graph: &Graph, sink: Sink) -> Option<Source> {
-    match sink {
-        Sink::Output(i) => graph.outputs().get(i).copied(),
-        Sink::Port { node, port } => {
-            if !graph.is_live(node) {
-                return None;
-            }
-            graph.sources(node).get(port).copied()
-        }
-    }
-}
-
-// ---- finding one, which is not the checker's business ----------------------------
-
-/// Every embedding of `pattern` in `graph`.
-///
-/// Search, and wrong the way a guess is wrong: everything it does is checked
-/// by [`apply`] anyway, so a matcher with a bug makes a rewrite that is
-/// refused rather than one that changes what a program means.
-///
-/// It **declines** — answers with nothing, for every graph — where a pattern
-/// does not pin its own match:
-///
-/// - a pattern with no boxes has nothing to anchor on, which is every
-///   right-hand side in the table but `not-not`'s;
-/// - a pattern that exports one port twice, or that exports a boundary
-///   input, leaves the split of that source's outside readers a choice.
-///
-/// Those are the payloads a derivation has to *state* rather than read, and
-/// [`Match`] is where it states them.
-pub fn find(graph: &Graph, pattern: &Graph) -> Vec<Match> {
-    graph
-        .live()
-        .map(|(id, _)| id)
-        .flat_map(|seed| find_at(graph, pattern, seed))
-        .collect()
-}
-
-/// [`find`], with the pattern's first box pinned to one node. What
-/// [`propose`] uses, since a rule read off a node is a rule anchored there.
-pub fn find_at(graph: &Graph, pattern: &Graph, seed: NodeId) -> Vec<Match> {
-    find_pinned(graph, pattern, 0, seed)
-}
-
-/// [`find_at`], with pattern box `pat` — not necessarily the first —
-/// pinned to `host`.
-///
-/// This is what lets a driver anchor a rule at the box its *query* bound
-/// rather than the box the pattern happens to begin with: a pattern is
-/// built producers-first, so the box a rule is naturally *about* need not
-/// be its first. The walk starts at `pat` and the answer is unchanged —
-/// a [`Match`] is indexed by the pattern's own order whatever order the
-/// search visited it in.
-pub fn find_pinned(graph: &Graph, pattern: &Graph, pat: usize, host: NodeId) -> Vec<Match> {
-    if !pins_itself(pattern) || pat >= pattern.nodes.len() || !graph.is_live(host) {
-        return Vec::new();
-    }
-    let mut order: Vec<usize> = (0..pattern.nodes.len()).collect();
-    order.remove(pat);
-    order.insert(0, pat);
-    let mut search = Search {
-        graph,
-        pattern,
-        order,
-        nodes: vec![None; pattern.nodes.len()],
-        inputs: vec![None; pattern.inputs.len()],
-        branches: vec![None; pattern.branches as usize],
-        used: HashSet::new(),
-        seed: host,
-        found: Vec::new(),
-    };
-    search.walk(0);
-    search.found
-}
-
-/// Whether a pattern says enough about itself to be looked for: at least one
-/// box to anchor on, no source exported twice or exported straight from
-/// the boundary, no boundary input nothing in the pattern reads, and no
-/// branch id that no box witnesses.
-///
-/// The branch decline is `select-literal`'s kept side: it **skips** branch
-/// ids so a [`BranchId`] means the same branch on both sides of the
-/// equation, and an id no fork or select carries cannot be read off a
-/// match — its image in the host is a choice, exactly as a reader-split
-/// is, so the pattern has to be stated rather than searched for. The
-/// unread-input decline is `equal-refl`'s answer side: a discard's window
-/// still stands for the discarded wire, and which wire that is cannot be
-/// read off a pattern that never touches it.
-fn pins_itself(pattern: &Graph) -> bool {
-    if pattern.nodes.is_empty() {
-        return false;
-    }
-    if pattern.inputs.iter().any(|readers| readers.is_empty()) {
-        return false;
-    }
-    let mut witnessed: HashSet<BranchId> = HashSet::new();
-    for (_, kind) in pattern.live() {
-        if let NodeKind::Fork { branch, .. } | NodeKind::Select { branch, .. } = kind {
-            witnessed.insert(*branch);
-        }
-    }
-    if witnessed.len() != pattern.branches as usize {
-        return false;
-    }
-    let mut seen = HashSet::new();
-    pattern
-        .outputs()
-        .iter()
-        .all(|src| matches!(src, Source::Port { .. }) && seen.insert(*src))
-}
-
-struct Search<'g> {
-    graph: &'g Graph,
-    pattern: &'g Graph,
-    /// The order the walk visits pattern boxes in — the pinned box first,
-    /// the rest in index order. [`Match::nodes`] stays in pattern order;
-    /// only the visiting changes.
-    order: Vec<usize>,
-    nodes: Vec<Option<NodeId>>,
-    inputs: Vec<Option<Source>>,
-    branches: Vec<Option<BranchId>>,
-    used: HashSet<NodeId>,
-    seed: NodeId,
-    found: Vec<Match>,
-}
-
-impl Search<'_> {
-    fn walk(&mut self, pos: usize) {
-        if pos == self.order.len() {
-            self.finish();
-            return;
-        }
-        let i = self.order[pos];
-        for host in self.candidates(pos) {
-            let undo = self.assign(i, host);
-            if let Some(undo) = undo {
-                self.walk(pos + 1);
-                self.undo(i, host, undo);
-            }
-        }
-    }
-
-    /// The host boxes worth trying for the box visited at `pos`.
-    ///
-    /// Once one box is fixed, its neighbours are: a port whose source is
-    /// already known has only that source's readers to offer. Only a box
-    /// nothing so far touches falls back on the whole graph, which is why
-    /// two unconnected boxes — `dedup`'s pattern — still cost one sweep
-    /// rather than a product.
-    fn candidates(&self, pos: usize) -> Vec<NodeId> {
-        if pos == 0 {
-            return vec![self.seed];
-        }
-        let here = NodeId::at(self.order[pos]);
-        for (port, &src) in self.pattern.sources(here).iter().enumerate() {
-            let known = match src {
-                Source::Input(l) => self.inputs[l],
-                Source::Port { node, port } => {
-                    self.nodes[node.index()].map(|n| Source::Port { node: n, port })
-                }
-            };
-            if let Some(known) = known {
-                return self
-                    .graph
-                    .sinks(known)
-                    .iter()
-                    .filter_map(|&sink| match sink {
-                        Sink::Port { node, port: p } if p == port => Some(node),
-                        _ => None,
-                    })
-                    .collect();
-            }
-        }
-        self.graph.live().map(|(id, _)| id).collect()
-    }
-
-    /// Pins the pattern's box `i` to a host box, answering with the boundary
-    /// inputs and the branch the assignment bound — the undo log, since a
-    /// search that took them back by recomputing would be a second copy of
-    /// this.
-    fn assign(&mut self, i: usize, host: NodeId) -> Option<(Vec<usize>, Option<usize>)> {
-        if self.used.contains(&host) {
-            return None;
-        }
-        let here = NodeId::at(i);
-        let kind = self.pattern.kind(here);
-        let branch = match (kind, self.graph.kind(host)) {
-            (NodeKind::Fork { branch, .. }, NodeKind::Fork { branch: b, .. })
-            | (NodeKind::Select { branch, .. }, NodeKind::Select { branch: b, .. }) => {
-                match self.branches[branch.index()] {
-                    Some(held) if held != *b => return None,
-                    Some(_) => None,
-                    None => {
-                        self.branches[branch.index()] = Some(*b);
-                        Some(branch.index())
-                    }
-                }
-            }
-            _ => None,
-        };
-        if !kinds_fit(kind, self.graph.kind(host)) {
-            if let Some(slot) = branch {
-                self.branches[slot] = None;
-            }
-            return None;
-        }
-        let mut fixed = Vec::new();
-        for (port, &src) in self.pattern.sources(here).iter().enumerate() {
-            let Some(&hsrc) = self.graph.sources(host).get(port) else {
-                self.rollback(&fixed, branch);
-                return None;
-            };
-            match src {
-                Source::Input(l) => match self.inputs[l] {
-                    Some(held) if held != hsrc => {
-                        self.rollback(&fixed, branch);
-                        return None;
-                    }
-                    Some(_) => {}
-                    None => {
-                        self.inputs[l] = Some(hsrc);
-                        fixed.push(l);
-                    }
-                },
-                Source::Port { node, port } => {
-                    // A producer not yet placed is not a mismatch: the walk
-                    // visits the pinned box first, so a consumer can come
-                    // before what feeds it, and [`check_match`] holds every
-                    // edge at the end either way. In pattern order this arm
-                    // never defers — a rule's side is built producers-first.
-                    match self.nodes[node.index()] {
-                        None => {}
-                        Some(n) if hsrc == (Source::Port { node: n, port }) => {}
-                        Some(_) => {
-                            self.rollback(&fixed, branch);
-                            return None;
-                        }
-                    }
-                }
-            }
-        }
-        self.nodes[i] = Some(host);
-        self.used.insert(host);
-        Some((fixed, branch))
-    }
-
-    fn rollback(&mut self, fixed: &[usize], branch: Option<usize>) {
-        for &l in fixed {
-            self.inputs[l] = None;
-        }
-        if let Some(slot) = branch {
-            self.branches[slot] = None;
-        }
-    }
-
-    fn undo(&mut self, i: usize, host: NodeId, (fixed, branch): (Vec<usize>, Option<usize>)) {
-        self.nodes[i] = None;
-        self.used.remove(&host);
-        self.rollback(&fixed, branch);
-    }
-
-    /// Every box placed. What is left is to read off who reads what the
-    /// pattern leaves, and to hold the whole thing to the checker.
-    fn finish(&mut self) {
-        let nodes: Vec<NodeId> = match self.nodes.iter().copied().collect() {
-            Some(nodes) => nodes,
-            None => return,
-        };
-        let inputs: Vec<Source> = match self.inputs.iter().copied().collect() {
-            Some(inputs) => inputs,
-            None => return,
-        };
-        let branches: Vec<BranchId> = match self.branches.iter().copied().collect() {
-            Some(branches) => branches,
-            None => return,
-        };
-        let mut outputs = Vec::with_capacity(self.pattern.outputs().len());
-        for &src in self.pattern.outputs() {
-            let Source::Port { node, port } = src else {
-                return;
-            };
-            let host = Source::Port {
-                node: nodes[node.index()],
-                port,
-            };
-            // Whoever reads that port and is not one of the pattern's own
-            // readers is reading it from outside, and that is what the
-            // boundary output stands for.
-            let mut left: Vec<Sink> = self.graph.sinks(host).to_vec();
-            for &sink in self.pattern.sinks(src) {
-                let Sink::Port { node, port } = sink else {
-                    continue;
-                };
-                let theirs = Sink::Port {
-                    node: nodes[node.index()],
-                    port,
-                };
-                match left.iter().position(|&s| s == theirs) {
-                    Some(k) => {
-                        left.remove(k);
-                    }
-                    None => return,
-                }
-            }
-            outputs.push(left);
-        }
-        let found = Match {
-            nodes,
-            inputs,
-            outputs,
-            branches,
-        };
-        if check_match(self.graph, self.pattern, &found).is_ok() {
-            self.found.push(found);
-        }
-    }
 }
 
 /// The steps that could fire at one box.
@@ -3051,8 +2308,8 @@ pub fn propose(graph: &Graph, laws: &[Law], id: NodeId) -> Vec<Step> {
     let mut out = Vec::new();
     for &law in laws {
         for (rule, seed) in read_off(graph, law, id) {
-            let Ok((lhs, _)) = sides(&rule) else { continue };
-            out.extend(find_at(graph, &lhs, seed).into_iter().map(|at| Step {
+            let Ok(pair) = sides(&rule) else { continue };
+            out.extend(find_at(graph, pair.lhs(), seed).into_iter().map(|at| Step {
                 rule: rule.clone(),
                 dir: Direction::Forward,
                 at,
@@ -3204,8 +2461,7 @@ fn arm(
         }
     }
     let renumber = |kind: &NodeKind| {
-        let of =
-            |b: &BranchId| BranchId(branches.iter().position(|h| h == b).expect("noted") as u32);
+        let of = |b: &BranchId| BranchId::at(branches.iter().position(|h| h == b).expect("noted"));
         match kind {
             NodeKind::Fork { arity, branch } => NodeKind::Fork {
                 arity: *arity,
@@ -3236,7 +2492,6 @@ fn arm(
         let takes = graph.sources(node).iter().map(|&s| inside(s)).collect();
         lifted.add(renumber(graph.kind(node)), takes);
     }
-    lifted.branches = branches.len() as u32;
     lifted.close(blocks.iter().map(|&s| inside(s)).collect());
     lifted.check().ok()?;
     Some(lifted)
@@ -3335,8 +2590,7 @@ fn downstream_of(graph: &Graph, answers: &[Source], spare: bool) -> Option<Graph
         }
     }
     let renumber = |kind: &NodeKind| {
-        let of =
-            |b: &BranchId| BranchId(branches.iter().position(|h| h == b).expect("noted") as u32);
+        let of = |b: &BranchId| BranchId::at(branches.iter().position(|h| h == b).expect("noted"));
         match kind {
             NodeKind::Fork { arity, branch } => NodeKind::Fork {
                 arity: *arity,
@@ -3367,7 +2621,6 @@ fn downstream_of(graph: &Graph, answers: &[Source], spare: bool) -> Option<Graph
         let takes = graph.sources(node).iter().map(|&s| inside(s)).collect();
         lifted.add(renumber(graph.kind(node)), takes);
     }
-    lifted.branches = branches.len() as u32;
     lifted.close(
         graph
             .outputs()
@@ -3925,7 +3178,7 @@ mod tests {
     use super::*;
     use crate::diagram2::build;
     use crate::diagram2::meaning::{Meaning, boundary, eval_graph};
-    use crate::graph::isomorphic;
+    use crate::graph::{find, find_pinned, isomorphic, kinds_fit, pins_itself};
     use crate::term::Context;
     use bytecode::{Value, assemble};
 
@@ -3958,10 +3211,11 @@ mod tests {
     /// 5. The step that comes back undoes it.
     fn holds(law: Law, rule: Rule) {
         assert_eq!(rule.law(), law, "the payload names the wrong law");
-        let (lhs, rhs) =
+        let pair =
             sides(&rule).unwrap_or_else(|e| panic!("{:?} does not state an equation: {}", law, e));
+        let (lhs, rhs) = (pair.lhs(), pair.rhs());
         assert_eq!(lhs.arity(), rhs.arity());
-        means_the_same(law, &lhs, &rhs);
+        means_the_same(law, lhs, rhs);
 
         for (dir, here, there) in [
             (Direction::Forward, &lhs, &rhs),
@@ -3988,7 +3242,7 @@ mod tests {
                     dir
                 );
             }
-            let mut whole = here.clone();
+            let mut whole: Graph = (*here).clone();
             let step = Step {
                 rule: rule.clone(),
                 dir,
@@ -4013,12 +3267,12 @@ mod tests {
     /// boundary its own, and the boundary outputs served by nothing.
     fn identity(g: &Graph) -> Match {
         Match {
-            nodes: (0..g.nodes.len()).map(NodeId::at).collect(),
-            inputs: (0..g.inputs.len()).map(Source::Input).collect(),
-            outputs: (0..g.outputs.len())
+            nodes: (0..g.live_count()).map(NodeId::at).collect(),
+            inputs: (0..g.arity().inputs).map(Source::Input).collect(),
+            outputs: (0..g.arity().outputs)
                 .map(|j| vec![Sink::Output(j)])
                 .collect(),
-            branches: (0..g.branches).map(BranchId).collect(),
+            branches: (0..g.branch_count()).map(BranchId::at).collect(),
         }
     }
 
@@ -4084,7 +3338,7 @@ mod tests {
             NodeKind::Copy(2),
             NodeKind::Select {
                 arity: 2,
-                branch: BranchId(7),
+                branch: BranchId::at(7),
             },
         ] {
             holds(Law::DeadNode, Rule::DeadNode { kind });
@@ -4095,7 +3349,8 @@ mod tests {
                 kind: NodeKind::Op(Prim::Add),
             })
             .unwrap()
-            .0,
+            .lhs()
+            .clone(),
         );
         assert_eq!(lhs.arity(), Arity::new(2, 0), "the window exports nothing");
     }
@@ -4129,11 +3384,11 @@ mod tests {
         for kind in [
             NodeKind::Fork {
                 arity: 2,
-                branch: BranchId(0),
+                branch: BranchId::at(0),
             },
             NodeKind::Select {
                 arity: 2,
-                branch: BranchId(0),
+                branch: BranchId::at(0),
             },
         ] {
             assert_eq!(
@@ -4237,13 +3492,14 @@ mod tests {
     fn the_machine_agrees(law: Law, rule: Rule) {
         assert_eq!(rule.law(), law, "the payload names the wrong law");
         assert!(!is_wiring(law), "a wiring law has a cheaper judge");
-        let (lhs, rhs) =
+        let pair =
             sides(&rule).unwrap_or_else(|e| panic!("{:?} does not state an equation: {}", law, e));
+        let (lhs, rhs) = (pair.lhs(), pair.rhs());
         assert_eq!(lhs.arity(), rhs.arity());
         for values in samples(lhs.arity().inputs) {
             assert_eq!(
-                eval_on(&lhs, &values),
-                eval_on(&rhs, &values),
+                eval_on(lhs, &values),
+                eval_on(rhs, &values),
                 "{:?} relates two different programs on {:?}",
                 law,
                 values
@@ -4357,11 +3613,11 @@ mod tests {
         for kind in [
             NodeKind::Fork {
                 arity: 1,
-                branch: BranchId(0),
+                branch: BranchId::at(0),
             },
             NodeKind::Select {
                 arity: 1,
-                branch: BranchId(0),
+                branch: BranchId::at(0),
             },
         ] {
             assert!(matches!(
@@ -4570,7 +3826,10 @@ mod tests {
             Law::Shannon,
             Rule::Shannon {
                 kind: NodeKind::Op(Prim::IsInt),
-                body: sides(&Rule::SelectSame { arity: 1, at: 0 }).unwrap().0,
+                body: sides(&Rule::SelectSame { arity: 1, at: 0 })
+                    .unwrap()
+                    .lhs()
+                    .clone(),
             },
         );
         // The set does not promise `add` answers a bool, so there is no
@@ -4623,7 +3882,10 @@ mod tests {
             Law::SelectHoist,
             Rule::SelectHoist {
                 arity: 1,
-                body: sides(&Rule::SelectSame { arity: 1, at: 0 }).unwrap().0,
+                body: sides(&Rule::SelectSame { arity: 1, at: 0 })
+                    .unwrap()
+                    .lhs()
+                    .clone(),
             },
         );
         // A body that leaves nothing states no equation, and neither does
@@ -5116,7 +4378,8 @@ mod tests {
             then_arm: adds,
             else_arm: yields(1, Value::Int(5)),
         };
-        let (lhs, _) = sides(&rule).unwrap();
+        let pair = sides(&rule).unwrap();
+        let lhs = pair.lhs();
         // One view, plus the outside value the then arm reads.
         assert_eq!(lhs.arity().inputs, 2);
         the_machine_agrees(Law::SelectLiteral, rule);
@@ -5295,9 +4558,9 @@ mod tests {
                 kind: NodeKind::Op(Prim::Add),
             },
         ] {
-            let (_, rhs) = sides(&rule).unwrap();
+            let pair = sides(&rule).unwrap();
             assert!(
-                find(&graph, &rhs).is_empty(),
+                find(&graph, pair.rhs()).is_empty(),
                 "{:?} backward was matched anyway",
                 rule.law()
             );
@@ -5306,14 +4569,14 @@ mod tests {
         // boundary input — the discarded wire — is one the pattern never
         // touches, so its image is a choice.
         let (_terms, graph) = built("push 1 push 2 add");
-        let (_, rhs) = sides(&Rule::EqualRefl).unwrap();
-        assert!(find(&graph, &rhs).is_empty());
+        let pair = sides(&Rule::EqualRefl).unwrap();
+        assert!(find(&graph, pair.rhs()).is_empty());
 
         // `not-not` is the one right-hand side that is a box, and it reads
         // fine.
         let (_terms, graph) = built("as_bool");
-        let (_, rhs) = sides(&Rule::NotNot).unwrap();
-        assert_eq!(find(&graph, &rhs).len(), 1);
+        let pair = sides(&Rule::NotNot).unwrap();
+        assert_eq!(find(&graph, pair.rhs()).len(), 1);
     }
 
     /// The walk can start anywhere: pinning any box of a side to its own
@@ -5322,16 +4585,14 @@ mod tests {
     #[test]
     fn a_pattern_is_found_from_any_of_its_boxes() {
         for rule in table() {
-            for side in {
-                let (lhs, rhs) = sides(&rule).unwrap();
-                [lhs, rhs]
-            } {
-                if !pins_itself(&side) {
+            let pair = sides(&rule).unwrap();
+            for side in [pair.lhs(), pair.rhs()] {
+                if !pins_itself(side) {
                     continue;
                 }
-                for i in 0..side.nodes.len() {
+                for i in 0..side.live_count() {
                     assert!(
-                        find_pinned(&side, &side, i, NodeId::at(i)).contains(&identity(&side)),
+                        find_pinned(side, side, i, NodeId::at(i)).contains(&identity(side)),
                         "{:?}: pinned at box {}, the identity was not found:\n{}",
                         rule.law(),
                         i,
@@ -5537,14 +4798,14 @@ mod tests {
         }
         for rule in table() {
             let law = rule.law();
-            let (lhs, _) = sides(&rule).unwrap();
+            let pair = sides(&rule).unwrap();
             let note = format!("{:?}", law);
-            let spent = each_proposal(&lhs, &note);
+            let spent = each_proposal(pair.lhs(), &note);
             assert!(
                 spent.contains(&law),
                 "{:?}: the matcher does not read its own shape back:\n{}",
                 law,
-                lhs
+                pair.lhs()
             );
         }
     }

@@ -226,8 +226,7 @@ pub(super) fn eval_graph(m: &mut Meaning, graph: &Graph, inputs: &[SymId]) -> Ve
     };
     for id in schedule(graph) {
         let args: Vec<SymId> = graph
-            .node(id)
-            .inputs
+            .sources(id)
             .iter()
             .map(|&src| read(&ports, src))
             .collect();
@@ -265,7 +264,11 @@ pub(super) fn eval_graph(m: &mut Meaning, graph: &Graph, inputs: &[SymId]) -> Ve
             ports.insert((id, port), sym);
         }
     }
-    graph.outputs.iter().map(|&src| read(&ports, src)).collect()
+    graph
+        .outputs()
+        .iter()
+        .map(|&src| read(&ports, src))
+        .collect()
 }
 
 /// Fresh symbols for `n` boundary inputs.
