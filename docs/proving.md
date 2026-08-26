@@ -60,16 +60,15 @@ width.
 ### The engine
 
 A program in `diagram2` is a **literal** graph: one box per term leaf,
-`id`, `swap`, `copy` and `drop` included, and a branch as a `fork`/`select`
-pair with its arms flattened between them. Nothing is simplified by
+`id`, `swap`, `copy` and `drop` included, and a branch as a `copy` handing
+each arm its view, the arms flattened, and a `select` keeping one answer. Nothing is simplified by
 representation; everything is simplified by *rewriting*, against a table
 (`diagram2/rules.rs`) whose every law is a pair of graphs `sides` builds
 from a payload and whose every application `apply` verifies port by port.
 The layers of [docs/algebra.md](algebra.md) are all rows: the structural
 laws (`id-elim`, `swap-elim`, `copy-elim`, `dead-node`, `dedup`), the
-branch layer (`select-literal` and its kin, the specializing rules,
-`view-value` held to last, `select-hoist` held off every list), and the
-value layer — a literal window runs on
+branch layer (`select-const`, `select-same`, the specializing rules, and
+`select-hoist` held off every list), and the value layer — a literal window runs on
 the real `vm` (one `run_window`, no second semantics, `fold`), a promised
 bool tests true (`tested-bool`), retupling is the coercion (`retuple`), a
 value already coerced survives that round trip (`as-tuple-round-trip`), and a
@@ -88,10 +87,10 @@ opaque to every rule that asks what a value *is*, and these put the test that
 decides it where a case split can spend it.
 
 The third is `select-hoist`, and it is what lets a branch grow **forwards**.
-`fork-hoist` moves work across the fork in either direction, so a branch could
-always swallow what fed it; nothing said the same at the select, so everything
-downstream of one was out of the branch layer's reach and a select could be
-deleted but never moved. The row is the commuting conversion:
+A branch's views are a `copy`, so it swallows what fed it for free —
+`copy-elim` and `dedup` are all it takes; nothing said anything at the select,
+so everything downstream of one was out of the branch layer's reach and a
+select could be deleted but never moved. The row is the commuting conversion:
 
 ```text
 select(C, T, E) ; A  =  select(C, T ; A, E ; A)
@@ -150,12 +149,12 @@ Inside `lhs(…)`, `rhs(…)` and `both(…)` is the rewrite language of
 structural laws to fixpoint), `saturate(law, …)`, `branches` (the branch
 layer with its cleanup), `fire(law, …)` (one directed firing),
 `at(#box, law)` (one firing at a **named box**), `repeat(…)` and `try(…)`
-— laws named as the algebra sheet names them, `copy-elim`, `select-view`,
+— laws named as the algebra sheet names them, `copy-elim`, `select-same`,
 `dead-node`, with `structural` and `branching` naming the two lists.
 
 `at` is the step that answers the report in the report's own words. `fire`
 takes the first match it is offered anywhere on the side; when that is the
-wrong one, `at(#41, fork-hoist)` names the box the residual listing printed
+wrong one, `at(#41, select-hoist)` names the box the residual listing printed
 beside the line, and fires the law in a match that holds *that* box —
 anywhere in the match, not only where the law's pattern happens to anchor.
 A third field is the direction, `forward` when it is left out:
@@ -261,7 +260,7 @@ all folded shut by the closing `diagram`. And *identification comes
 first*: a program often retests one condition in several places (through
 copies and branch views), and the split only helps once the driver has
 recognized those as a single wire — which `both(decide)` does, via
-`view-value` and `dedup` — so `cases` almost always follows a drive.
+`copy-elim` and `dedup` — so `cases` almost always follows a drive.
 
 The corpus's contract claim is the worked example. It was once a page of
 hand-derived waypoints, then one `inline diagram` under the old
@@ -363,7 +362,7 @@ different jobs.
 
 **The graphs are what it shows.** One line per box — its id, what it reads,
 what reads it — with a branch written as the block it is: `if <condition>`
-at the `fork` where there is one, `else` where the second arm begins, and
+where its arms begin, `else` where the second arm begins, and
 `endif <condition>` at the `select`, the arms indented between them. The
 condition is named on all three lines, so a block deep in a nest says which
 wire it turns on; a line with an empty id column is one the listing drew
@@ -374,7 +373,7 @@ description; and a `NodeId` is stable for the life of a graph (nodes are
 only deleted, never moved), so two reports of one proof compare, which is
 what watching a proof means. Four things make a large one
 legible, and `rewrite/src/diagram2/render.rs` states each: branch
-membership is *computed* (downstream of the fork ∩ upstream of the select)
+membership is *computed* (upstream of one side's blocks and not the other's)
 rather than guessed from what sits between two lines; the order stays
 inside a branch once it enters one, instead of hoisting an arm's constants
 out of the arm; a box that reads nothing is placed just before the box that

@@ -58,7 +58,7 @@ and that case is now found rather than stated. What stays stated is what
 genuinely cannot be found — the box-less side, the reader-split.)
 
 **Strategy is data.** The deleted `saturate` comes back as a *program in
-this language*, and the doc-comment knowledge that `select-view` unlocks
+this language*, and the doc-comment knowledge that one law unlocks
 the rest of the branch layer comes back as a *library tactic* — data a
 proof can cite, not an ordering an engine hardcodes.
 
@@ -167,8 +167,6 @@ pub enum Atom {
     Exported { node: Var, port: Option<usize> },
     /// Output `port` of `node` has no readers at all.
     Unread { node: Var, port: usize },
-    /// `fork` and `select` are the two ends of one branch.
-    Paired { fork: Var, select: Var },
     /// Distinct nodes. Injectivity is otherwise not imposed.
     Ne(Var, Var),
 }
@@ -210,7 +208,7 @@ it — *a next step names the boxes it names*. Nothing in the query language
 can say that back: a `Query` describes, and the report named.
 
 `Tactic::At { node, law, dir, pick }` is the spelling that closes the loop,
-`at(#41, fork-hoist)` on the surface. Its address is a `NodeId` copied off
+`at(#41, select-hoist)` on the surface. Its address is a `NodeId` copied off
 a listing, and everything the rule above protects still holds: an id is
 never *held* across a rewrite either. It is checked live at every entry,
 re-searched between firings like every other primitive, and it fails by
@@ -252,7 +250,7 @@ validates.
 
 One extension to `rules.rs` is wanted. `find_at` pins the pattern's box 0
 to the seed, and `read_off` compensates by seeding where the pattern
-anchors — for `select-literal` that is the literal, not the select the rule
+anchors — for `select-const` that is the literal, not the select the rule
 is naturally *about*. A query, though, binds what is natural to say. Two
 remedies, both cheap, both taken: route through `propose` wherever
 possible, since `read_off` already computes the right seed for every law in
@@ -401,9 +399,9 @@ the finding of this design:
   silent.
 
 Implementation turned up a third case of the reader-split's kind, and it
-got the same treatment. `select-literal`'s kept side **skips** branch ids
-so that a `BranchId` means the same branch on both sides of the equation —
-which leaves it carrying an id no fork or select of its own witnesses. An
+got the same treatment. A side that **skips** a branch id — so that a
+`BranchId` means the same branch on both sides of the equation — is left
+carrying an id no select of its own witnesses. An
 unwitnessed id cannot be read off a match, and its image in the host is a
 genuine choice (applying that side backward *mints* the branch the other
 side's select carries). So `pins_itself` declines such patterns too, and
@@ -526,9 +524,9 @@ pub enum Region {
     /// tactic guessed. (`Derivation::latest_undo` is the one accessor
     /// this took.)
     LastImage,
-    // A Region::Arm — the boxes between a paired fork/select, computed
-    // the way rules::arm computes them — is the natural next variant,
-    // and nothing lands it until a tactic needs it.
+    // A Region::Arm — one side of a branch's boxes, computed from the
+    // select — is the natural next variant, and nothing lands it until a
+    // tactic needs it.
 }
 ```
 
@@ -541,9 +539,8 @@ id in the set binds nothing, since queries bind only live nodes).
 
 ### The branch layer's ordering, as data
 
-What the `branching()` doc comment says in prose — `select-view` pulls
-blocks out from behind a fork, and until it has, the rest of the layer has
-nothing to match — becomes a library tactic:
+What the `branching()` doc comment says in prose — the order the layer's
+laws unlock each other in — becomes a library tactic:
 
 ```rust
 /// The deleted driver, as a program: structural laws to fixpoint.
@@ -560,12 +557,12 @@ pub fn branch_pass() -> Tactic {
 }
 ```
 
-(A phased spelling — `select-view` to fixpoint, then the rest, then
-cleanup — is expressible as a `Seq` of `Repeat`s, but one law of the layer
-unlocking another means the phases have to loop *together* to reach a
-fixpoint, and one `Repeat` over the ordered list is that loop said
-plainly. `branch { add } { add }` dissolving to a single `add` — fork-dedup,
-then select-view, then select-same, then dead-node — is the test.)
+(A phased spelling — one law to fixpoint, then the rest, then cleanup — is
+expressible as a `Seq` of `Repeat`s, but one law of the layer unlocking
+another means the phases have to loop *together* to reach a fixpoint, and
+one `Repeat` over the ordered list is that loop said plainly.
+`branch { add } { add }` dissolving to a single `add` — copy-elim, dedup,
+select-same, then dead-node — is the test.)
 
 ## Three tactics, worked
 
@@ -614,14 +611,13 @@ rides `propose`'s `(rule, seed)` pairing, which seeds what the matcher
 needs — the literal.
 
 The image is smaller than a first reading suggests, and the test that
-found this out is worth repeating. When the arms take nothing there is no
-fork, and `arm` extracts each arm as a *wire*: the two literals are
-"boxes the arm merely reads and does not own", so they sit outside the
-window and survive the fold. The image is then just the re-spent
-condition, which the focused cleanup collects — while the untaken arm's
-literal, dead but **outside** the image, deliberately survives it. A
-focus that collected it would not be a focus; the unfocused
-`saturate_structural()` is what reaches it.
+found this out is worth repeating. `select-const` carries no arms: each
+arm here is a *wire*, so the two literals sit outside the window and
+survive the fold. The image is then just the re-spent condition, which the
+focused cleanup collects — while the untaken arm's literal, dead but
+**outside** the image, deliberately survives it. A focus that collected it
+would not be a focus; the unfocused `saturate_structural()` is what
+reaches it.
 
 **Backward, stated: introduce a `copy(1)` on the wire feeding a node.**
 
@@ -693,10 +689,11 @@ has, and `structural` and `branching` still name the two lists.
 
 And the old engine has since retired outright: the table grew the value
 layer (`fold` running the machine's own window, `tested-bool`, `retuple`,
-`select-const`), the last-resort `view-value`, and the Shannon expansion —
-η itself as a row, `body(w) = if w then body(true) else body(false)`, the
-downstream region carried as payload the way `select-literal` carries
-arms. `tactic::decide` drives the lists, the `diagram` proof step closes
+`select-const`) and the Shannon expansion — η itself as a row,
+`body(w) = if w then body(true) else body(false)`, the downstream region
+carried as payload. The `fork` has since gone the other way: a branch's
+views are an ordinary `copy` now, and the five rows that existed to pay
+for the distinction went with it. `tactic::decide` drives the lists, the `diagram` proof step closes
 by that drive plus isomorphism, and the `cases` proof step is untrusted
 convenience that picks a wire and fires the Shannon row — nothing in the
 prover touches a graph except through `Derivation::push`. `diagram.rs` is

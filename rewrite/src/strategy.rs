@@ -11,7 +11,7 @@
 //!
 //! The closer **is** the table now: `diagram` rewrites both sides by
 //! [`tactic::decide`](crate::diagram2::tactic::decide) — every law, to
-//! fixpoint, `view-value` held to last — and asks whether they landed on
+//! fixpoint — and asks whether they landed on
 //! one diagram, by isomorphism. Every rewrite on the way is an instance of
 //! a named law checked by
 //! [`rules::apply`](crate::diagram2::rules::apply), so the verdict is a
@@ -982,10 +982,10 @@ mod tests {
         let (ctx, outcome) = prove_with(
             "identity probe { push 1 push 1 add } = { push 2 };",
             "probe",
-            Some("lhs(fire(dedup) fire(fork-dedup)) exact"),
+            Some("lhs(fire(dedup) fire(not-not)) exact"),
         );
         let Outcome::Stuck(residual) = outcome else {
-            panic!("there is no fork to dedup");
+            panic!("there is no `not ; not` here to collapse");
         };
         assert!(
             residual.stopped.contains("`lhs(…)`") && residual.stopped.contains("found nothing"),
@@ -1229,10 +1229,10 @@ mod tests {
         let (_ctx, outcome) = prove_with(
             code,
             "probe",
-            Some("both(decide) cases(equal) (true: both(fire(fork-dedup))) diagram"),
+            Some("both(decide) cases(equal) (true: both(fire(not-not))) diagram"),
         );
         let Outcome::Stuck(residual) = outcome else {
-            panic!("a split's branch has no fork to dedup");
+            panic!("a split's arm holds no `not ; not` to collapse");
         };
         assert!(
             residual

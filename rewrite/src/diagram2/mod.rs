@@ -16,36 +16,39 @@
 //! table in [`rules`].
 //!
 //! A branch is not one box either, and that is the one place this is not a
-//! literal reading of the term. It is **two**, with its arms as ordinary
-//! boxes in between: a `fork(n)` hands each arm its own view of the stack,
-//! both arms run, and the `select(n)` it is paired with keeps one of the
-//! two answers. That `fork` is exactly the `(pick (n-1))^n` of the
-//! single-arm hoist in [docs/totality.md](../../docs/totality.md), and the
-//! hoist is why the translation is allowed: every prim is total and has no
-//! effect but the stack, so work on the path not taken costs an answer
-//! nobody reads rather than a failure.
+//! literal reading of the term. It is **one box and its arms**: a `copy(n)`
+//! hands each arm its own view of the stack, both arms run as ordinary
+//! boxes, and the `select(n)` at the end keeps one of the two answers. That
+//! `copy` is exactly the `(pick (n-1))^n` of the single-arm hoist in
+//! [docs/totality.md](../../docs/totality.md), and the hoist is why the
+//! translation is allowed: every prim is total and has no effect but the
+//! stack, so work on the path not taken costs an answer nobody reads rather
+//! than a failure.
 //!
 //! The gain is that an arm is no longer opaque — a rule reaches into one
-//! from outside, and a value reaches out. The price is the fork, which is a
-//! `copy` in everything but name and is a separate kind only so that
-//! `copy-elim` leaves it alone. Deleting it would cost the one fact nothing
-//! else records: which port is an arm's *own* view of a value. A rule that
-//! holds on one side of a branch and not the other — `specialize-equal`,
-//! where a value that tested `equal` to a literal is that literal in the
-//! then arm — has nowhere to write its answer once both arms read the same
-//! port.
+//! from outside, and a value reaches out.
 //!
-//! **Both ends read the condition, and both read it at port 0.** A fork
-//! does not compute with it; it reads it so that a rule anchored there can
-//! *name* it. That matters because a rule is a local window and the arms
-//! lie between the two ends, so no window holds both: `specialize-equal`
-//! has to be stated at the fork, and its left-hand side has to mention the
-//! `equal` that decides the branch. Reading the condition at the same port
-//! on both ends is what makes such a rule say the same thing whichever end
-//! it is written at. Two readers of one port is a `copy`, which
-//! [`build`] emits and `copy-elim` takes back out, so a built graph is
-//! still a wiring diagram and the rewritten one still has both ends on the
-//! one source.
+//! ## The `fork` that was here
+//!
+//! A branch used to have **two** ends. The views were a `NodeKind::Fork`
+//! rather than a `copy`, a separate kind for one reason: so that
+//! `copy-elim` would leave it alone, and so the graph kept recording which
+//! port is an arm's *own* view of a value. Five laws existed to pay for
+//! that — `select-view` to pull a block out from behind one, `fork-hoist`
+//! and `fork-dedup` to move work across one, `view-value` to finally
+//! delete one, and `select-literal` to hold a whole branch so as never to
+//! strand one.
+//!
+//! Nothing spent the fact. The specializing laws that were said to need it
+//! reach a select's **block**, not the inside of an arm, and
+//! `specialize-equal` was already stated without a fork; `shannon` builds
+//! a branch with no fork at all, so the corpus's biggest proof — 201
+//! rewrites inside one arm — never saw one; and every drive ended by
+//! deleting every fork it had. What the fork cost was those five rows and
+//! the ordering hazard between them, and the two places the fact was
+//! genuinely used are recomputed where they are needed:
+//! `render`'s listing works out which arm a box belongs to from the
+//! wiring, and a value both arms read is drawn before the `if`.
 //!
 //! ## The rules
 //!
@@ -76,11 +79,10 @@
 //!
 //! - `dedup` — δ-naturality. Two boxes of one kind reading one set of
 //!   sources are one box read twice, so `push 9 ; push 9` and `push 9 ;
-//!   copy(1)` settle in the same place. It refuses a `fork`, for the reason
-//!   the `fork` exists.
+//!   copy(1)` settle in the same place. It refuses a `select`, because a
+//!   branch id is a name and merging two selects would give one box two.
 //!
-//! What the rules leave is a DAG of `Op`s, `Call`s and `Fork`/`Select`
-//! pairs whose
+//! What the rules leave is a DAG of `Op`s, `Call`s and `Select`s whose
 //! ports fan out where a `copy` used to be — the same shape `diagram`
 //! arrives at by construction, reached instead by named rewrites over data
 //! that existed the whole way.
@@ -130,20 +132,18 @@
 //!   wiring alone until whoever is proving something asks for more.
 //!
 //!   Layer 2 **is** in the table — [`rules::branching`] folds a literal
-//!   condition into its arm, deletes a branch whose arms answer alike,
-//!   lifts work both arms do out in front, and writes what a test decided
-//!   into the block that tested it. It is not in [`rules::structural`]
-//!   either, for two reasons worth keeping apart: three of those
-//!   laws turn on what an operation *computes*, which the opaque oracle
-//!   cannot judge and `vm` can; and the other three take a branch apart,
-//!   which is a strategy, and this module decides no strategy.
+//!   condition into its arm, deletes a branch whose arms answer alike, and
+//!   writes what a test decided into the block that tested it. It is not in
+//!   [`rules::structural`] either, for two reasons worth keeping apart:
+//!   most of those laws turn on what an operation *computes*, which the
+//!   opaque oracle cannot judge and `vm` can; and `select-same` takes a
+//!   branch apart, which is a strategy, and this module decides no
+//!   strategy.
 //!
-//!   A rule that folds a branch carries its **arms as payload**, the way
-//!   the term version carried subterms, so the window holds the whole
-//!   branch: `select-literal` takes the fork, both arms and the select
-//!   together, and no rule leaves one end of a branch standing without the
-//!   other. `rules` says which laws hold one end, which hold a whole
-//!   branch, and what each can say as a result.
+//!   A rule that moves a branch over a **region** carries that region as
+//!   payload, the way the term version carried subterms: `shannon` and
+//!   `select-hoist` both do, and both grow a graph, so no list drives
+//!   either.
 //!
 //! [`read_back`] is the other half of the translation: a graph is scheduled
 //! onto a stack, and the routing between one step and the next is *layered*
@@ -194,13 +194,15 @@ impl NodeId {
     }
 }
 
-/// Which branch a [`NodeKind::Fork`] and a [`NodeKind::Select`] are the two
-/// ends of.
+/// Which branch a [`NodeKind::Select`] is the end of.
 ///
-/// The pairing is recorded rather than inferred, for the same reason a link
-/// is written at both ends: a rule that wants the arm a value belongs to
-/// should read the fact, not reconstruct it by walking the graph and hoping
-/// the walk agrees with what the builder meant.
+/// A branch has one box now, so this is not a pairing any more; it is a
+/// **stable name**. A [`NodeId`] means one box at one moment, and a rewrite
+/// that rebuilds a select — `select-hoist` moving it past the work it fed,
+/// `select-same` narrowing it — hands back a different id for the same
+/// branch. A `BranchId` survives that, which is what lets a `cases` arm
+/// scope itself to the branch its split introduced across every rewrite
+/// that follows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct BranchId(u32);
 
@@ -269,41 +271,21 @@ pub enum NodeKind {
     /// A sentence called by name, left unopened; the arity is carried for
     /// the same reason [`Term::Call`] carries it.
     Call { target: SentenceIndex, arity: Arity },
-    /// `fork(n)`: the two views of the stack a branch's arms get.
-    ///
-    /// **Input 0 is the condition**, inputs `1..=n` the stack; `2n` out,
-    /// the `then` view at `0..n` and the `else` view at `n..2n`, block-wise
-    /// exactly as `copy(n)` is. The condition is not used to compute
-    /// anything here — a fork hands out both views whatever it says — and
-    /// that is the point: it is read so that a **rule anchored at a fork
-    /// can see what governs the arms it is splitting**. `specialize-equal`,
-    /// where a value that tested `equal` to a literal is that literal in
-    /// the then arm, is stated at the fork and needs the `equal` in its
-    /// left-hand side; without the condition here the rule could not name
-    /// it, because the arms lie between the fork and the `select` and no
-    /// local window holds both ends.
-    ///
-    /// It *is* a copy otherwise, and the only reason it is not one is that
-    /// `copy-elim` would delete it. Deleting it costs the one fact no other
-    /// part of the graph records: which port is an arm's own view of a
-    /// value — the answer `specialize-equal` writes.
-    Fork { arity: usize, branch: BranchId },
     /// `select(n)`: the two blocks of an answer, and the condition that
     /// keeps one of them.
     ///
     /// **Input 0 is the condition**, inputs `1..=n` the `then` block and
     /// `n+1..=2n` the `else` block. Output `i` is input `1 + i` when the
-    /// condition holds and input `1 + n + i` otherwise: this is the `fork`
-    /// it is paired with, read backwards.
+    /// condition holds and input `1 + n + i` otherwise: this is the `copy`
+    /// that handed the arms their views, read backwards.
     ///
     /// The condition sits at the *bottom* rather than on top, where the
-    /// term puts it, so that both ends of a branch read it in the same
-    /// place. A rule that wants the condition then finds it at port 0
-    /// whichever end it is anchored at, and [`read_back`] pays for it by
-    /// hoisting the wire before it writes the `branch`.
+    /// term puts it, so that a rule anchored here finds it at a fixed port,
+    /// and [`read_back`] pays for it by hoisting the wire before it writes
+    /// the `branch`.
     ///
     /// A branch's arms are not in here. They are ordinary boxes in the one
-    /// graph between the two ends, so a rule reaches into an arm from
+    /// graph, upstream of the blocks, so a rule reaches into an arm from
     /// outside and a value reaches out of one. Both arms are computed, which
     /// is the single-arm hoist of
     /// [docs/totality.md](../../docs/totality.md) — sound because every
@@ -323,7 +305,6 @@ impl NodeKind {
             NodeKind::Drop(n) => Arity::new(*n, 0),
             NodeKind::Op(prim) => prim.arity(),
             NodeKind::Call { arity, .. } => *arity,
-            NodeKind::Fork { arity, .. } => Arity::new(arity + 1, 2 * arity),
             NodeKind::Select { arity, .. } => Arity::new(2 * arity + 1, *arity),
         }
     }
@@ -334,10 +315,10 @@ impl NodeKind {
     /// having no readers rather than about being structural.
     /// Whether a rule deletes this.
     ///
-    /// A `fork` is structure by any other reading — it is a `copy` — but it
-    /// is not *rewritable* structure, and this predicate is what the rules
-    /// and [`no_structure`](../../tests) are asking about. The branch layer
-    /// survives on purpose.
+    /// A `select` is not on the list. It is the branch layer's business,
+    /// and this predicate is what the rules and
+    /// [`no_structure`](../../tests) are asking about: the branch survives
+    /// a structural drive on purpose.
     pub fn is_structural(&self) -> bool {
         matches!(
             self,
@@ -366,8 +347,8 @@ pub struct Graph {
     inputs: Vec<Vec<Sink>>,
     /// What each boundary output reads, deepest first.
     outputs: Vec<Source>,
-    /// Branch ids handed out so far. Never reused, so a `fork` and the
-    /// `select` it was built with name each other for the life of the graph.
+    /// Branch ids handed out so far. Never reused, so a branch keeps its
+    /// name for the life of the graph however often its `select` is rebuilt.
     branches: u32,
 }
 
@@ -566,38 +547,32 @@ fn emit(graph: &mut Graph, terms: &Context, term: TermIndex, inputs: Vec<Source>
             outputs.extend(emit(graph, terms, *top, above));
             outputs
         }
-        // A branch is not a node either, and this is the change from the
-        // arms-in-a-box it used to be: the condition is set aside, a `fork`
-        // hands each arm its own view of the stack, both arms are emitted
-        // into this same graph, and the `select` it is paired with keeps one
-        // of the two answers. What was a boundary is now two boxes with the
-        // arms between them, so every rule reaches through it — and the one
-        // fact the boundary carried, which arm a value belongs to, is still
-        // written down.
+        // A branch is not a node either: each arm gets its own view of the
+        // stack, both arms are emitted into this same graph, and the
+        // `select` keeps one of the two answers. What was a boundary is
+        // ordinary boxes and one end, so every rule reaches through it.
+        //
+        // The view is a **`copy`** — the `(pick (n-1))^n` of the single-arm
+        // hoist in docs/totality.md, said as the box it is. It was a `fork`
+        // once: a copy under another name, kept distinct so that
+        // `copy-elim` would leave it alone, for a fact that turned out
+        // nothing spent. Said as the copy it is, the law that deletes
+        // copies deletes it, and a built graph is still monogamous until
+        // one fires.
         Term::Branch { if_true, if_false } => {
             let mut inputs = inputs;
             let cond = inputs.pop().expect("a branch reads its condition");
             let branch = graph.next_branch();
-            // Block-wise, exactly the `(pick (n-1))^n` the hoist rule spells
-            // out. Arms that take nothing have no views to tell apart, and
-            // then the `select` is the only end there is to read the
-            // condition.
-            let (if_true_in, if_false_in, chooses) = if inputs.is_empty() {
-                (Vec::new(), Vec::new(), cond)
+            // Arms that take nothing have no views to tell apart.
+            let (if_true_in, if_false_in) = if inputs.is_empty() {
+                (Vec::new(), Vec::new())
             } else {
-                // Both ends read the condition, and two readers of one port
-                // is a `copy` — said outright here rather than smuggled in,
-                // so a built graph is still monogamous and `copy-elim` is
-                // still the one thing that breaks it.
-                let views = graph.add(NodeKind::Copy(1), vec![cond]);
                 let arity = inputs.len();
-                let mut takes = vec![views[0]];
-                takes.extend(inputs);
-                let mut blocks = graph.add(NodeKind::Fork { arity, branch }, takes);
+                let mut blocks = graph.add(NodeKind::Copy(arity), inputs);
                 let above = blocks.split_off(arity);
-                (blocks, above, views[1])
+                (blocks, above)
             };
-            let mut ports = vec![chooses];
+            let mut ports = vec![cond];
             ports.extend(emit(graph, terms, *if_true, if_true_in));
             ports.extend(emit(graph, terms, *if_false, if_false_in));
             let arity = terms.arity(*if_true).outputs;
@@ -754,7 +729,6 @@ pub fn isomorphic(a: &Graph, b: &Graph) -> bool {
 /// directly, the pairing being its own business.
 fn erased(kind: &NodeKind) -> String {
     match kind {
-        NodeKind::Fork { arity, .. } => format!("fork({})", arity),
         NodeKind::Select { arity, .. } => format!("select({})", arity),
         other => format!("{:?}", other),
     }
@@ -864,13 +838,6 @@ impl Iso<'_> {
         }
         let bound = match (self.a.kind(x), self.b.kind(y)) {
             (
-                NodeKind::Fork { arity, branch },
-                NodeKind::Fork {
-                    arity: n,
-                    branch: to,
-                },
-            )
-            | (
                 NodeKind::Select { arity, branch },
                 NodeKind::Select {
                     arity: n,
@@ -893,8 +860,7 @@ impl Iso<'_> {
                     }
                 }
             }
-            (NodeKind::Fork { .. } | NodeKind::Select { .. }, _)
-            | (_, NodeKind::Fork { .. } | NodeKind::Select { .. }) => return None,
+            (NodeKind::Select { .. }, _) | (_, NodeKind::Select { .. }) => return None,
             (p, q) if p == q => None,
             _ => return None,
         };
@@ -985,26 +951,25 @@ impl Graph {
                 });
             }
         }
-        // A branch is two boxes that name each other, so a graph holding
-        // two forks — or two selects — for one branch is a builder bug, and
-        // this is where it surfaces rather than in whatever rule later reads
-        // the pairing and gets the wrong end.
-        let mut ends: HashMap<(BranchId, bool), NodeId> = HashMap::new();
+        // A branch id is a name, and a name two boxes answer to names
+        // nothing: a `cases` arm scopes itself by branch id across every
+        // rewrite that follows its split, so a graph holding two selects
+        // for one branch is a builder bug, and this is where it surfaces
+        // rather than in whatever later reads the name and gets the wrong
+        // box.
+        let mut ends: HashMap<BranchId, NodeId> = HashMap::new();
         for (id, kind) in self.live() {
-            let end = match kind {
-                NodeKind::Fork { branch, .. } => (*branch, true),
-                NodeKind::Select { branch, .. } => (*branch, false),
-                _ => continue,
+            let NodeKind::Select { branch, .. } = kind else {
+                continue;
             };
-            if let Some(&first) = ends.get(&end) {
+            if let Some(&first) = ends.get(branch) {
                 return Err(Error::BranchTwice {
-                    branch: end.0,
-                    fork: end.1,
+                    branch: *branch,
                     first,
                     second: id,
                 });
             }
-            ends.insert(end, id);
+            ends.insert(*branch, id);
         }
         // Every reader names a source that lists it back...
         for (id, _) in self.live() {
@@ -1123,7 +1088,6 @@ pub enum Error {
     /// Two nodes claiming to be the same end of one branch.
     BranchTwice {
         branch: BranchId,
-        fork: bool,
         first: NodeId,
         second: NodeId,
     },
@@ -1153,16 +1117,12 @@ impl fmt::Display for Error {
             Error::Cyclic(node) => write!(f, "node {} reaches itself", node),
             Error::BranchTwice {
                 branch,
-                fork,
                 first,
                 second,
             } => write!(
                 f,
-                "nodes {} and {} are both the {} of branch {}",
-                first,
-                second,
-                if *fork { "fork" } else { "select" },
-                branch
+                "nodes {} and {} are both the select of branch {}",
+                first, second, branch
             ),
         }
     }
@@ -1356,14 +1316,6 @@ fn box_term(terms: &mut Context, kind: &NodeKind) -> TermIndex {
         NodeKind::Drop(n) => terms.drop(*n),
         NodeKind::Op(prim) => terms.op(prim.clone()),
         NodeKind::Call { target, arity } => terms.call(*target, *arity),
-        // The two views of the stack are what a `copy` makes; the node is
-        // only distinct so that rewriting leaves it alone. Its condition
-        // computes nothing — it is read so that a rule can see it — so what
-        // it comes back as is the condition let go of.
-        NodeKind::Fork { arity, .. } => {
-            let (gone, both) = (terms.drop(1), terms.copy(*arity));
-            terms.par(gone, both)
-        }
         // Both blocks are already on the stack by the time this runs — the
         // arms were scheduled like any other work — so the branch left to
         // write is only the choice between them: keep one block, let the
@@ -1604,7 +1556,6 @@ impl fmt::Display for NodeKind {
             NodeKind::Drop(n) => write!(f, "drop({})", n),
             NodeKind::Op(prim) => write!(f, "{}", prim),
             NodeKind::Call { target, .. } => write!(f, "call #{}", usize::from(*target)),
-            NodeKind::Fork { arity, branch } => write!(f, "fork({}){}", arity, branch),
             NodeKind::Select { arity, branch } => write!(f, "select({}){}", arity, branch),
         }
     }
@@ -1714,7 +1665,7 @@ mod tests {
         // The arms are not inside anything: the four boxes of the `then`
         // arm and the one of the `else` arm sit in this graph beside the
         // `select` that picks between their answers. Both arms take
-        // nothing, so there is no `copy` to fork the stack either.
+        // nothing, so there is no `copy` to view the stack with either.
         let (_terms, graph) = built("branch { push 1 push 2 add } { push 2 }");
         assert_eq!(graph.live_count(), 6, "{}", graph);
 
@@ -1723,8 +1674,8 @@ mod tests {
             .find(|(_, kind)| matches!(kind, NodeKind::Select { arity: 1, .. }))
             .expect("the branch ends in a select");
         // Its three inputs: the condition, which is the sentence's own
-        // input and sits at port 0 the way it does on a fork, and then the
-        // `then` answer and the `else` answer.
+        // input and sits at port 0, and then the `then` answer and the
+        // `else` answer.
         let inputs = graph.node(id).inputs.clone();
         assert_eq!(inputs.len(), 3);
         assert_eq!(inputs[0], Source::Input(0), "the condition is port 0");

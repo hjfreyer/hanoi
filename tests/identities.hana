@@ -626,9 +626,9 @@ test sentence what_follows_a_branch_agrees_either_way {
 // The old evaluating engine got this by representation — it grafted every
 // continuation into the arms as it went, so the two spellings built one tree
 // and there was nothing to state. A literal graph states it or cannot say it:
-// `fork-hoist` lets work migrate across the fork, so a branch always grew
-// backwards, and nothing said the same at the select, so a branch could never
-// grow forwards at all. `select-hoist` is that row, and it is what this claim
+// a branch's views are a `copy`, so it always grew backwards over what fed
+// it, and nothing said the same at the select, so a branch could never grow
+// forwards at all. `select-hoist` is that row, and it is what this claim
 // spends.
 identity what_follows_a_branch_runs_inside_it
     { branch { not } { as_bool } negate }

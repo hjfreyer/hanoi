@@ -56,7 +56,7 @@
 //! | `repeat(t …)` | the sequence until it stops advancing |
 //! | `try(t …)` | the sequence, or nothing — failure becomes no progress |
 //!
-//! A law is named as the docs name it — `copy-elim`, `select-view`,
+//! A law is named as the docs name it — `copy-elim`, `select-same`,
 //! `dead-node`, the spellings [`Law::name`] holds — and `structural` and
 //! `branching` name the two lists of [`crate::diagram2::rules`]. This
 //! surface is deliberately smaller than the language underneath: queries
@@ -74,7 +74,7 @@
 //!
 //! ```text
 //! proof identities::the_awkward_one =
-//!     lhs(decide) lhs(at(#41, fork-hoist)) lhs(decide) diagram;
+//!     lhs(decide) lhs(at(#41, select-hoist)) lhs(decide) diagram;
 //! ```
 //!
 //! The third field is the direction, `forward` when it is left out:
@@ -879,7 +879,7 @@ mod tests {
 
         // A law list spells the docs' names, and the two lists by theirs.
         let entries =
-            parse_hant("proof p = rhs(saturate(select-view, structural)) exact;").unwrap();
+            parse_hant("proof p = rhs(saturate(select-same, structural)) exact;").unwrap();
         let [Step::Rewrite { tactic, .. }, _] = &entries[0].strategy[..] else {
             panic!();
         };
@@ -894,7 +894,7 @@ mod tests {
         else {
             panic!("{:?}", body);
         };
-        assert_eq!(laws, &[vec![Law::SelectView], rules::structural()].concat());
+        assert_eq!(laws, &[vec![Law::SelectSame], rules::structural()].concat());
     }
 
     #[test]
@@ -1154,25 +1154,25 @@ mod tests {
     fn a_box_can_be_named_by_the_id_the_report_printed() {
         use crate::diagram2::NodeId;
 
-        let entries = parse_hant("proof p = lhs(at(#41, fork-hoist)) diagram;").unwrap();
+        let entries = parse_hant("proof p = lhs(at(#41, select-hoist)) diagram;").unwrap();
         let [Step::Rewrite { side, tactic }, Step::Diagram] = &entries[0].strategy[..] else {
             panic!("{:?}", entries[0].strategy);
         };
         assert_eq!(*side, OnSide::Lhs);
         assert_eq!(
             tactic.as_ref(),
-            &tactic::fire_at(NodeId::at(41), Law::ForkHoist, Direction::Forward)
+            &tactic::fire_at(NodeId::at(41), Law::SelectHoist, Direction::Forward)
         );
 
         // The `#` is the listing's spelling, and optional here, so a
         // pasted id and a typed one are the same box.
-        let entries = parse_hant("proof p = rhs(at(41, fork-hoist)) diagram;").unwrap();
+        let entries = parse_hant("proof p = rhs(at(41, select-hoist)) diagram;").unwrap();
         let [Step::Rewrite { tactic, .. }, _] = &entries[0].strategy[..] else {
             panic!()
         };
         assert_eq!(
             tactic.as_ref(),
-            &tactic::fire_at(NodeId::at(41), Law::ForkHoist, Direction::Forward)
+            &tactic::fire_at(NodeId::at(41), Law::SelectHoist, Direction::Forward)
         );
 
         // The third field is the direction, `forward` when it is left out.

@@ -37,23 +37,23 @@
 //!
 //! The condition is named on all three lines, so a block deep in a nest
 //! says which wire it turns on without a reader counting bars. The `if` is
-//! the [`Fork`](super::NodeKind::Fork) where there is one and the `endif`
-//! is always the [`Select`](super::NodeKind::Select), so both keep their
-//! ids and their links: the right-hand columns still say what the box
-//! reads and who reads it, which is what a next proof step names. A line
-//! with an **empty id column** is one the listing drew rather than a box —
-//! every `else`, and the `if` of a branch with no fork.
+//! drawn by the listing and the `endif` is the
+//! [`Select`](super::NodeKind::Select), which keeps its id and its links:
+//! the right-hand columns still say what the box reads and who reads it,
+//! which is what a next proof step names. A line with an **empty id
+//! column** is one the listing drew rather than a box — every `if` and
+//! every `else`, since a branch has only its `select` to show.
 //!
 //! ## What makes 351 boxes legible
 //!
 //! Five decisions, and the listing is a wall without any of them.
 //!
 //! **Branch membership is computed.** A node is inside a branch when it is
-//! downstream of the [`Fork`](super::NodeKind::Fork) and upstream of the
-//! [`Select`](super::NodeKind::Select) it is paired with — a forward reach
-//! and a backward reach, intersected. So the indentation is a fact about the
-//! graph rather than a guess from what happens to sit between two lines, and
-//! an arm that reaches out of itself still reads as an arm.
+//! upstream of one side of the [`Select`](super::NodeKind::Select)'s blocks
+//! and not of the other, and not of the condition. So the
+//! indentation is a fact about the graph rather than a guess from what
+//! happens to sit between two lines, and an arm that reaches out of itself
+//! still reads as an arm.
 //!
 //! **A branch's boxes come out as one run.** The schedule
 //! [`read_back`](super::read_back) uses is min-id-first, which is
@@ -164,17 +164,11 @@ fn reach(graph: &Graph, from: NodeId, forward: bool) -> HashSet<NodeId> {
 
 /// Which branches each box lies inside.
 ///
-/// A box is inside branch `b` when it is downstream of `b`'s fork and
-/// upstream of `b`'s select — exactly the boxes that are `b`'s arms, however
-/// the schedule happens to order them. The two ends are not inside
-/// themselves; a listing draws them as the brackets they are.
-///
-/// A branch whose arms read nothing off the stack has **no fork**: a
-/// `fork(0)` would hand out no views and [`build`](super::build) does not
-/// emit one. Then what is downstream of the fork is not a question that can
-/// be asked, and the arms are instead what feeds the select's arm ports —
-/// less whatever also feeds its condition, and less anything read from
-/// outside, since a box two regions share is inside neither.
+/// A box is inside branch `b` when it is one of `b`'s arms — see
+/// [`armless`], which asks the question from the select: what feeds one
+/// side's blocks and not the other's, less whatever feeds the condition,
+/// less anything read from outside. A branch's own end is not inside it; a
+/// listing draws it as the bracket it is.
 ///
 /// A box that reads nothing belongs to no branch by that test and still
 /// *belongs* to the arm that reads it — a `push` is an operand, and the arm
@@ -182,27 +176,15 @@ fn reach(graph: &Graph, from: NodeId, forward: bool) -> HashSet<NodeId> {
 /// it agrees it is: the intersection of its readers' branches, to fixpoint,
 /// so a constant feeding a constant follows along.
 fn nesting(graph: &Graph) -> HashMap<NodeId, BTreeSet<u32>> {
-    let mut forks = HashMap::new();
     let mut selects = HashMap::new();
     for (id, kind) in graph.live() {
-        match kind {
-            NodeKind::Fork { branch, .. } => forks.insert(branch.index(), id),
-            NodeKind::Select { branch, .. } => selects.insert(branch.index(), id),
-            _ => None,
-        };
+        if let NodeKind::Select { branch, .. } = kind {
+            selects.insert(branch.index(), id);
+        }
     }
     let mut inside: HashMap<NodeId, BTreeSet<u32>> = HashMap::new();
     for (&branch, &select) in &selects {
-        let arms = match forks.get(&branch) {
-            Some(&fork) => {
-                let mut arms = reach(graph, fork, true);
-                arms.retain(|node| reach(graph, select, false).contains(node));
-                arms.remove(&fork);
-                arms
-            }
-            None => armless(graph, select),
-        };
-        for node in arms {
+        for node in armless(graph, select) {
             if node != select {
                 inside.entry(node).or_default().insert(branch as u32);
             }
@@ -243,13 +225,11 @@ fn nesting(graph: &Graph) -> HashMap<NodeId, BTreeSet<u32>> {
         }
     }
 
-    // A branch nested inside another is wholly inside it: its ends are, so
-    // its arms are too. Each branch above was asked on its own, and a
-    // forkless branch's arms can read nothing at all — no fork to be
-    // downstream of, so no reach to place them by — which leaves them
-    // knowing their own branch and no other. This is where they learn the
-    // rest, and it is what makes the depth a box is drawn at agree with
-    // the depth its brackets open at.
+    // A branch nested inside another is wholly inside it: its end is, so
+    // its arms are too. Each branch above was asked on its own, which
+    // leaves an arm's boxes knowing their own branch and no other. This is
+    // where they learn the rest, and it is what makes the depth a box is
+    // drawn at agree with the depth its brackets open at.
     loop {
         let mut moved = false;
         for (&branch, &select) in &selects {
@@ -277,15 +257,26 @@ fn nesting(graph: &Graph) -> HashMap<NodeId, BTreeSet<u32>> {
     inside
 }
 
-/// The arms of a branch that has no fork: what feeds the select's arm ports
-/// and nothing else.
+/// The arms of a branch: what feeds the select's arm ports and nothing
+/// else.
 ///
-/// Without a fork nothing marks an arm's boxes as the arm's own, so the
-/// question is asked from the other end. Start from everything upstream of
-/// the arm ports, drop what is also upstream of the condition — that is
-/// shared context, computed before the branch was ever reached — and then
-/// shrink to a fixpoint by dropping any box something outside the region
-/// reads, because a box two regions share belongs to neither.
+/// Nothing marks an arm's boxes as the arm's own, so the question is asked
+/// from the other end. Start from everything upstream of the arm ports and
+/// drop three kinds of box, each of them shared rather than an arm's:
+/// what is upstream of the **condition**, computed before the branch was
+/// ever reached; what is upstream of **both sides' blocks**, which is what
+/// each arm reads rather than what either arm does; and, to a fixpoint,
+/// anything something outside the region reads, because a box two regions
+/// share belongs to neither.
+///
+/// The middle one is the fact a `fork` used to make syntactic. Its two
+/// views were different ports, so a box downstream of a then-view could
+/// not also be downstream of an else-view and the sides fell out of the
+/// wiring; a shared value sat in front of the fork and so outside both
+/// arms. The views are one `copy` now — and `copy-elim` deletes even
+/// that — so the same answer is computed here instead, from the same
+/// evidence, and it comes out the same: a value both arms read is drawn
+/// before the `if`.
 fn armless(graph: &Graph, select: NodeId) -> HashSet<NodeId> {
     let upstream = |source: &Source| match *source {
         Source::Port { node, .. } => reach(graph, node, false),
@@ -295,11 +286,16 @@ fn armless(graph: &Graph, select: NodeId) -> HashSet<NodeId> {
     let Some((condition, arms)) = sources.split_first() else {
         return HashSet::new();
     };
+    let arity = arms.len() / 2;
     let shared = upstream(condition);
-    let mut region: HashSet<NodeId> = arms
-        .iter()
-        .flat_map(upstream)
+    let cone =
+        |blocks: &[Source]| -> HashSet<NodeId> { blocks.iter().flat_map(upstream).collect() };
+    let (then, els) = (cone(&arms[..arity]), cone(&arms[arity..]));
+    let mut region: HashSet<NodeId> = then
+        .union(&els)
+        .copied()
         .filter(|node| !shared.contains(node))
+        .filter(|node| !(then.contains(node) && els.contains(node)))
         .collect();
     loop {
         let escapes: Vec<NodeId> = region
@@ -644,7 +640,7 @@ fn operands_last(
     let mut opens: HashMap<u32, usize> = HashMap::new();
     for (i, &id) in solid.iter().enumerate() {
         let mut branches: BTreeSet<u32> = inside.get(&id).cloned().unwrap_or_default();
-        if let NodeKind::Fork { branch, .. } | NodeKind::Select { branch, .. } = graph.kind(id) {
+        if let NodeKind::Select { branch, .. } = graph.kind(id) {
             branches.insert(branch.index() as u32);
         }
         for branch in branches {
@@ -689,11 +685,71 @@ fn operands_last(
         lands.entry(landing).or_default().push(id);
     }
 
-    let mut moved = Vec::with_capacity(order.len());
-    for (i, &id) in solid.iter().enumerate() {
-        moved.extend(lands.get(&i).map(Vec::as_slice).unwrap_or_default());
-        moved.push(id);
+    // And the mirror, for the same reason. A box **nothing reads** belongs
+    // where what it *reads* is, not where a topological sweep happened to
+    // reach it: the else arm's `drop` of a value it is throwing away is
+    // upstream of no block, so no region claims it, and left where the
+    // sweep put it it would sit in the middle of a branch it is not in.
+    //
+    // This is one of the two facts the `fork` used to make syntactic —
+    // which arm a value belongs to — and it is worth seeing what it costs
+    // now that a branch's views are a plain `copy`: exactly this, a
+    // placement rule in the *listing*, where being wrong misdraws a line
+    // rather than mis-stating an equation.
+    let dead: HashSet<NodeId> = solid
+        .iter()
+        .copied()
+        .filter(|&id| {
+            inside.get(&id).is_none_or(BTreeSet::is_empty)
+                && (0..graph.kind(id).arity().outputs)
+                    .all(|port| graph.sinks(Source::Port { node: id, port }).is_empty())
+        })
+        .collect();
+    let mut discards: HashMap<usize, Vec<NodeId>> = HashMap::new();
+    for &id in &solid {
+        if !dead.contains(&id) {
+            continue;
+        }
+        // The first place it may go: after everything it reads.
+        let after = graph
+            .sources(id)
+            .iter()
+            .filter_map(|src| match src {
+                Source::Port { node, .. } => at.get(node).copied(),
+                Source::Input(_) => None,
+            })
+            .max()
+            .map_or(0, |i| i + 1);
+        // Backed out of every branch the box it would land in front of is
+        // in — as far as that branch's opening, when its opening is still
+        // late enough to be after what this box reads.
+        let landing = solid
+            .get(after)
+            .and_then(|next| inside.get(next))
+            .into_iter()
+            .flatten()
+            .filter_map(|branch| opens.get(branch).copied())
+            .filter(|&open| open >= after)
+            .min()
+            .unwrap_or(after);
+        discards.entry(landing).or_default().push(id);
     }
+
+    let mut moved = Vec::with_capacity(order.len());
+    // Discards first where both land at one place: a discard is being
+    // backed *out* of the branch that starts here, and an operand is being
+    // pulled *into* it.
+    let put = |moved: &mut Vec<NodeId>, i: usize| {
+        moved.extend(discards.get(&i).map(Vec::as_slice).unwrap_or_default());
+        moved.extend(lands.get(&i).map(Vec::as_slice).unwrap_or_default());
+    };
+    for (i, &id) in solid.iter().enumerate() {
+        put(&mut moved, i);
+        if !dead.contains(&id) {
+            moved.push(id);
+        }
+    }
+    put(&mut moved, solid.len());
     moved.extend(tail);
     debug_assert_eq!(moved.len(), order.len(), "every box is still listed");
     moved
@@ -747,7 +803,7 @@ fn census_name(kind: &NodeKind) -> String {
         NodeKind::Copy(_) => "copy".to_string(),
         NodeKind::Drop(_) => "drop".to_string(),
         NodeKind::Call { .. } => "call".to_string(),
-        NodeKind::Fork { .. } | NodeKind::Select { .. } => "branch".to_string(),
+        NodeKind::Select { .. } => "branch".to_string(),
         NodeKind::Op(prim) => {
             let spelled = prim.to_string();
             spelled
@@ -822,7 +878,7 @@ impl fmt::Display for Listing<'_> {
 
         let mut census: BTreeMap<String, usize> = BTreeMap::new();
         for (id, kind) in graph.live() {
-            if shown(id) && !matches!(kind, NodeKind::Fork { .. } | NodeKind::Select { .. }) {
+            if shown(id) && !matches!(kind, NodeKind::Select { .. }) {
                 *census.entry(census_name(kind)).or_default() += 1;
             }
         }
@@ -834,8 +890,7 @@ impl fmt::Display for Listing<'_> {
             .map(|(name, n)| format!("{}×{}", n, name))
             .collect();
 
-        // Counted by the select: every branch has one, and a branch whose
-        // arms read nothing off the stack has no fork to count.
+        // Counted by the select, which is the one box a branch has.
         let branches = graph
             .live()
             .filter(|(_, kind)| matches!(kind, NodeKind::Select { .. }))
@@ -868,18 +923,16 @@ impl fmt::Display for Listing<'_> {
             }
             let kind = graph.kind(id);
             let mine = chain(id);
-            // The lines a reader needs before this one. A branch opens at
-            // its `fork` where it has one, so what is left to draw here is
-            // the opening of a forkless branch and every `else` — neither
-            // of which is a box, which is what the empty id column says.
+            // The lines a reader needs before this one. A branch has one
+            // box — its `select`, the `endif` — so every `if` and every
+            // `else` is a line the listing draws rather than a box, which
+            // is what the empty id column says.
             //
             // Each of them sits at the depth of the branch it belongs to,
             // and that is its place in this box's chain: the box is drawn
             // at `mine.len()`, and a branch `mine[k]` holds it from `k`.
             let ends = match kind {
-                NodeKind::Fork { branch, .. } | NodeKind::Select { branch, .. } => {
-                    Some(branch.index() as u32)
-                }
+                NodeKind::Select { branch, .. } => Some(branch.index() as u32),
                 _ => None,
             };
             let mut ahead: Vec<(&str, u32, usize)> = Vec::new();
@@ -893,10 +946,10 @@ impl fmt::Display for Listing<'_> {
                 }
             }
             // A `select` closes its branch, so anything that branch still
-            // owes — an opening it never got because it has no fork and no
-            // box of its own, an `else` its else arm was too empty to
-            // trigger — is owed here, at the select's own depth. A
-            // branch's ends are not inside it, so that is `mine.len()`.
+            // owes — an opening no box of its own triggered, an `else` its
+            // else arm was too empty to trigger — is owed here, at the
+            // select's own depth. A branch's end is not inside it, so that
+            // is `mine.len()`.
             if let (Some(branch), NodeKind::Select { .. }) = (ends, kind)
                 && !opened.contains(&branch)
             {
@@ -918,29 +971,15 @@ impl fmt::Display for Listing<'_> {
             }
             let indent = gutter(mine.len());
             let label = match kind {
-                // The two ends of a branch are the block it opens and the
-                // block it closes: what a reader wants from them is where
-                // the arms begin and end, and `if`/`endif` is how a reader
-                // already knows how to read that.
-                NodeKind::Fork { .. } | NodeKind::Select { .. } => {
-                    let word = if matches!(kind, NodeKind::Fork { .. }) {
-                        "if"
-                    } else {
-                        "endif"
-                    };
-                    if matches!(kind, NodeKind::Fork { .. })
-                        && let Some(branch) = ends
-                    {
-                        opened.insert(branch);
-                    }
-                    format!(
-                        "{}{} {}",
-                        indent,
-                        word,
-                        ends.and_then(|branch| condition.get(&branch))
-                            .map_or("?", String::as_str)
-                    )
-                }
+                // A select is the block a branch closes: what a reader
+                // wants from it is where the arms end, and `endif` is how
+                // a reader already knows how to read that.
+                NodeKind::Select { .. } => format!(
+                    "{}endif {}",
+                    indent,
+                    ends.and_then(|branch| condition.get(&branch))
+                        .map_or("?", String::as_str)
+                ),
                 other => format!("{}{}", indent, other),
             };
             let label = match label.char_indices().nth(LABEL - 1) {
@@ -960,21 +999,16 @@ impl fmt::Display for Listing<'_> {
                     source.to_string()
                 })
                 .collect();
-            // Both ends of a branch read the condition at port 0, and the
-            // label has already said so — a rule anchored at either end
-            // names the same wire — so what is left for this column is
-            // what the box does with the rest: the stack a fork hands out,
-            // and the two blocks a select chooses between.
+            // A select reads the condition at port 0 and the label has
+            // already said so, so what is left for this column is what it
+            // does with the rest: the two blocks it chooses between.
             let reads = match kind {
-                NodeKind::Fork { .. } if sources.len() > 1 => {
-                    format!("on {}", sources[1..].join(" "))
-                }
                 NodeKind::Select { arity, .. } if sources.len() > 1 => format!(
                     "then {}  else {}",
                     sources[1..=*arity].join(" "),
                     sources[1 + arity..].join(" ")
                 ),
-                NodeKind::Fork { .. } | NodeKind::Select { .. } => String::new(),
+                NodeKind::Select { .. } => String::new(),
                 _ if sources.is_empty() => String::new(),
                 _ => format!("← {}", sources.join(" ")),
             };
@@ -1112,11 +1146,11 @@ mod tests {
         assert!(at("| push 1") < at("else in0"), "\n{}", text);
         assert!(at("else in0") < at("| push 2"), "\n{}", text);
         assert!(at("| push 2") < at("endif in0"), "\n{}", text);
-        // The opening has no box behind it — this branch has no fork —
-        // and the empty id column is how the listing says so.
+        // Every opening is a line the listing drew rather than a box, and
+        // the empty id column is how it says so.
         assert!(
             lines[at("if in0")].starts_with("        "),
-            "a forkless opening names a box:\n{}",
+            "an opening names a box:\n{}",
             text
         );
     }
@@ -1211,7 +1245,7 @@ mod tests {
                 let hi = held.iter().map(|id| at[id]).max().expect("a box");
                 for &id in &order[lo..=hi] {
                     let ends = matches!(graph.kind(id),
-                        NodeKind::Fork { branch: b, .. } | NodeKind::Select { branch: b, .. }
+                        NodeKind::Select { branch: b, .. }
                             if b.index() as u32 == *branch);
                     assert!(
                         held.contains(&id) || ends,

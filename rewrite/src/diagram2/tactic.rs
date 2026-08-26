@@ -161,7 +161,7 @@ pub struct MatchSpec {
     pub inputs: Vec<SrcExpr>,
     /// One selector list per pattern boundary output.
     pub outputs: Vec<Vec<SinkSel>>,
-    /// One per pattern branch id: a bound fork or select, whose
+    /// One per pattern branch id: a bound select, whose
     /// [`BranchId`](super::BranchId) is read off.
     pub branches: Vec<Var>,
 }
@@ -816,8 +816,7 @@ fn upstream(graph: &Graph, node: NodeId) -> HashSet<NodeId> {
 /// spend its hypothesis but never decompose it.
 ///
 /// The select joins the region because every law of the branch layer is
-/// read off it; the fork, when the branch has one, joins for the same
-/// reason. The region scopes *anchors*, not windows — a law fired from
+/// read off it. The region scopes *anchors*, not windows — a law fired from
 /// inside may still hold boxes outside in its match, and soundness is
 /// [`rules::apply`]'s either way.
 pub fn arm_nodes(graph: &Graph, branch: BranchId, side: bool) -> Option<HashSet<NodeId>> {
@@ -845,10 +844,6 @@ pub fn arm_nodes(graph: &Graph, branch: BranchId, side: bool) -> Option<HashSet<
     }
 
     region.insert(select);
-    region.extend(graph.live().find_map(|(id, kind)| match kind {
-        NodeKind::Fork { branch: b, .. } if *b == branch => Some(id),
-        _ => None,
-    }));
     Some(region)
 }
 
@@ -950,9 +945,7 @@ fn resolve(
     for &v in &spec.branches {
         let node = node_of(v)?;
         match graph.kind(node) {
-            NodeKind::Fork { branch, .. } | NodeKind::Select { branch, .. } => {
-                branches.push(*branch)
-            }
+            NodeKind::Select { branch, .. } => branches.push(*branch),
             _ => return Err(TacticError::NoBranch { var: v }),
         }
     }
@@ -1001,21 +994,24 @@ pub fn saturate_structural() -> Tactic {
     Tactic::Repeat(Box::new(fire_first(rules::structural())), None)
 }
 
-/// The whole table to fixpoint: the branch layer in its documented order,
-/// the structural laws behind it, the value layer behind those — and
-/// `view-value` behind everything, fired only when nothing else fires,
-/// because spending a fork's views takes the specializing laws' anchor
-/// with them.
+/// The whole table to fixpoint: the branch layer, the structural laws
+/// behind it, the value layer behind those.
+///
+/// It used to be two phases, with `view-value` held behind everything and
+/// fired only when nothing else did, because spending a fork's views took
+/// the specializing laws' anchor away with them. There is no fork and no
+/// `view-value`, so there is no anchor to lose and no phase to hold: a
+/// branch's views are a `copy` like any other, and `copy-elim` may fire
+/// whenever it likes.
 ///
 /// This is the closest thing the tactic road has to a normalizer, and it
 /// is still a strategy: those laws, in that order, everywhere they fire,
 /// chosen here and replaceable by any proof that chooses differently.
 pub fn decide() -> Tactic {
     Tactic::Repeat(
-        Box::new(Tactic::First(vec![
-            fire_first([rules::branching(), rules::structural(), rules::folding()].concat()),
-            fire_first(vec![Law::ViewValue]),
-        ])),
+        Box::new(fire_first(
+            [rules::branching(), rules::structural(), rules::folding()].concat(),
+        )),
         None,
     )
 }
@@ -1023,9 +1019,7 @@ pub fn decide() -> Tactic {
 /// The branch layer, spent to fixpoint with the structural cleanup it
 /// needs.
 ///
-/// The laws are tried in the order [`rules::branching`] documents —
-/// `select-view` is what pulls a block out from behind a fork, and until
-/// it has, most of the layer has nothing to match — with
+/// The laws are tried in the order [`rules::branching`] lists them, with
 /// [`rules::structural`] behind them to spend what a branch rewrite
 /// leaves. What was advice in a doc comment is a program here.
 pub fn branch_pass() -> Tactic {
@@ -1160,7 +1154,7 @@ mod tests {
                     .is("lit", NodePred::Kind(KindPat::AnyPush))
                     .feeds("lit", 0, "sel", 0),
                 rule: RuleSpec::ReadOff {
-                    laws: vec![Law::SelectLiteral],
+                    laws: vec![Law::SelectConst],
                     anchor: Var("sel"),
                 },
                 pick: Pick::Unique,
@@ -1169,9 +1163,8 @@ mod tests {
         ]);
         run(&mut graph, &mut deriv, &tactic).unwrap();
         graph.check().unwrap();
-        // The arms take nothing, so there is no fork and each arm is a
-        // *wire*: the two literals sit outside the window and survive the
-        // fold. The image of the step is the fresh boxes it left — the
+        // Each arm is a *wire*: the two literals sit outside the window
+        // and survive the fold. The image of the step is the fresh boxes it left — the
         // re-spent condition, which dead-node collects — and the focus is
         // exactly what makes the untaken `push 2`, dead but **outside**
         // the image, survive this pass. A focus that collected it would
@@ -1282,12 +1275,7 @@ mod tests {
         assert!(arm_nodes(&graph, branch, true).is_some());
 
         let mut deriv = Derivation::default();
-        run(
-            &mut graph,
-            &mut deriv,
-            &fire_first(vec![Law::SelectLiteral]),
-        )
-        .unwrap();
+        run(&mut graph, &mut deriv, &fire_first(vec![Law::SelectConst])).unwrap();
         assert!(
             arm_nodes(&graph, branch, true).is_none(),
             "the fold spent the branch"
@@ -1395,11 +1383,11 @@ mod tests {
         let mut graph = original.clone();
         let mut deriv = Derivation::default();
         // The first alternative advances one step and then dies looking
-        // for a fork that is not there.
+        // for a branch that is not there.
         let doomed = Tactic::Seq(vec![
             fire_first(vec![Law::SwapElim]),
             Tactic::Fire {
-                at: Query::new().is("f", NodePred::Kind(KindPat::Fork)),
+                at: Query::new().is("f", NodePred::Kind(KindPat::Select)),
                 rule: RuleSpec::ReadOff {
                     laws: vec![Law::DeadNode],
                     anchor: Var("f"),
@@ -1423,7 +1411,7 @@ mod tests {
         let mut graph = built("not");
         let mut deriv = Derivation::default();
         let hopeless = Tactic::Fire {
-            at: Query::new().is("f", NodePred::Kind(KindPat::Fork)),
+            at: Query::new().is("f", NodePred::Kind(KindPat::Select)),
             rule: RuleSpec::ReadOff {
                 laws: vec![Law::DeadNode],
                 anchor: Var("f"),
@@ -1539,9 +1527,9 @@ mod tests {
     /// own.
     #[test]
     fn the_branch_layer_is_a_pass() {
-        // `branch { add } { add }` is fork-dedup, select-view,
-        // select-same and then dead-node all the way down — wiring laws
-        // throughout, so the opaque oracle can hold the run to meaning.
+        // `branch { add } { add }` is copy-elim, dedup, select-same and
+        // then dead-node all the way down — wiring laws throughout, so the
+        // opaque oracle can hold the run to meaning.
         let original = built("branch { add } { add }");
         let mut graph = original.clone();
         let mut deriv = Derivation::default();

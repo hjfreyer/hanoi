@@ -38,26 +38,26 @@ the authoring layer that would spend it.
 ## The position already taken: a hypothesis is structure
 
 The engine's answer to "assume the condition holds" is not a context
-entry; it is the branch itself. A fork holds its condition at port 0 so
-a rule anchored there can *name* it, and "the condition is known true in
-this arm" is spent by a rewrite whose window holds both facts it needs:
-the fork, which says *this* is the condition, and the select, which
-holds the discard that makes reasoning from "the condition held" sound —
-the untaken arm is an answer nobody reads. That is the whole of the
-specializing layer (`specialize-equal`, `specialize-bool`,
-`specialize-choice` in `rewrite/src/diagram2/rules.rs`), and
+entry; it is the branch itself. A `select` holds its condition at port 0
+so a rule anchored there can *name* it, and it holds the **discard** —
+the untaken block is an answer nobody reads — which is what makes
+reasoning from "the condition held" sound. So "the condition is known
+true in this arm" is spent by a rewrite whose window is that one box and
+whatever made the condition. That is the whole of the specializing layer
+(`specialize-equal`, `specialize-bool`, `specialize-choice` in
+`rewrite/src/diagram2/rules.rs`), and
 `rewrite/tests/path_condition.rs` walks the methodology end to end:
-widen, hoist, dedup, promise, specialize.
+widen, identify, promise, specialize.
 
 So the primitive moves of hypothetical reasoning are already rows:
 
 | sequent-calculus move | row of the table |
 |---|---|
 | case split on a boolean wire | `shannon` — η as an equation, fired by the `cases` proof step |
-| use `x = true` in the then case | `specialize-bool` / `specialize-equal` / `specialize-choice`, anchored on the fork |
+| use `x = true` in the then case | `specialize-bool` / `specialize-equal` / `specialize-choice`, anchored on the select |
 | rewrite inside one case | free — a `Match` is an embedding, so every law fires in any context |
-| discharge, both cases proved | `select-same` (`if c { t } else { t } = t`), with `select-view`/`dedup` identifying the blocks first |
-| bring a fact into an arm's scope | backward `dead-node` (widen), then `fork-hoist` |
+| discharge, both cases proved | `select-same` (`if c { t } else { t } = t`), with `copy-elim`/`dedup` identifying the blocks first |
+| bring a fact into an arm's scope | backward `dead-node` (widen), then `copy-elim`/`dedup` |
 
 The worked goal above closes without any of this note's machinery — one
 drive identifies the two tests as one wire and `specialize-choice`
@@ -80,7 +80,7 @@ A  =  if x { A } else { A }          select-same, backward — or shannon,
    =  if x { A′ } else { A }         the then-case's sub-proof, replayed
                                      inside the arm; each USE of the
                                      hypothesis is a specialize row
-                                     anchored on this branch's fork
+                                     anchored on this branch's select
    =  if x { A′ } else { A″ }        the else-case's sub-proof, likewise
    =  B                              both arms landed on B: select-same
 ```
@@ -89,7 +89,7 @@ Every line is ordinary rewriting. The sub-proofs replay *verbatim*
 because congruence is free — their steps fire inside the arm the way
 every law fires anywhere — and the only steps that are not verbatim are
 the hypothesis uses, each of which compiles to one specializing row.
-The hypothesis exists in the derivation only as the fork it anchored
+The hypothesis exists in the derivation only as the branch it anchored
 on, and the checker replays the chain with no idea a case analysis
 happened. This is McCarthy's conditional-expression calculus doing what
 it was built for: if-then-else is precisely the operator that makes
@@ -169,8 +169,8 @@ and `Proof::check` already replays them blind.
 
 **`Region::Arm`.** The scoping is the region
 [docs/tactics.md](tactics.md) names as the natural next variant and
-holds until a tactic needs one — the boxes between a paired fork and
-select, computed the way `rules::arm` computes them. A sub-strategy is
+holds until a tactic needs one — one side of a branch's boxes, computed
+from its select. A sub-strategy is
 a tactic, not a step list, so it re-queries inside the region rather
 than carrying matches across rewrites; the addressing discipline —
 bindings never cross a rewrite, persistence is running the query again
@@ -178,7 +178,7 @@ bindings never cross a rewrite, persistence is running the query again
 evaluation.
 
 **`use_guard`, a library tactic.** The compiled form of "apply the
-hypothesis": find the governing fork of the current region, and fire
+hypothesis": find the governing select of the current region, and fire
 whichever specializing row matches — `specialize-bool` through the
 promise, `specialize-equal` through an `equal`, `specialize-choice`
 for an inner branch on the same condition — with `promised-bool` spent
@@ -189,7 +189,7 @@ engine hardcodes.
 **The turnstile is a printout.** A stuck sub-strategy's residual should
 print as the author thinks of it — `equal(x, t1) = true ⊢ …` above the
 goal-as-it-stands — and the prefix is *read off the graph*: the region's
-governing fork names the condition, the arm names the polarity. The
+governing select names the condition, the arm names the polarity. The
 graph does not record the presentation; the presentation reads the
 graph, the same way `--terms` reads back a residual today.
 
