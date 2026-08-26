@@ -105,14 +105,18 @@
 //!
 //! So a graph out of [`build`] is the literal translation and stays that
 //! way until something applies a rule to it. [`rules`] is where that
-//! happens: [`rules::find`] and [`rules::propose`] say where a law could
-//! fire, [`rules::apply`] fires one and hands back its inverse, and
-//! [`rules::replay`] runs a list of them.
+//! happens: [`rules::sides`] turns a payload into the [`Pair`] of graphs it
+//! states, [`find`](crate::graph::find) and [`rules::propose`] say where a
+//! law could fire, [`rules::apply`] fires one and hands back its inverse,
+//! and [`rules::replay`] runs a list of them. Only the first of those is
+//! this module's own work — the rest is [`Pair::apply`] wearing a law's
+//! name.
 //!
 //! **Ports link to ports; there is no wire** — [`crate::graph`]'s doing, and
 //! what makes a rewrite here a re-pointing rather than a declaration that
 //! two names are equivalent. An input names the one output port it reads
-//! ([`Source`]) and an output names the input ports that read it ([`Sink`]),
+//! ([`Source`]) and an output names the input ports that read it
+//! ([`Sink`](crate::graph::Sink)),
 //! so nothing accumulates: after each step the graph is already in its final
 //! state, which is what makes `dead-node` an O(1) test and lets
 //! [`Graph::check`] hold every link to agreeing at both ends — a
@@ -169,7 +173,7 @@ use std::collections::HashSet;
 
 use bytecode::{Library, SentenceIndex};
 
-use crate::graph::{Graph, NodeId, NodeKind, Sink, Source, schedule};
+use crate::graph::{Direction, Graph, Match, NodeId, NodeKind, Pair, Source, schedule};
 use crate::term::{Context, Prim, Term, TermIndex, lower};
 
 #[cfg(test)]
@@ -275,11 +279,18 @@ fn emit(graph: &mut Graph, terms: &Context, term: TermIndex, inputs: Vec<Source>
 /// readers re-pointed at what the body leaves.
 ///
 /// Definitional unfolding, not a law: this is [`build`]'s work continued —
-/// the same `emit`, into a graph that already exists — and it changes what
+/// the same [`build`], spliced in where the call was — and it changes what
 /// is provable exactly the way the term version did, which is why it is a
 /// proof step and never a rewrite the table proposes. Unlabelled, it opens
 /// all the way down (recursion is forbidden, so the walk drains); labelled,
 /// one pass, and the opened body's own calls stay shut.
+///
+/// It is a [`Pair::apply`] like any other, and that is the point: the pair
+/// is the call's own one-box window against the body's graph — equal by
+/// definition rather than by any law — and the [`Match`] is read straight
+/// off the call, since a window of one box that exports every port has
+/// nothing left to choose. What makes the splice safe is what makes every
+/// splice safe, so nothing here re-points a link by hand.
 ///
 /// Answers how many calls it opened — zero is the caller's business to
 /// refuse.
@@ -305,24 +316,22 @@ pub fn inline(
         }
         for (id, target) in calls {
             let body = lower(terms, library, target)?;
-            let inputs = graph.sources(id).to_vec();
-            debug_assert_eq!(
-                terms.arity(body),
-                graph.kind(id).arity(),
-                "a call carries its arity for the same reason the term does"
-            );
-            for (port, &src) in inputs.iter().enumerate() {
-                graph.unlink(src, Sink::Port { node: id, port });
-            }
-            let outs = emit(graph, terms, body, inputs);
-            for (port, &out) in outs.iter().enumerate() {
-                let readers: Vec<Sink> = graph.sinks(Source::Port { node: id, port }).to_vec();
-                for sink in readers {
-                    graph.set_source(sink, out);
-                    graph.sinks_mut(out).push(sink);
-                }
-            }
-            graph.nodes[id.index()] = None;
+            let call = graph.kind(id).clone();
+            // The one thing the pair needs of the two sides is that they
+            // agree on what they take and leave, and a call carries its
+            // arity for exactly the reason the term does.
+            let pair = Pair::new(Graph::of_box(call), build(terms, body))
+                .expect("a call and its body agree by arity, and both are graphs");
+            let at = Match {
+                nodes: vec![id],
+                inputs: graph.sources(id).to_vec(),
+                outputs: (0..graph.kind(id).arity().outputs)
+                    .map(|port| graph.sinks(Source::Port { node: id, port }).to_vec())
+                    .collect(),
+                branches: Vec::new(),
+            };
+            pair.apply(graph, Direction::Forward, &at)
+                .expect("a call is the window its own box fills");
             opened += 1;
         }
         if only.is_some() {
@@ -357,17 +366,17 @@ pub fn read_back(graph: &Graph, terms: &mut Context) -> TermIndex {
     let order = schedule(graph);
     // What is still wanted at or after each step, the boundary included.
     let mut wanted: Vec<HashSet<Source>> = vec![HashSet::new(); order.len() + 1];
-    wanted[order.len()] = graph.outputs.iter().copied().collect();
+    wanted[order.len()] = graph.outputs().iter().copied().collect();
     for k in (0..order.len()).rev() {
         let mut set = wanted[k + 1].clone();
-        set.extend(graph.node(order[k]).inputs.iter().copied());
+        set.extend(graph.sources(order[k]).iter().copied());
         wanted[k] = set;
     }
 
     let mut steps: Vec<TermIndex> = Vec::new();
-    let mut stack: Vec<Source> = (0..graph.inputs.len()).map(Source::Input).collect();
+    let mut stack: Vec<Source> = (0..graph.arity().inputs).map(Source::Input).collect();
     for (k, &id) in order.iter().enumerate() {
-        let sources: Vec<Source> = graph.node(id).inputs.clone();
+        let sources: Vec<Source> = graph.sources(id).to_vec();
         let keep: Vec<Source> = stack
             .iter()
             .copied()
@@ -417,12 +426,12 @@ pub fn read_back(graph: &Graph, terms: &mut Context) -> TermIndex {
         next.extend(keep[below..].iter().copied());
         stack = next;
     }
-    steps.extend(route(terms, &stack, &graph.outputs));
+    steps.extend(route(terms, &stack, graph.outputs()));
 
     let mut steps = steps.into_iter();
     // Nothing to do at all is the identity on the inputs, not on nothing.
     let Some(first) = steps.next() else {
-        return terms.id(graph.inputs.len());
+        return terms.id(graph.arity().inputs);
     };
     let spine = steps.fold(first, |acc, next| {
         terms
@@ -772,7 +781,7 @@ pub(crate) mod tests {
         // Its three inputs: the condition, which is the sentence's own
         // input and sits at port 0 the way it does on a fork, and then the
         // `then` answer and the `else` answer.
-        let inputs = graph.node(id).inputs.clone();
+        let inputs = graph.sources(id).to_vec();
         assert_eq!(inputs.len(), 3);
         assert_eq!(inputs[0], Source::Input(0), "the condition is port 0");
         assert!(

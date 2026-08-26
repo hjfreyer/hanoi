@@ -4,13 +4,14 @@
 //! [`Context`](term::Context) arena and are passed around as
 //! [`TermIndex`](term::TermIndex) — and [`parse`] reads one back out of the
 //! language it prints in; [`graph`] is what a claim is *carried* in — boxes,
-//! the links between them, well-formedness, and whether two of them are the
-//! same diagram — and [`diagram2`] is the engine over it: a term translated
-//! *literally* into a graph, structural boxes and all, rewritten until the
-//! connections are direct against a table ([`diagram2::rules`]) whose
-//! every law is a pair of graphs and whose every rewrite is one of them
-//! swapped for the other, with what to spend and where left to whoever
-//! drives it ([`diagram2::tactic`]); [`goal`] is a claim — two graphs —
+//! the links between them, well-formedness, whether two of them are the same
+//! diagram, and the one rewriting operation there is: a
+//! [`Pair`](graph::Pair) of graphs put down where a [`Match`](graph::Match)
+//! says, checked before anything moves. [`diagram2`] is the engine over it:
+//! a term translated *literally* into a graph, structural boxes and all,
+//! rewritten until the connections are direct against a table
+//! ([`diagram2::rules`]) whose every law *is* such a pair, with what to spend
+//! and where left to whoever drives it ([`diagram2::tactic`]); [`goal`] is a claim — two graphs —
 //! and what became of it; [`hant`] is the strategy language a human
 //! directs a proof with; [`strategy`] interprets one; [`corpus`] loads a
 //! source tree's identities and proofs together. `bin/prove` drives the

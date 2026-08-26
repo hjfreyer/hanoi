@@ -128,8 +128,9 @@ use std::fmt;
 
 use bytecode::SentenceIndex;
 
-use crate::diagram2::rules::{self, Direction, Law};
+use crate::diagram2::rules::{self, Law};
 use crate::diagram2::tactic::{self, Tactic};
+use crate::graph::Direction;
 use crate::graph::NodeId;
 use crate::term::TermIndex;
 

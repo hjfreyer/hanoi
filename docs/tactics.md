@@ -69,10 +69,10 @@ rewrite/src/diagram2/query.rs    — Query, Bindings, eval      (untrusted searc
 rewrite/src/diagram2/tactic.rs   — MatchSpec, Tactic, run     (untrusted orchestration)
 ```
 
-Both are children of `diagram2`, and `Graph`'s mutation surface is
-crate-visible since it moved to `rewrite/src/graph.rs`; by policy they read
-through the public surface of `Graph` (`live`, `kind`, `sources`, `sinks`,
-`outputs`, `is_live`) and drive the public operations of `rules`.
+Both are children of `diagram2`, and `Graph`'s links are private to
+`rewrite/src/graph.rs`; they read through the public surface of `Graph`
+(`live`, `kind`, `sources`, `sinks`, `outputs`, `is_live`), search with
+`graph::find_*`, and drive the public operations of `rules`.
 
 ## The model in three layers
 

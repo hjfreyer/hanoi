@@ -19,13 +19,14 @@
 //!
 //! - [`Tactic::Fire`] — **found**, forward: a [`Query`] narrows to the box
 //!   a rule is anchored at, [`rules::propose`] or
-//!   [`rules::find_pinned`] produces the [`Match`](rules::Match), and
+//!   [`find_pinned`] produces the [`Match`], and
 //!   payload blanks resolve by reading the bound box — the way
 //!   `read_off` has always read them.
 //! - [`Tactic::At`] — **found at a named box**, either direction: the
 //!   address is a [`NodeId`] copied off a residual listing, and the
-//!   search is [`rules::instances`] × [`rules::find_pinned`] over every
-//!   pattern box, so a match counts when it holds that box anywhere. The
+//!   search is [`rules::instances`] × [`find_over`]
+//!   over every pattern box, so a match counts when it holds that box
+//!   anywhere. The
 //!   one address that is a name rather than a description, and the one a
 //!   person writes by pointing at a report.
 //! - [`Tactic::State`] — **stated**, either direction but above all
@@ -33,7 +34,7 @@
 //!   pin its own match, so those steps are *statements*, and a
 //!   [`MatchSpec`] is the statement — every piece of it either a reading
 //!   of the current graph or a genuine choice, the reader-split of
-//!   [`Match::outputs`](rules::Match::outputs) said outright in
+//!   [`Match::outputs`] said outright in
 //!   [`SinkSel`] and never inferred.
 //!
 //! ## Addresses are queries, choices are stated
@@ -84,8 +85,10 @@ use std::collections::HashSet;
 use std::fmt;
 
 use super::query::{self, Bindings, Query, Var};
-use super::rules::{self, Derivation, Direction, Law, Rule, Step};
-use crate::graph::{BranchId, Graph, NodeId, NodeKind, Sink, Source};
+use super::rules::{self, Derivation, Law, Rule, Step};
+use crate::graph::{
+    BranchId, Direction, Graph, Match, NodeId, NodeKind, Sink, Source, find_over, find_pinned,
+};
 
 // ---- what a step says ------------------------------------------------------------
 
@@ -106,7 +109,7 @@ pub enum Pick {
 #[derive(Debug, Clone, PartialEq)]
 pub enum RuleSpec {
     /// A payload stated outright, anchored by pinning pattern box `pin`
-    /// to the box the query bound — [`rules::find_pinned`].
+    /// to the box the query bound — [`find_pinned`].
     Concrete { rule: Rule, anchor: Var, pin: usize },
     /// Payloads read off the bound box, law by law — the
     /// [`rules::propose`] path, and where a query's payload blanks
@@ -127,7 +130,7 @@ pub enum SrcExpr {
 }
 
 /// One boundary output's readers, described. This is where the
-/// reader-split — the one field of a [`Match`](rules::Match) that is a
+/// reader-split — the one field of a [`Match`] that is a
 /// choice rather than a reading — gets **stated**.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum SinkSel {
@@ -144,7 +147,7 @@ pub enum SinkSel {
     Rest,
 }
 
-/// The recipe for a stated [`Match`](rules::Match) against one side of one
+/// The recipe for a stated [`Match`] against one side of one
 /// rule. Resolution is pure reading; the result goes through
 /// [`rules::apply`], so a wrong recipe is a refused step.
 ///
@@ -216,7 +219,7 @@ pub enum Tactic {
     /// The search is the mirror of [`rules::propose`]'s. Every equation
     /// the law comes to in this graph ([`rules::instances`]) is looked
     /// for with each of its pattern boxes pinned in turn to `node`
-    /// ([`rules::find_pinned`]), so a match counts when it holds the box
+    /// ([`find_over`]), so a match counts when it holds the box
     /// **anywhere**, not only where the pattern happens to anchor. `dir`
     /// says which side of the equation is the pattern: `Forward` matches
     /// the left and leaves the right, `Backward` the other way round —
@@ -579,23 +582,17 @@ impl Runner<'_> {
         }
         let mut out: Vec<Step> = Vec::new();
         for rule in rules::instances(self.graph, law) {
-            let Ok((lhs, rhs)) = rules::sides(&rule) else {
+            let Ok(pair) = rules::sides(&rule) else {
                 continue;
             };
-            let pattern = match dir {
-                Direction::Forward => lhs,
-                Direction::Backward => rhs,
-            };
-            for pin in 0..pattern.nodes.len() {
-                for at in rules::find_pinned(self.graph, &pattern, pin, node) {
-                    let step = Step {
-                        rule: rule.clone(),
-                        dir,
-                        at,
-                    };
-                    if !out.contains(&step) {
-                        out.push(step);
-                    }
+            for at in find_over(self.graph, pair.pattern(dir), node) {
+                let step = Step {
+                    rule: rule.clone(),
+                    dir,
+                    at,
+                };
+                if !out.contains(&step) {
+                    out.push(step);
                 }
             }
         }
@@ -652,12 +649,8 @@ impl Runner<'_> {
         spec: &MatchSpec,
         b: &Bindings,
     ) -> Result<Step, TacticError> {
-        let (lhs, rhs) = rules::sides(rule).map_err(TacticError::Refused)?;
-        let pattern = match dir {
-            Direction::Forward => lhs,
-            Direction::Backward => rhs,
-        };
-        let at = resolve(self.graph, &pattern, b, spec)?;
+        let pair = rules::sides(rule).map_err(TacticError::Refused)?;
+        let at = resolve(self.graph, pair.pattern(dir), b, spec)?;
         Ok(Step {
             rule: rule.clone(),
             dir,
@@ -702,8 +695,8 @@ impl Runner<'_> {
                 let id = b
                     .get(*anchor)
                     .ok_or(TacticError::Unresolved { var: *anchor })?;
-                let (lhs, _) = rules::sides(rule).map_err(TacticError::Refused)?;
-                Ok(rules::find_pinned(self.graph, &lhs, *pin, id)
+                let pair = rules::sides(rule).map_err(TacticError::Refused)?;
+                Ok(find_pinned(self.graph, pair.lhs(), *pin, id)
                     .into_iter()
                     .map(|at| Step {
                         rule: rule.clone(),
@@ -862,7 +855,7 @@ fn resolve(
     pattern: &Graph,
     b: &Bindings,
     spec: &MatchSpec,
-) -> Result<rules::Match, TacticError> {
+) -> Result<Match, TacticError> {
     if spec
         .outputs
         .iter()
@@ -957,7 +950,7 @@ fn resolve(
         }
     }
 
-    Ok(rules::Match {
+    Ok(Match {
         nodes,
         inputs,
         outputs,

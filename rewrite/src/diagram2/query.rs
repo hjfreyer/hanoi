@@ -14,7 +14,7 @@
 //! A query is a conjunction of [`Atom`]s over named [`Var`]s: what kind of
 //! box a variable is, who feeds whom at which port, what reads the
 //! boundary, what nothing reads at all. It deliberately does **not** match
-//! subgraphs. [`rules::find_at`](super::rules::find_at) is the one
+//! subgraphs. [`find_at`](crate::graph::find_at) is the one
 //! embedding-finder there is, and a second would be a second copy of the
 //! search, free to drift from the table; a query narrows to the box a rule
 //! is anchored at — *where*, not *what shape* — and payload blanks like
