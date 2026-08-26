@@ -68,22 +68,37 @@ from a payload and whose every application `apply` verifies port by port.
 The layers of [docs/algebra.md](algebra.md) are all rows: the structural
 laws (`id-elim`, `swap-elim`, `copy-elim`, `dead-node`, `dedup`), the
 branch layer (`select-literal` and its kin, the specializing rules,
-`view-value` held to last), and the value layer — a literal window runs on
+`view-value` held to last, `select-hoist` held off every list), and the
+value layer — a literal window runs on
 the real `vm` (one `run_window`, no second semantics, `fold`), a promised
 bool tests true (`tested-bool`), retupling is the coercion (`retuple`), a
 value already coerced survives that round trip (`as-tuple-round-trip`), and a
 tuple the window watched being built answers what shape it is
 (`is-tuple-built`).
 
-Two rows sit outside every list, because they **grow** a graph: `as-bool-branch`
-(`as_bool` is the branch it makes) and `coercion-guard` (a coercion is the
-guarded identity the instruction set describes it as, the width part of the
-guard for `as_tuple n`). A driver run to fixpoint wants rows that shrink, and
-*whether to unpack a coercion* is a decision of the same kind `inline` is — so
-a proof names the one it wants: `lhs(fire(coercion-guard)) diagram` is the whole
-of three corpus identities. What they buy is the direction the rest of the table
-cannot read: a coercion is opaque to every rule that asks what a value *is*, and
-these put the test that decides it where a case split can spend it.
+Three rows sit outside every list, because they **grow** a graph. Two are the
+unpackings: `as-bool-branch` (`as_bool` is the branch it makes) and
+`coercion-guard` (a coercion is the guarded identity the instruction set
+describes it as, the width part of the guard for `as_tuple n`). A driver run to
+fixpoint wants rows that shrink, and *whether to unpack a coercion* is a
+decision of the same kind `inline` is — so a proof names the one it wants:
+`lhs(fire(coercion-guard)) diagram` is the whole of three corpus identities.
+What they buy is the direction the rest of the table cannot read: a coercion is
+opaque to every rule that asks what a value *is*, and these put the test that
+decides it where a case split can spend it.
+
+The third is `select-hoist`, and it is what lets a branch grow **forwards**.
+`fork-hoist` moves work across the fork in either direction, so a branch could
+always swallow what fed it; nothing said the same at the select, so everything
+downstream of one was out of the branch layer's reach and a select could be
+deleted but never moved. The row is the commuting conversion — what runs after
+a branch runs inside whichever arm the branch takes — and it carries the region
+it moves the branch over as payload, the way `shannon` carries its body. The
+two are worth keeping apart: `shannon` *makes* a branch out of a wire by
+pinning that wire to `true` and `false` in its two copies, which is why it is
+refused unless the instruction set promises the wire is a bool. `select-hoist`
+pins nothing and makes no branch — the condition reaches the moved select
+untouched — so it holds of **any** branch, whatever computed the condition.
 
 The `diagram` closer drives the whole table to fixpoint on each side
 (`tactic::decide`) and asks one final question: are the two graphs
