@@ -91,9 +91,16 @@ The third is `select-hoist`, and it is what lets a branch grow **forwards**.
 `fork-hoist` moves work across the fork in either direction, so a branch could
 always swallow what fed it; nothing said the same at the select, so everything
 downstream of one was out of the branch layer's reach and a select could be
-deleted but never moved. The row is the commuting conversion — what runs after
-a branch runs inside whichever arm the branch takes — and it carries the region
-it moves the branch over as payload, the way `shannon` carries its body. The
+deleted but never moved. The row is the commuting conversion:
+
+```text
+select(C, T, E) ; A  =  select(C, T ; A, E ; A)
+```
+
+Said as a composition on purpose — `select(…) ; A` is the side condition as
+much as the shape, since composing is the claim that the answers go into `A`
+and nowhere else. It carries `A` as payload, the way `shannon` carries its
+body. The
 two are worth keeping apart: `shannon` *makes* a branch out of a wire by
 pinning that wire to `true` and `false` in its two copies, which is why it is
 refused unless the instruction set promises the wire is a bool. `select-hoist`

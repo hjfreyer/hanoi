@@ -619,8 +619,9 @@ test sentence what_follows_a_branch_agrees_either_way {
     jump crate::prelude::check_equals
 }
 
-// The commuting conversion: what runs **after** a branch runs inside
-// whichever arm the branch takes.
+// `select(C, T, E) ; A` = `select(C, T ; A, E ; A)` — the commuting
+// conversion: what runs **after** a branch runs inside whichever arm the
+// branch takes.
 //
 // The old evaluating engine got this by representation — it grafted every
 // continuation into the arms as it went, so the two spellings built one tree
