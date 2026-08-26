@@ -45,6 +45,20 @@
 //! two sides equal — is not asked here. [`rules`](crate::diagram2::rules) is
 //! what produces pairs of equivalent graphs, and once it has, every rewrite
 //! in this crate is one of them applied somewhere.
+//!
+//! ## Embeddings compose
+//!
+//! A match is a map: this graph's boxes, boundary and branches, read as
+//! another's. [`Embedding`] is that map kept in a form that outlives a
+//! rewrite, and [`Embedding::carry`] composes two of them — a match against
+//! an inner graph, said against the outer one.
+//!
+//! That is what lets a rewrite stated about one graph be spent inside
+//! another, and a whole *run* of them likewise: each step makes boxes on
+//! both sides, [`Embedding::extend`] pairs them up, and the next step can
+//! name them. [`transplant`](crate::diagram2::rules::transplant) is that
+//! loop, and what it answers with is the run said in the host's coordinates
+//! — a proof about the host, replayable on its own.
 
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap, HashSet};
@@ -1161,6 +1175,151 @@ impl Match {
     }
 }
 
+/// One graph's names read in another, kept as a map so it can survive both
+/// of them being rewritten.
+///
+/// A [`Match`] is a claim about one moment: its [`nodes`](Match::nodes) are
+/// indexed by the pattern's own dense box order, which stops being a reading
+/// the first time that pattern is itself rewritten. An `Embedding` is the
+/// same correspondence written so it can be **extended**, which is what
+/// carrying a whole run of rewrites across needs — every step makes boxes on
+/// both sides, and they have to be paired up before the next step can be
+/// said.
+///
+/// Composition is [`Embedding::carry`]. Given a match of `P` in `G` and an
+/// embedding of `G` in `H`, it answers the match of `P` in `H`, which is
+/// what lets a rewrite stated about `G` be spent inside `H` instead. That
+/// the answer is still a *claim* is the usual discipline: it goes through
+/// [`Pair::apply`] like any other, so a wrongly carried match is refused
+/// rather than believed.
+///
+/// It carries the boundary too, and that is the part worth saying out loud.
+/// A boundary input of `G` is a source in `H` — whatever `G`'s window reads
+/// there — and a boundary *output* of `G` is a **list** of sinks in `H`,
+/// since one port of a window may be read by several boxes outside it. A
+/// match that hands one of its ports to `G`'s boundary therefore hands it,
+/// in `H`, to every reader that boundary stood for; anything less would
+/// strand a link, and [`check_match`] would refuse it.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Embedding {
+    /// What the outer graph has where the inner one has this box.
+    nodes: HashMap<NodeId, NodeId>,
+    /// What the inner graph's boundary input `i` reads in the outer one.
+    inputs: Vec<Source>,
+    /// The outer sinks the inner graph's boundary output `j` serves.
+    outputs: Vec<Vec<Sink>>,
+    /// What the outer graph calls the inner one's branch.
+    branches: HashMap<BranchId, BranchId>,
+}
+
+impl Embedding {
+    /// The correspondence a match states, in a form that outlives it.
+    ///
+    /// The match's pattern is the inner graph and its host the outer one, so
+    /// this is only as true as the match is — [`check_match`] is what says
+    /// so, and a caller that has not asked is carrying claims rather than
+    /// readings.
+    pub fn of(at: &Match) -> Embedding {
+        Embedding {
+            nodes: at
+                .nodes
+                .iter()
+                .enumerate()
+                .map(|(i, &to)| (NodeId::at(i), to))
+                .collect(),
+            inputs: at.inputs.clone(),
+            outputs: at.outputs.clone(),
+            branches: at
+                .branches
+                .iter()
+                .enumerate()
+                .map(|(i, &to)| (BranchId::at(i), to))
+                .collect(),
+        }
+    }
+
+    /// A match against the inner graph, said against the outer one.
+    ///
+    /// `None` where the match names a box, a boundary or a branch this
+    /// embedding does not carry — which, for an embedding kept up to date by
+    /// [`Embedding::extend`], means the match is not about the inner graph
+    /// at all.
+    pub fn carry(&self, at: &Match) -> Option<Match> {
+        let source = |src: Source| match src {
+            Source::Input(i) => self.inputs.get(i).copied(),
+            Source::Port { node, port } => self
+                .nodes
+                .get(&node)
+                .map(|&node| Source::Port { node, port }),
+        };
+        // One inner sink is a *list* of outer ones: a boundary output stands
+        // for every reader outside the window.
+        let readers = |sink: Sink| match sink {
+            Sink::Output(j) => self.outputs.get(j).cloned(),
+            Sink::Port { node, port } => self
+                .nodes
+                .get(&node)
+                .map(|&node| vec![Sink::Port { node, port }]),
+        };
+        Some(Match {
+            nodes: at
+                .nodes
+                .iter()
+                .map(|id| self.nodes.get(id).copied())
+                .collect::<Option<_>>()?,
+            inputs: at
+                .inputs
+                .iter()
+                .map(|&src| source(src))
+                .collect::<Option<_>>()?,
+            outputs: at
+                .outputs
+                .iter()
+                .map(|sinks| {
+                    let carried: Option<Vec<Vec<Sink>>> =
+                        sinks.iter().map(|&sink| readers(sink)).collect();
+                    carried.map(|lists| lists.concat())
+                })
+                .collect::<Option<_>>()?,
+            branches: at
+                .branches
+                .iter()
+                .map(|b| self.branches.get(b).copied())
+                .collect::<Option<_>>()?,
+        })
+    }
+
+    /// What one rewrite, run on both sides, added to the correspondence.
+    ///
+    /// Both arguments are the answer [`Pair::apply`] gave — the embedding of
+    /// what it put down — `inner` from the run on the inner graph and
+    /// `outer` from the run on the outer one. The same replacement went down
+    /// in both, so its boxes and its branches line up in order, and that is
+    /// the whole of the pairing.
+    ///
+    /// Nothing is taken away. A box a rewrite deleted is a box no later
+    /// rewrite can name — an id is never reused — so a stale entry is
+    /// unreachable rather than wrong.
+    pub fn extend(&mut self, inner: &Match, outer: &Match) {
+        debug_assert_eq!(
+            (inner.nodes.len(), inner.branches.len()),
+            (outer.nodes.len(), outer.branches.len()),
+            "one replacement went down on both sides"
+        );
+        for (&here, &there) in inner.nodes.iter().zip(&outer.nodes) {
+            self.nodes.insert(here, there);
+        }
+        for (&here, &there) in inner.branches.iter().zip(&outer.branches) {
+            self.branches.insert(here, there);
+        }
+    }
+
+    /// What the outer graph has where the inner one has this box.
+    pub fn node(&self, id: NodeId) -> Option<NodeId> {
+        self.nodes.get(&id).copied()
+    }
+}
+
 /// How a claimed embedding failed to be one. Every variant names the port
 /// that disagreed, because that is the whole content of the check.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1183,6 +1342,38 @@ pub enum Mismatch {
     /// not isomorphic to the pattern but to the pattern plus an edge.
     Induced(Source),
 }
+
+/// Said without naming the pattern, since the pattern is whatever the caller
+/// was matching; [`crate::diagram2::rules`] puts the law's name in front of
+/// this when the pattern was a law's side.
+impl fmt::Display for Mismatch {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Mismatch::Shape => write!(f, "the match is not the shape of the pattern"),
+            Mismatch::Gone(node) => write!(f, "the match names {}, which is not there", node),
+            Mismatch::Kind(node) => {
+                write!(f, "{} is not the box the pattern has in its place", node)
+            }
+            Mismatch::Edge(sink) => write!(
+                f,
+                "{} reads something the pattern does not say it reads",
+                sink
+            ),
+            Mismatch::Readers(src) => write!(
+                f,
+                "the readers of {} are not the ones the match claims",
+                src
+            ),
+            Mismatch::Induced(src) => write!(
+                f,
+                "{} is inside the match, so what it points at is the pattern plus a link",
+                src
+            ),
+        }
+    }
+}
+
+impl std::error::Error for Mismatch {}
 
 /// Whether the match points at a subgraph isomorphic to the pattern, and so
 /// whether replacing it is safe.
@@ -2134,5 +2325,79 @@ mod tests {
             Err(Mismatch::Shape)
         );
         assert_eq!(spoiled, host, "a refusal changes nothing");
+    }
+
+    // ---- one embedding read through another ----
+
+    /// Composition, on its own: a match of `P` in `G` and an embedding of
+    /// `G` in `H` make a match of `P` in `H` — and the answer is a real
+    /// match, which is to say the checker takes it.
+    #[test]
+    fn a_match_read_through_an_embedding_is_a_match() {
+        // `H`: `not ; not ; not`. `G`: the deepest two of them.
+        let mut host = Graph::empty(1);
+        let a = host.add(NodeKind::Op(Prim::Not), vec![Source::Input(0)]);
+        let b = host.add(NodeKind::Op(Prim::Not), a.clone());
+        let c = host.add(NodeKind::Op(Prim::Not), b);
+        host.close(c);
+        host.check().unwrap();
+
+        let mut inner = Graph::empty(1);
+        let first = inner.add(NodeKind::Op(Prim::Not), vec![Source::Input(0)]);
+        let second = inner.add(NodeKind::Op(Prim::Not), first);
+        inner.close(second);
+
+        let outer = find(&host, &inner)
+            .into_iter()
+            .find(|at| at.nodes[0] == NodeId::at(0))
+            .expect("the deepest pair");
+        let carried = Embedding::of(&outer);
+
+        // `P`: one `not`, matched at the *second* box of `G`. Its port is
+        // exported, and in `G` the only thing reading it is `G`'s boundary.
+        let one = Graph::of_box(NodeKind::Op(Prim::Not));
+        let there = find(&inner, &one)
+            .into_iter()
+            .find(|at| at.outputs[0] == [Sink::Output(0)])
+            .expect("the shallower of the two");
+
+        let here = carried.carry(&there).expect("the embedding covers it");
+        assert_eq!(here.nodes, vec![NodeId::at(1)]);
+        // The boundary is where the composition earns its keep: `G`'s output
+        // stood for the third `not`, so that is who reads this one now.
+        assert_eq!(here.inputs, [a[0]], "the deepest `not` feeds it");
+        assert_eq!(
+            here.outputs,
+            vec![vec![Sink::Port {
+                node: NodeId::at(2),
+                port: 0
+            }]],
+            "and the shallowest reads it"
+        );
+        check_match(&host, &one, &here).expect("a composed match is a match");
+    }
+
+    /// An embedding says nothing about what it does not cover.
+    #[test]
+    fn an_embedding_carries_only_what_it_holds() {
+        let mut inner = Graph::empty(1);
+        let only = inner.add(NodeKind::Op(Prim::Not), vec![Source::Input(0)]);
+        inner.close(only);
+        let carried = Embedding::of(&Match {
+            nodes: vec![NodeId::at(7)],
+            inputs: vec![Source::Input(3)],
+            outputs: vec![vec![Sink::Output(2)]],
+            branches: Vec::new(),
+        });
+        assert_eq!(carried.node(NodeId::at(0)), Some(NodeId::at(7)));
+        assert_eq!(carried.node(NodeId::at(1)), None);
+
+        let stranger = Match {
+            nodes: vec![NodeId::at(1)],
+            inputs: vec![Source::Input(0)],
+            outputs: vec![vec![Sink::Output(0)]],
+            branches: Vec::new(),
+        };
+        assert_eq!(carried.carry(&stranger), None, "box 1 is not covered");
     }
 }

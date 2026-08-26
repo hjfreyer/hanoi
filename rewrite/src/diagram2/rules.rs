@@ -216,8 +216,8 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 
 use crate::graph::{
-    BranchId, Direction, Graph, Match, Mismatch, NodeId, NodeKind, Pair, Sink, Source, Unpaired,
-    find_at,
+    BranchId, Direction, Embedding, Graph, Match, Mismatch, NodeId, NodeKind, Pair, Sink, Source,
+    Unpaired, check_match, find_at,
 };
 use bytecode::{Instruction, Library, Value};
 
@@ -1038,6 +1038,9 @@ impl From<Unpaired> for Ill {
 pub enum Error {
     /// The payload does not state an equation.
     Ill { law: Law, why: Ill },
+    /// [`transplant`] was handed a match that does not put its pattern in
+    /// its host, so there was nothing to carry a derivation through.
+    NotEmbedded(Mismatch),
     /// The subgraph the match points at is not the side of the equation the
     /// step says it is. This is the only way a step can be wrong.
     NotThere {
@@ -1059,43 +1062,15 @@ impl fmt::Display for Error {
                 ),
                 Ill::Broken(e) => write!(f, "{:?} builds a side that is not a graph: {}", law, e),
             },
+            Error::NotEmbedded(why) => {
+                write!(f, "the derivation's graph does not sit there: {}", why)
+            }
             Error::NotThere { law, dir, at } => {
                 let side = match dir {
                     Direction::Forward => "left",
                     Direction::Backward => "right",
                 };
-                match at {
-                    Mismatch::Shape => {
-                        write!(f, "the match is not the shape of {:?}'s {} side", law, side)
-                    }
-                    Mismatch::Gone(node) => {
-                        write!(f, "the match names {}, which is not there", node)
-                    }
-                    Mismatch::Kind(node) => write!(
-                        f,
-                        "{} is not the box {:?}'s {} side has in its place",
-                        node, law, side
-                    ),
-                    Mismatch::Edge(sink) => {
-                        write!(
-                            f,
-                            "{} reads something {:?} does not say it reads",
-                            sink, law
-                        )
-                    }
-                    Mismatch::Readers(src) => {
-                        write!(
-                            f,
-                            "the readers of {} are not the ones the match claims",
-                            src
-                        )
-                    }
-                    Mismatch::Induced(src) => write!(
-                        f,
-                        "{} is inside the match, so what it points at is {:?} plus a link",
-                        src, law
-                    ),
-                }
+                write!(f, "{:?}'s {} side is not there: {}", law, side, at)
             }
         }
     }
@@ -2258,6 +2233,72 @@ pub fn replay(graph: &mut Graph, steps: &[Step]) -> Result<Derivation, Error> {
     for step in steps {
         run.push(graph, step.clone())?;
     }
+    Ok(run)
+}
+
+/// A derivation proved about one graph, spent again inside another.
+///
+/// `at` says where `pattern` sits in `host` — [`find`](crate::graph::find)
+/// answers with one, or a caller may state it — and `steps` is a run that
+/// was written about `pattern` alone. What comes back is **the same run said
+/// in the host's coordinates**, so [`replay`] will take it against a fresh
+/// copy of `host` and land in the same place.
+///
+/// This is what makes a proof worth having twice. A [`Match`] names host
+/// [`NodeId`]s, so a derivation belongs to the graph it was written for;
+/// carrying one through an [`Embedding`] is what lets a lemma proved once be
+/// spent wherever its left-hand side turns up.
+///
+/// Every step is run **twice**: on a copy of `pattern`, to follow where its
+/// boxes went, and on `host`, to do the work. The first is what keeps the
+/// embedding current — each rewrite makes boxes on both sides, and
+/// [`Embedding::extend`] is what pairs them up so the next step can name
+/// them. It is also where a step that is not about `pattern` is refused,
+/// with the law able to say why.
+///
+/// Nothing is believed. The outer match goes through
+/// [`check_match`] before anything moves, and
+/// every carried step through [`apply`] like any other, so a wrongly carried
+/// one costs a refusal. `host` is left exactly as it was if any step fails:
+/// the work is done on a copy and committed only once the whole run lands.
+///
+/// `pattern` must be a graph nothing has been deleted from, which is what
+/// any [`Match`] is against.
+pub fn transplant(
+    host: &mut Graph,
+    pattern: &Graph,
+    at: &Match,
+    steps: &[Step],
+) -> Result<Derivation, Error> {
+    check_match(host, pattern, at).map_err(Error::NotEmbedded)?;
+    let mut here = pattern.clone();
+    let mut carried = Embedding::of(at);
+    let mut work = host.clone();
+    let mut run = Derivation::default();
+    for step in steps {
+        // On the pattern first, so a step that is not about this graph is
+        // refused where the law can say so, rather than carried into
+        // something the host refuses for a stranger reason.
+        let left = apply(&mut here, step)?.at;
+        let there = carried
+            .carry(&step.at)
+            .expect("a checked embedding carries every box its own graph's steps can name");
+        run.push(
+            &mut work,
+            Step {
+                rule: step.rule.clone(),
+                dir: step.dir,
+                at: there,
+            },
+        )?;
+        let landed = run
+            .latest_undo()
+            .expect("a step was just pushed")
+            .at
+            .clone();
+        carried.extend(&left, &landed);
+    }
+    *host = work;
     Ok(run)
 }
 
@@ -5063,5 +5104,155 @@ mod tests {
                 sides(&rule).unwrap_or_else(|e| panic!("{:?}: {:?}", rule, e));
             }
         }
+    }
+
+    // ---- a derivation carried somewhere else ----
+
+    /// `not ; not ; not`, and its three boxes deepest first.
+    fn three_nots() -> (Graph, Vec<NodeId>) {
+        let mut g = Graph::empty(1);
+        let first = g.add(NodeKind::Op(Prim::Not), vec![Source::Input(0)]);
+        let second = g.add(NodeKind::Op(Prim::Not), first);
+        let third = g.add(NodeKind::Op(Prim::Not), second);
+        g.close(third);
+        g.check().unwrap();
+        let ids: Vec<NodeId> = g.live().map(|(id, _)| id).collect();
+        (g, ids)
+    }
+
+    /// A run about `not ; not` alone: spend `not-not`, then open the
+    /// `as_bool` it leaves into the branch it is.
+    ///
+    /// Two steps, and the second names a box the *first one made* — which is
+    /// the whole difficulty in carrying a run somewhere else, since that box
+    /// has a different id wherever it is put down. The second also brings a
+    /// branch, so the branch ids travel too.
+    fn open_a_double_negative() -> (Graph, Vec<Step>) {
+        let lemma = sides(&Rule::NotNot).unwrap().lhs().clone();
+        let mut alone = lemma.clone();
+        let first = Step {
+            rule: Rule::NotNot,
+            dir: Direction::Forward,
+            at: identity(&lemma),
+        };
+        let made = apply(&mut alone, &first).unwrap().at.nodes[0];
+        let second = Step {
+            rule: Rule::AsBoolBranch,
+            dir: Direction::Forward,
+            at: Match {
+                nodes: vec![made],
+                inputs: vec![Source::Input(0)],
+                outputs: vec![vec![Sink::Output(0)]],
+                branches: Vec::new(),
+            },
+        };
+        apply(&mut alone, &second).unwrap();
+        alone.check().unwrap();
+        assert!(
+            alone
+                .live()
+                .any(|(_, k)| matches!(k, NodeKind::Select { .. })),
+            "the run ends in the branch `as_bool` is:\n{}",
+            alone
+        );
+        (lemma, vec![first, second])
+    }
+
+    /// The whole point of an embedding: a run written about one graph, spent
+    /// where that graph was found inside another, and the record it leaves
+    /// replaying against that other on its own.
+    #[test]
+    fn a_derivation_travels_to_where_its_graph_was_found() {
+        let (lemma, proof) = open_a_double_negative();
+        let branch = sides(&Rule::AsBoolBranch).unwrap().rhs().clone();
+
+        // A host holding the lemma's left-hand side twice, one copy
+        // overlapping the other, so neither embedding is the whole graph.
+        let (host, boxes) = three_nots();
+        let found = find(&host, &lemma);
+        assert_eq!(found.len(), 2, "either adjacent pair:\n{}", host);
+
+        for at in &found {
+            let deepest = at.nodes[0] == boxes[0];
+            let mut there = host.clone();
+            let run = transplant(&mut there, &lemma, at, &proof).unwrap();
+            there.check().unwrap_or_else(|e| panic!("{}\n{}", e, there));
+            assert_eq!(run.len(), proof.len());
+
+            // The `not` the run never touched is still there, still on the
+            // right side of what the run left. That is what carrying the
+            // *boundary* buys: the lemma's own input and output stood for a
+            // box of the host at each end, and the branch that replaced the
+            // pair is wired to them.
+            let mut want = Graph::empty(1);
+            let out = if deepest {
+                let opened = want.implant(&branch, &[Source::Input(0)]);
+                want.add(NodeKind::Op(Prim::Not), opened)
+            } else {
+                let kept = want.add(NodeKind::Op(Prim::Not), vec![Source::Input(0)]);
+                want.implant(&branch, &kept)
+            };
+            want.close(out);
+            assert!(isomorphic(&there, &want), "\n{}\n{}", there, want);
+
+            // And the record is a proof about the host: it replays against a
+            // fresh copy of it and lands in the same place.
+            let record: Vec<Step> = run.steps().cloned().collect();
+            let mut again = host.clone();
+            replay(&mut again, &record).unwrap();
+            assert!(isomorphic(&again, &there), "\n{}\n{}", again, there);
+
+            // The run undoes as well, since every carried step went through
+            // `apply` and handed back its inverse.
+            run.undo(&mut there).unwrap();
+            assert!(isomorphic(&there, &host), "\n{}\n{}", there, host);
+        }
+    }
+
+    /// Nothing is carried on trust: a match that does not put the run's graph
+    /// where it says, and a step that is not about that graph, are both
+    /// refused with the host untouched.
+    #[test]
+    fn a_derivation_carried_through_nothing_is_refused() {
+        let (lemma, proof) = open_a_double_negative();
+        let (host, boxes) = three_nots();
+
+        // The two boxes are there, and in the other order they are a match —
+        // but not in this one, so the pattern's edge does not hold.
+        let backwards = Match {
+            nodes: vec![boxes[1], boxes[0]],
+            inputs: vec![Source::Input(0)],
+            outputs: vec![vec![Sink::Output(0)]],
+            branches: Vec::new(),
+        };
+        let mut there = host.clone();
+        assert!(matches!(
+            transplant(&mut there, &lemma, &backwards, &proof),
+            Err(Error::NotEmbedded(_))
+        ));
+        assert_eq!(there, host, "a refusal changes nothing");
+
+        // A step that is not about the lemma is refused by the lemma, before
+        // the host is touched at all.
+        let at = find(&host, &lemma)[0].clone();
+        let stray = Step {
+            rule: Rule::SwapElim,
+            dir: Direction::Forward,
+            at: identity(&lemma),
+        };
+        let mut there = host.clone();
+        assert!(matches!(
+            transplant(&mut there, &lemma, &at, &[stray]),
+            Err(Error::NotThere { .. })
+        ));
+        assert_eq!(there, host, "a refusal changes nothing");
+
+        // And so is a run whose *second* step goes wrong: the first landed
+        // on the copy, and the host still never moved.
+        let mut half = proof.clone();
+        half[1].at.nodes[0] = NodeId::at(99);
+        let mut there = host.clone();
+        assert!(transplant(&mut there, &lemma, &at, &half).is_err());
+        assert_eq!(there, host, "a refusal changes nothing");
     }
 }
