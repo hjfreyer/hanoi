@@ -45,8 +45,9 @@ Four layers, in `rewrite/src/`:
 | layer | module | what it does |
 |---|---|---|
 | proofs | `hant.rs`, `corpus.rs`, `parse.rs` | the strategy language a proof is written in, the loader that attaches each `.hant` entry to the identity it names, and the reader that turns a waypoint's text into a term |
-| goals | `goal.rs`, `strategy.rs` | a goal is two [graphs](../rewrite/src/diagram2/mod.rs), lowered and padded to one arity before they build; the interpreter runs a strategy over one |
-| engine | `diagram2/` | the literal graph, the law table (`rules.rs`, every law a pair of graphs and every rewrite checked), the tactic language that drives it (`tactic.rs`, see [docs/tactics.md](tactics.md)), and the isomorphism that says two graphs are one diagram |
+| goals | `goal.rs`, `strategy.rs` | a goal is two [graphs](../rewrite/src/graph.rs), lowered and padded to one arity before they build; the interpreter runs a strategy over one |
+| engine | `diagram2/` | the literal translation of a term into a [graph](../rewrite/src/graph.rs) and back, the law table (`rules.rs`, every law a pair of graphs and every rewrite checked), and the tactic language that drives it (`tactic.rs`, see [docs/tactics.md](tactics.md)) |
+| graphs | `graph.rs` | boxes and the links between them, well-formedness, and the isomorphism that says two graphs are one diagram |
 
 ### Goals, and where the net-change asymmetry lives
 

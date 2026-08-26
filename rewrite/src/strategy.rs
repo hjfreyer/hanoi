@@ -38,13 +38,14 @@ use bytecode::Library;
 
 use crate::diagram2::rules::{Derivation, Law};
 use crate::diagram2::tactic::{Region, Tactic};
-use crate::diagram2::{self, BranchId, NodeId, read_back, tactic};
+use crate::diagram2::{self, read_back, tactic};
 use crate::goal::{Goal, Outcome, Proof, Residual, against};
+use crate::graph::{self, BranchId, Graph, NodeId, Source};
 use crate::hant::{Body, OnSide, Step, Strategy, default_strategy};
 use crate::term::{Context, Error, Prim, Term, TermIndex};
 
 /// One side of a goal, picked out for a mutation that borrows it alone.
-type Pick = fn(&mut Goal) -> &mut diagram2::Graph;
+type Pick = fn(&mut Goal) -> &mut Graph;
 
 /// Proves goals against one library.
 ///
@@ -101,7 +102,7 @@ impl<'l> Prover<'l> {
         strategy: &[Step<Body>],
         goal: Goal,
     ) -> Result<Outcome, Error> {
-        if diagram2::isomorphic(&goal.lhs, &goal.rhs) {
+        if graph::isomorphic(&goal.lhs, &goal.rhs) {
             return Ok(Outcome::Closed(Proof::Trivial));
         }
         let Some((head, rest)) = strategy.split_first() else {
@@ -131,7 +132,7 @@ impl<'l> Prover<'l> {
                     }
                     *record = deriv.steps().cloned().collect();
                 }
-                if diagram2::isomorphic(&goal.lhs, &goal.rhs) {
+                if graph::isomorphic(&goal.lhs, &goal.rhs) {
                     let [lhs, rhs] = spent;
                     return Ok(Outcome::Closed(Proof::Diagram { lhs, rhs }));
                 }
@@ -572,10 +573,10 @@ struct CaseCounts {
 /// Whether one of a box's operands is the pushed literal `want` names —
 /// by its full spelling, or by any tail of it from a `::` boundary, the
 /// way an `inline` label names a sentence.
-fn names_literal(g: &diagram2::Graph, id: diagram2::NodeId, want: &str) -> bool {
+fn names_literal(g: &Graph, id: NodeId, want: &str) -> bool {
     g.sources(id).iter().any(|src| match *src {
-        diagram2::Source::Port { node, port: 0 } => match g.kind(node) {
-            diagram2::NodeKind::Op(Prim::Push(v)) => {
+        Source::Port { node, port: 0 } => match g.kind(node) {
+            graph::NodeKind::Op(Prim::Push(v)) => {
                 let spelled = format!("{}", v);
                 spelled == want || spelled.ends_with(&format!("::{}", want))
             }
@@ -592,12 +593,12 @@ fn names_literal(g: &diagram2::Graph, id: diagram2::NodeId, want: &str) -> bool 
 /// to the boxes testing against a named literal when the proof addressed
 /// the wire by what it tests.
 fn outermost(
-    g: &diagram2::Graph,
+    g: &Graph,
     prim: &Prim,
     literal: Option<&str>,
     within: Option<&HashSet<NodeId>>,
-) -> Option<diagram2::NodeId> {
-    let cone = |id: diagram2::NodeId| {
+) -> Option<NodeId> {
+    let cone = |id: NodeId| {
         let mut seen = HashSet::new();
         let mut todo = vec![id];
         while let Some(node) = todo.pop() {
@@ -605,7 +606,7 @@ fn outermost(
                 continue;
             }
             for src in g.sources(node) {
-                if let diagram2::Source::Port { node, .. } = *src {
+                if let Source::Port { node, .. } = *src {
                     todo.push(node);
                 }
             }
@@ -614,7 +615,7 @@ fn outermost(
     };
     g.live()
         .filter(|(id, _)| within.is_none_or(|set| set.contains(id)))
-        .filter(|(_, k)| matches!(k, diagram2::NodeKind::Op(p) if p == prim))
+        .filter(|(_, k)| matches!(k, graph::NodeKind::Op(p) if p == prim))
         .filter(|(id, _)| literal.is_none_or(|want| names_literal(g, *id, want)))
         .map(|(id, _)| id)
         .min_by_key(|&id| (cone(id), id))
@@ -1297,7 +1298,7 @@ mod tests {
                 let mut deriv = diagram2::rules::Derivation::default();
                 tactic::run(side, &mut deriv, &tactic::decide()).unwrap();
             }
-            if diagram2::isomorphic(&goal.lhs, &goal.rhs) {
+            if graph::isomorphic(&goal.lhs, &goal.rhs) {
                 closed.push(identity.name.clone());
             }
         }
@@ -1330,7 +1331,8 @@ mod tests {
     /// proof answers the report in the report's own words.
     #[test]
     fn a_proof_can_name_the_box_the_residual_printed() {
-        use crate::diagram2::{NodeKind, render};
+        use crate::diagram2::render;
+        use crate::graph::NodeKind;
 
         let code = "identity probe { pick 1 pick 1 equal drop 0 } = { };";
 

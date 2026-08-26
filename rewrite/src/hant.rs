@@ -128,9 +128,9 @@ use std::fmt;
 
 use bytecode::SentenceIndex;
 
-use crate::diagram2::NodeId;
 use crate::diagram2::rules::{self, Direction, Law};
 use crate::diagram2::tactic::{self, Tactic};
+use crate::graph::NodeId;
 use crate::term::TermIndex;
 
 /// Which side of the goal a graph tactic acts on.
@@ -1152,7 +1152,7 @@ mod tests {
     /// which way round to read the law's equation.
     #[test]
     fn a_box_can_be_named_by_the_id_the_report_printed() {
-        use crate::diagram2::NodeId;
+        use crate::graph::NodeId;
 
         let entries = parse_hant("proof p = lhs(at(#41, fork-hoist)) diagram;").unwrap();
         let [Step::Rewrite { side, tactic }, Step::Diagram] = &entries[0].strategy[..] else {

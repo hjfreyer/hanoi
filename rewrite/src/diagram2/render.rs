@@ -102,7 +102,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::fmt;
 
-use super::{Graph, NodeId, NodeKind, Sink, Source};
+use crate::graph::{Graph, NodeId, NodeKind, Sink, Source};
 
 /// One side of a goal, written out. Build it with [`listing`].
 pub struct Listing<'g> {

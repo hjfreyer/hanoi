@@ -2,7 +2,7 @@
 //!
 //! The sides used to be terms; they are [`crate::diagram2`] graphs now, so
 //! that a proof can *rewrite* them — the tactic language acts on a side in
-//! place, and equality-as-stated is [isomorphism](crate::diagram2::isomorphic)
+//! place, and equality-as-stated is [isomorphism](crate::graph::isomorphic)
 //! rather than one term twice. The terms are still where a goal comes from:
 //! an identity lowers, aligns, and **builds**.
 //!
@@ -16,8 +16,9 @@
 
 use bytecode::{IdentityIndex, Library, SentenceIndex};
 
+use crate::diagram2;
 use crate::diagram2::rules::{Step, replay};
-use crate::diagram2::{self, Graph};
+use crate::graph::{self, Graph};
 use crate::term::{Context, Error, TermIndex, lower};
 
 /// Two graphs of one arity, claimed to be the same program.
@@ -70,7 +71,7 @@ impl Goal {
 /// carries what re-performs it, and [`Proof::check`] walks the tree
 /// against the goal as stated, holding every step to
 /// [`rules::apply`](crate::diagram2::rules::apply) again and every leaf to
-/// [`isomorphic`](diagram2::isomorphic) again. Finding and checking are
+/// [`isomorphic`](graph::isomorphic) again. Finding and checking are
 /// different jobs; this is the artifact that keeps them apart.
 ///
 /// [`summary`][Proof::summary] prints it one-line for the per-identity
@@ -133,14 +134,14 @@ impl Proof {
     /// [`replay`] — every match re-verified port by port — definitional
     /// moves (`inline`, the cut's alignment, the swap) are re-performed
     /// from what the proof names, and every branch of the tree ends in an
-    /// [`isomorphic`](diagram2::isomorphic) that is asked fresh. `Ok(())`
+    /// [`isomorphic`](graph::isomorphic) that is asked fresh. `Ok(())`
     /// means the claim closes by exactly what the proof says; an `Err`
     /// says where it does not, and a prover that produced one has a bug.
     pub fn check(&self, goal: Goal, ctx: &mut Context, library: &Library) -> Result<(), String> {
         let mut goal = goal;
         match self {
             Proof::Trivial => {
-                if diagram2::isomorphic(&goal.lhs, &goal.rhs) {
+                if graph::isomorphic(&goal.lhs, &goal.rhs) {
                     Ok(())
                 } else {
                     Err("claimed trivial, and the sides are not one graph".to_string())
@@ -158,7 +159,7 @@ impl Proof {
                     .map_err(|e| format!("a recorded left step does not re-apply: {}", e))?;
                 replay(&mut goal.rhs, rhs)
                     .map_err(|e| format!("a recorded right step does not re-apply: {}", e))?;
-                if diagram2::isomorphic(&goal.lhs, &goal.rhs) {
+                if graph::isomorphic(&goal.lhs, &goal.rhs) {
                     Ok(())
                 } else {
                     Err("the recorded drives do not land on one diagram".to_string())
@@ -243,7 +244,7 @@ impl Proof {
 
 /// A goal's side and a waypoint, brought to one arity: the narrower is
 /// padded — the term with [`Context::under`] before it builds, the graph
-/// with [`diagram2::under`] — and the waypoint comes back as a graph. Both
+/// with [`graph::under`] — and the waypoint comes back as a graph. Both
 /// the prover's `via` and the checker's re-walk of a [`Proof::Cut`] build
 /// their halves here, so the two cannot disagree about what a cut means.
 pub(crate) fn against(ctx: &mut Context, side: &Graph, waypoint: TermIndex) -> (Graph, Graph) {
@@ -253,7 +254,7 @@ pub(crate) fn against(ctx: &mut Context, side: &Graph, waypoint: TermIndex) -> (
         (side.clone(), diagram2::build(ctx, padded))
     } else {
         (
-            diagram2::under(side, wa.inputs - ga.inputs),
+            graph::under(side, wa.inputs - ga.inputs),
             diagram2::build(ctx, waypoint),
         )
     }

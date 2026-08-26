@@ -212,7 +212,7 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 
-use super::{BranchId, Graph, NodeId, NodeKind, Sink, Source};
+use crate::graph::{BranchId, Graph, NodeId, NodeKind, Sink, Source};
 use bytecode::{Instruction, Library, Value};
 
 use crate::term::{Arity, Prim};
@@ -1059,7 +1059,7 @@ pub enum Ill {
     Interface(Arity, Arity),
     /// A side of the rule is not a graph. A rule that cannot be built cannot
     /// be applied.
-    Broken(super::Error),
+    Broken(crate::graph::Error),
 }
 
 /// How a claimed embedding failed to be one. Every variant names the port
@@ -2440,7 +2440,7 @@ pub fn replay(graph: &mut Graph, steps: &[Step]) -> Result<Derivation, Error> {
 /// 5. **Inducedness** — no boundary of the match points back inside it.
 ///
 /// The indexing here is unchecked on purpose: a pattern comes from
-/// [`sides`], which holds it to [`Graph::check`](super::Graph::check), so
+/// [`sides`], which holds it to [`Graph::check`](crate::graph::Graph::check), so
 /// every source it names is a source it has. What is *not* trusted is the
 /// match, and every field of it is measured against the pattern before it
 /// is used to index anything.
@@ -3923,8 +3923,9 @@ fn read_off(graph: &Graph, law: Law, id: NodeId) -> Vec<(Rule, NodeId)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::diagram2::build;
     use crate::diagram2::meaning::{Meaning, boundary, eval_graph};
-    use crate::diagram2::{build, isomorphic};
+    use crate::graph::isomorphic;
     use crate::term::Context;
     use bytecode::{Value, assemble};
 
@@ -5491,7 +5492,7 @@ mod tests {
     }
 
     /// Every proposal at every box of `graph`, applied to a copy of it and
-    /// held to [`Graph::check`](super::Graph::check) — the laws it read off,
+    /// held to [`Graph::check`](crate::graph::Graph::check) — the laws it read off,
     /// in the order it read them.
     fn each_proposal(graph: &Graph, note: &str) -> Vec<Law> {
         let mut spent = Vec::new();

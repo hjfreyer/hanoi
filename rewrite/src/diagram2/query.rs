@@ -38,7 +38,7 @@ use bytecode::{SentenceIndex, Value};
 
 use crate::term::Prim;
 
-use super::{Graph, NodeId, NodeKind, Sink, Source};
+use crate::graph::{Graph, NodeId, NodeKind, Sink, Source};
 
 /// A named hole in a query. The name is the identity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -142,7 +142,7 @@ pub enum Atom {
     /// Output `port` of `node` has no readers at all.
     Unread { node: Var, port: usize },
     /// The two ends of one branch: a fork and a select holding the same
-    /// [`BranchId`](super::BranchId).
+    /// [`BranchId`](crate::graph::BranchId).
     Paired { fork: Var, select: Var },
     /// Two distinct nodes. Distinctness is otherwise **not** imposed: two
     /// variables may bind one box, and a query that means two boxes says
