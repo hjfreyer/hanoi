@@ -105,9 +105,12 @@
 //! [`Law::SelectHoist`] is another row no list drives, and it grows a
 //! graph for a different reason: it duplicates a **region**, the way
 //! [`Law::Shannon`] does, and carries it as payload for the same reason.
-//! What it says is the commuting conversion — what runs *after* a branch
-//! runs inside whichever arm the branch takes — and the gap it fills is
-//! visible from the two hoists. [`Law::ForkHoist`] lets work migrate
+//! What it says is `select(C, T, E) ; A = select(C, T ; A, E ; A)` — the
+//! commuting conversion, what runs *after* a branch runs inside whichever
+//! arm the branch takes. Said as a composition on purpose: `select(…) ; A`
+//! is the side condition as well as the shape, since a composition is
+//! exactly the claim that the answers go into `A` and nowhere else. The
+//! gap it fills is visible from the two hoists. [`Law::ForkHoist`] lets work migrate
 //! across the **fork**, in either direction, so a branch could always grow
 //! backwards over what fed it. Nothing said the same at the **select**, so
 //! a branch could never grow forwards: everything downstream of one was
@@ -639,7 +642,17 @@ pub enum Rule {
     Shannon { kind: NodeKind, body: Graph },
     /// The commuting conversion, as an equation: what runs **after** a
     /// branch runs inside whichever arm the branch takes.
-    /// `body(select(c, T, E)) = if c then body(T) else body(E)`.
+    ///
+    /// ```text
+    /// select(C, T, E) ; A  =  select(C, T ; A, E ; A)
+    /// ```
+    ///
+    /// Written as a composition, which is the half of the statement that
+    /// is usually left to prose: `select(…) ; A` says the answers go into
+    /// `A` and nowhere else, and that is exactly the side condition, said
+    /// where it cannot be forgotten. `A` may read wires that are not
+    /// answers, so in full it is `(select(C, T, E) * id(k)) ; A`, and `k`
+    /// is what `body` carries past the answers.
     ///
     /// This is [`Rule::ForkHoist`] read at the other end of a branch, and
     /// the reason both are needed. A fork's end lets work migrate across
@@ -649,11 +662,11 @@ pub enum Rule {
     /// select was beyond the reach of the whole branch layer, and a select
     /// could only ever be got rid of, never moved. This is that row.
     ///
-    /// `arity` is the select's width and `body` is the region downstream
-    /// of its answers, carried as payload the way [`Rule::Shannon`]
-    /// carries its own: `body`'s inputs `0..n` are the select's answers,
-    /// the rest is whatever else the region reads, and its outputs are
-    /// what the region leaves.
+    /// `arity` is the select's width `n` and `body` is `A` — the region
+    /// downstream of the answers, carried as payload the way
+    /// [`Rule::Shannon`] carries its own. Its inputs `0..n` are the
+    /// answers, its inputs `n..n+k` are the `id(k)` alongside them, and
+    /// its outputs are what the region leaves.
     ///
     /// **Nothing is pinned**, and that is the whole difference from
     /// [`Rule::Shannon`]. Shannon pastes `true` and `false` into its
