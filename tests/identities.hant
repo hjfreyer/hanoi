@@ -19,3 +19,10 @@ proof identities::specializing_a_tested_value = both(decide) cases(equal) diagra
 proof identities::as_bool_is_the_branch_it_makes = lhs(fire(as-bool-branch)) diagram;
 proof identities::as_int_is_a_guarded_identity = lhs(fire(coercion-guard)) diagram;
 proof identities::as_tuple_is_a_guarded_identity = lhs(fire(coercion-guard)) diagram;
+
+// The commuting conversion, spent where a proof asks for it. The row grows
+// the graph — it duplicates the region the branch grows over — so no list
+// drives it and the proof names it; once the branch has moved past the
+// `negate`, the two sides are the one diagram.
+proof identities::what_follows_a_branch_runs_inside_it =
+    lhs(fire(select-hoist)) diagram;

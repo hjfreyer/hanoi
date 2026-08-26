@@ -597,3 +597,38 @@ identity a_built_tuple_is_the_width_it_was_built
 
 identity a_built_tuple_is_no_other_width
     { tuple 2 is_tuple 3 } = { drop 0 drop 0 push false };
+
+// The commuting conversion, run against the interpreter: the same two
+// spellings, on both arms and on a condition that is not a boolean at all.
+#[arity(2,1)] sentence work_after_the_branch { branch { not } { as_bool } negate }
+#[arity(2,1)] sentence work_inside_the_arms  { branch { not negate } { as_bool negate } }
+
+test sentence what_follows_a_branch_agrees_either_way {
+    push 7  push true  jump work_after_the_branch
+    push 7  push true  jump work_inside_the_arms
+    jump crate::prelude::check_equals ? drop 0
+
+    push 7  push false jump work_after_the_branch
+    push 7  push false jump work_inside_the_arms
+    jump crate::prelude::check_equals ? drop 0
+
+    // Truthiness is all a branch reads, so a condition of any shape decides
+    // one — which is the whole of what this law assumes about it.
+    push "hi" push (2, 1) jump work_after_the_branch
+    push "hi" push (2, 1) jump work_inside_the_arms
+    jump crate::prelude::check_equals
+}
+
+// The commuting conversion: what runs **after** a branch runs inside
+// whichever arm the branch takes.
+//
+// The old evaluating engine got this by representation — it grafted every
+// continuation into the arms as it went, so the two spellings built one tree
+// and there was nothing to state. A literal graph states it or cannot say it:
+// `fork-hoist` lets work migrate across the fork, so a branch always grew
+// backwards, and nothing said the same at the select, so a branch could never
+// grow forwards at all. `select-hoist` is that row, and it is what this claim
+// spends.
+identity what_follows_a_branch_runs_inside_it
+    { branch { not } { as_bool } negate }
+  = { branch { not negate } { as_bool negate } };
