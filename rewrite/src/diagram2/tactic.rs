@@ -85,7 +85,7 @@ use std::fmt;
 
 use super::query::{self, Bindings, Query, Var};
 use super::rules::{self, Derivation, Direction, Law, Rule, Step};
-use super::{BranchId, Graph, NodeId, NodeKind, Sink, Source};
+use crate::graph::{BranchId, Graph, NodeId, NodeKind, Sink, Source};
 
 // ---- what a step says ------------------------------------------------------------
 
@@ -162,7 +162,7 @@ pub struct MatchSpec {
     /// One selector list per pattern boundary output.
     pub outputs: Vec<Vec<SinkSel>>,
     /// One per pattern branch id: a bound fork or select, whose
-    /// [`BranchId`](super::BranchId) is read off.
+    /// [`BranchId`](crate::graph::BranchId) is read off.
     pub branches: Vec<Var>,
 }
 

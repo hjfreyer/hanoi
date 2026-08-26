@@ -46,8 +46,9 @@
 
 use bytecode::assemble;
 use rewrite::diagram2::rules::{Direction, Law, Match, Rule, Step};
-use rewrite::diagram2::{self, Graph, NodeId, NodeKind, Source, rules, tactic};
+use rewrite::diagram2::{rules, tactic};
 use rewrite::goal::Goal;
+use rewrite::graph::{Graph, NodeId, NodeKind, Source, isomorphic};
 use rewrite::term::{Context, Prim, TermIndex, lower};
 
 fn term_of(terms: &mut Context, body: &str) -> TermIndex {
@@ -140,7 +141,7 @@ fn the_decision_procedure_does_not_close_it() {
     let (_ctx, mut goal) = probe();
     drive(&mut goal.lhs, &tactic::decide());
     assert!(
-        !diagram2::isomorphic(&goal.lhs, &goal.rhs),
+        !isomorphic(&goal.lhs, &goal.rhs),
         "the table found the route on its own — say so here rather than pretending it did not"
     );
 }
@@ -217,7 +218,7 @@ fn widen_hoist_dedup_promise_specialize() {
     );
     drive(&mut goal.lhs, &tactic::decide());
     assert!(
-        diagram2::isomorphic(&goal.lhs, &goal.rhs),
+        isomorphic(&goal.lhs, &goal.rhs),
         "the path condition was spent and the goal still did not close"
     );
 }

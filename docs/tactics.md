@@ -37,7 +37,7 @@ untrusted side *entirely*. It mutates a graph through `Derivation::push`
 and nothing else, so a buggy tactic produces a refused step, never a wrong
 graph. One consequence is worth naming because it dissolves a question
 rather than answering it: the crate-private mutation surface of
-`diagram2::Graph` stays exactly as private as it is. The tactic engine
+`Graph` (`rewrite/src/graph.rs`) stays exactly as private as it is. The tactic engine
 needs none of it.
 
 **Backward steps are stated, not found.** `find` declines the patterns that
@@ -69,9 +69,10 @@ rewrite/src/diagram2/query.rs    — Query, Bindings, eval      (untrusted searc
 rewrite/src/diagram2/tactic.rs   — MatchSpec, Tactic, run     (untrusted orchestration)
 ```
 
-Both are children of `diagram2` and could see its internals; by policy they
-read through the public surface of `Graph` (`live`, `kind`, `sources`,
-`sinks`, `outputs`, `is_live`) and drive the public operations of `rules`.
+Both are children of `diagram2`, and `Graph`'s mutation surface is
+crate-visible since it moved to `rewrite/src/graph.rs`; by policy they read
+through the public surface of `Graph` (`live`, `kind`, `sources`, `sinks`,
+`outputs`, `is_live`) and drive the public operations of `rules`.
 
 ## The model in three layers
 
@@ -681,7 +682,7 @@ The `hant` bridge has since landed, and it ate more than a bridge: a
 [goal](../rewrite/src/goal.rs) is two graphs now, the tactic language is
 embedded in `.hant` strategies as `lhs(…)`, `rhs(…)` and `both(…)`, and
 `exact`'s claim — with the auto-close that tests it before every step —
-is whole-graph **isomorphism** (`diagram2::isomorphic`, a pinned-boundary
+is whole-graph **isomorphism** (`graph::isomorphic`, a pinned-boundary
 bijection search, verified link by link before it answers yes). The
 surface (in [rewrite/src/hant.rs](../rewrite/src/hant.rs)) spells
 `saturate`, `saturate(law, …)`, `branches`, `decide`, `fire(law, …)`,

@@ -10,7 +10,7 @@
 
 use std::collections::HashMap;
 
-use super::{Graph, NodeId, NodeKind, Source, schedule};
+use crate::graph::{Graph, NodeId, NodeKind, Source, schedule};
 use crate::term::{Context, Prim, Term, TermIndex};
 
 /// A name for one value in the symbolic reading of a program.
