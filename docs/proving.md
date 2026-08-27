@@ -45,7 +45,7 @@ Four layers, in `lang/rewrite/src/`:
 
 | layer | module | what it does |
 |---|---|---|
-| proofs | `hant.rs`, `corpus.rs`, `parse.rs` | the strategy language a proof is written in, the loader that attaches each `.hant` entry to the identity it names — and orders them, since `lhs(by name)` spends another identity's proof and so needs it proved first — and the reader that turns a waypoint's text into a term |
+| proofs | `hant.rs`, `corpus.rs`, `parse.rs` | the strategy language a proof is written in, the loader that attaches each `.hant` entry to the identity it names — and orders them, since `lhs(by name)` cites another identity and so needs it proved first — and the reader that turns a waypoint's text into a term. A proof holding a citation stands *given the corpus*; `prove --expand` cashes every citation into the cited proof's own steps |
 | goals | `goal.rs`, `strategy.rs` | a goal is two [graphs](../lang/rewrite/src/graph.rs), lowered and padded to one arity before they build; the interpreter runs a strategy over one |
 | engine | `diagram2/` | the literal translation of a term into a [graph](../lang/rewrite/src/graph.rs) and back, the law table (`rules.rs`, every law a pair of graphs and every rewrite checked), and the tactic language that drives it (`tactic.rs`, see [docs/tactics.md](tactics.md)) |
 | graphs | `graph.rs` | boxes and the links between them, well-formedness, the isomorphism that says two graphs are one diagram, and the rewrite itself — a `Pair` of graphs spliced in at a checked `Match`. An `Embedding` composes matches, which is how a derivation about one graph is carried into another (`rules::transplant`) |
