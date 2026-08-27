@@ -65,11 +65,40 @@ impl Goal {
     }
 }
 
-/// Why a proof that spends steps on its right cannot be carried anywhere.
-fn right_hand_run(steps: usize) -> String {
+/// Which side of the *goal* a claim's left side currently is.
+///
+/// A goal's sides swap under `symm` and the claim's do not, so a traversal
+/// looking for the run that drives the left onto the right has to carry
+/// which is which. Nothing but [`Proof::Swapped`] moves it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Side {
+    Left,
+    Right,
+}
+
+impl Side {
+    /// The run being driven, and the one that must be empty for it to be a
+    /// run at all.
+    fn of<'p>(self, lhs: &'p [Step], rhs: &'p [Step]) -> (&'p [Step], &'p [Step]) {
+        match self {
+            Side::Left => (lhs, rhs),
+            Side::Right => (rhs, lhs),
+        }
+    }
+
+    fn flipped(self) -> Side {
+        match self {
+            Side::Left => Side::Right,
+            Side::Right => Side::Left,
+        }
+    }
+}
+
+/// Why a proof that drives both sides cannot be carried anywhere.
+fn met_in_the_middle(steps: usize) -> String {
     format!(
-        "it spends {} step(s) on the right, so it drives the two sides together rather than one \
-         onto the other",
+        "it spends {} step(s) on the side it is not driving, so it takes the two together \
+         rather than one onto the other",
         steps
     )
 }
@@ -205,61 +234,77 @@ impl Proof {
         }
     }
 
-    /// The run this proof spends on the **left side alone**, or why it is
-    /// not one.
+    /// The run this proof spends driving the claim's left side onto its
+    /// right, or why it is not one.
     ///
     /// What [`transplant`](crate::diagram2::rules::transplant) needs to
     /// carry a proved identity into another goal: a flat list of ordinary
-    /// rewrites taking the claim's left side to its right. A proof that
+    /// rewrites taking one side of the claim to the other. A proof that
     /// closes by driving the left onto the right is already that list, with
     /// the tree flattened away.
     ///
-    /// Not every proof is. Three shapes refuse, each for its own reason, and
-    /// the message says which:
+    /// A `symm` costs nothing here. It swaps which side of the *goal* the
+    /// steps after it act on, and the claim is untouched — so what a run
+    /// looks for swaps with it, and `symm rhs(…) rhs(…)` is the same run
+    /// spelled from the other end.
     ///
-    /// - **A step on the right.** The run would be `A ⟶ M` and `B ⟶ M`
-    ///   meeting in the middle, and turning that into `A ⟶ B` means
-    ///   inverting the right-hand run and rebasing it through the
-    ///   isomorphism the two met at. Nothing here does that yet.
-    /// - **`inline` or `via`.** Neither is a rewrite. Opening a call changes
-    ///   what is provable and a cut introduces a graph out of nowhere, so
-    ///   there is no step list to carry — the honest fix is to state the
-    ///   opened or cut form as its own identity.
-    /// - **`symm`.** What follows it runs on the other side, so what it
-    ///   proves is `B ⟶ A`.
+    /// Two shapes still refuse, and both refuse for want of one thing —
+    /// a **join**, the isomorphism between what one run landed on and where
+    /// the next was written to start:
     ///
-    /// A lemma written to be reused is written left-only, and this is what
-    /// says so when it was not.
+    /// - **A step on the other side.** The runs are `A ⟶ M` and `B ⟶ M'`
+    ///   meeting in the middle, so `A ⟶ B` is the first, then the second
+    ///   backwards, rebased through `M ≅ M'`.
+    /// - **`via`.** The halves really do compose — `A ⟶ C` then `C ⟶ B` —
+    ///   but the waypoint is *rebuilt* for each half, so what the left run
+    ///   lands on is only isomorphic to the graph the right run names. Same
+    ///   join, no inversion.
+    ///
+    /// And one refuses outright:
+    ///
+    /// - **`inline`.** Not a rewrite at all. It opens calls across the whole
+    ///   graph rather than inside the lemma's window, so there is no step
+    ///   list to carry and no window to carry it into; the honest fix is to
+    ///   state the opened form as its own identity.
     pub fn one_sided(&self) -> Result<Vec<Step>, String> {
+        self.run_on(Side::Left)
+    }
+
+    /// [`one_sided`](Proof::one_sided), tracking which side of the *goal*
+    /// the claim's left has become. Every `symm` flips it, and nothing else
+    /// touches it.
+    fn run_on(&self, side: Side) -> Result<Vec<Step>, String> {
         match self {
             Proof::Trivial => Ok(Vec::new()),
             Proof::Rewrote { lhs, rhs, sub, .. } | Proof::Cases { lhs, rhs, sub, .. } => {
-                if !rhs.is_empty() {
-                    return Err(right_hand_run(rhs.len()));
+                let (driven, other) = side.of(lhs, rhs);
+                if !other.is_empty() {
+                    return Err(met_in_the_middle(other.len()));
                 }
-                let mut run = lhs.clone();
-                run.extend(sub.one_sided()?);
+                let mut run = driven.to_vec();
+                run.extend(sub.run_on(side)?);
                 Ok(run)
             }
             Proof::Diagram { lhs, rhs } => {
-                if !rhs.is_empty() {
-                    return Err(right_hand_run(rhs.len()));
+                let (driven, other) = side.of(lhs, rhs);
+                if !other.is_empty() {
+                    return Err(met_in_the_middle(other.len()));
                 }
-                Ok(lhs.clone())
+                Ok(driven.to_vec())
             }
+            // The claim is the same claim either way round; what moved is
+            // which side of the goal it is written on.
+            Proof::Swapped(sub) => sub.run_on(side.flipped()),
             Proof::Inlined { .. } => Err(
                 "it opens a call, which is not a rewrite: state the opened form as its own \
                  identity and prove that"
                     .to_string(),
             ),
             Proof::Cut { .. } => Err(
-                "it cuts at a waypoint, which is not a rewrite: state the waypoint as its own \
-                 identity and prove that"
+                "it cuts at a waypoint, and the waypoint is rebuilt for each half, so the two \
+                 halves do not meet on the nose"
                     .to_string(),
             ),
-            Proof::Swapped(_) => {
-                Err("it swaps the sides, so what it drives is the right onto the left".to_string())
-            }
         }
     }
 
@@ -373,51 +418,94 @@ mod tests {
     use super::*;
 
     /// What a lemma has to be for [`Proof::one_sided`] to answer, and what
-    /// each of the three refusals says.
+    /// each refusal says.
     #[test]
-    fn only_a_run_on_one_side_can_be_carried() {
+    fn only_a_run_from_one_side_to_the_other_can_be_carried() {
         // Nothing to do at all is a run of no steps.
         assert_eq!(Proof::Trivial.one_sided(), Ok(Vec::new()));
 
-        // A `symm` puts what follows on the other side, so what it drives is
-        // the right onto the left.
-        let swapped = Proof::Swapped(Box::new(Proof::Trivial));
-        assert!(swapped.one_sided().unwrap_err().contains("swaps the sides"));
+        // The other side untouched is the shape a lemma is written in, and
+        // the tree flattens to the steps the driven side spent, in order.
+        let left_only = Proof::Rewrote {
+            side: "lhs",
+            lhs: vec![countable()],
+            rhs: Vec::new(),
+            sub: Box::new(Proof::Diagram {
+                lhs: vec![countable()],
+                rhs: Vec::new(),
+            }),
+        };
+        assert_eq!(left_only.one_sided().map(|run| run.len()), Ok(2));
 
-        // Neither an `inline` nor a `via` is a rewrite, so neither leaves
-        // steps to carry.
+        // A drive that met in the middle is two runs, not one.
+        let met = Proof::Diagram {
+            lhs: Vec::new(),
+            rhs: vec![countable()],
+        };
+        let why = met.one_sided().unwrap_err();
+        assert!(
+            why.contains("1 step(s) on the side it is not driving"),
+            "{}",
+            why
+        );
+
+        // Neither an `inline` nor a `via` leaves steps that compose.
         let opened = Proof::Inlined {
             target: None,
             name: None,
             sub: Box::new(Proof::Trivial),
         };
         assert!(opened.one_sided().unwrap_err().contains("opens a call"));
+    }
 
-        // And a drive that met in the middle is two runs, not one.
-        let met = Proof::Diagram {
-            lhs: Vec::new(),
-            rhs: vec![impossible_step()],
-        };
-        let why = met.one_sided().unwrap_err();
-        assert!(why.contains("1 step(s) on the right"), "{}", why);
-
-        // The right side untouched is the shape a lemma is written in, and
-        // the tree flattens to the steps the left spent, in order.
-        let left_only = Proof::Rewrote {
+    /// A `symm` moves which side of the goal the claim's left side is, and
+    /// costs the run nothing: the same proof written from the other end is
+    /// the same run.
+    #[test]
+    fn a_swap_is_free() {
+        let forwards = Proof::Rewrote {
             side: "lhs",
-            lhs: vec![impossible_step()],
+            lhs: vec![countable()],
             rhs: Vec::new(),
-            sub: Box::new(Proof::Diagram {
-                lhs: vec![impossible_step()],
-                rhs: Vec::new(),
-            }),
+            sub: Box::new(Proof::Trivial),
         };
-        assert_eq!(left_only.one_sided().map(|run| run.len()), Ok(2));
+        let backwards = Proof::Swapped(Box::new(Proof::Rewrote {
+            side: "rhs",
+            lhs: Vec::new(),
+            rhs: vec![countable()],
+            sub: Box::new(Proof::Trivial),
+        }));
+        assert_eq!(forwards.one_sided(), backwards.one_sided());
+        assert_eq!(backwards.one_sided().map(|run| run.len()), Ok(1));
+
+        // And it is the *swap* that moves, not the reading: under one
+        // `symm`, steps on the goal's left are steps on the claim's right.
+        let wrong_end = Proof::Swapped(Box::new(Proof::Rewrote {
+            side: "lhs",
+            lhs: vec![countable()],
+            rhs: Vec::new(),
+            sub: Box::new(Proof::Trivial),
+        }));
+        assert!(
+            wrong_end
+                .one_sided()
+                .unwrap_err()
+                .contains("side it is not driving")
+        );
+
+        // Two swaps are the identity on the reading, as they are on the goal.
+        let twice = Proof::Swapped(Box::new(Proof::Swapped(Box::new(Proof::Rewrote {
+            side: "lhs",
+            lhs: vec![countable()],
+            rhs: Vec::new(),
+            sub: Box::new(Proof::Trivial),
+        }))));
+        assert_eq!(twice.one_sided().map(|run| run.len()), Ok(1));
     }
 
     /// A step whose only job is to be counted — `one_sided` moves steps
     /// around and never reads inside one.
-    fn impossible_step() -> Step {
+    fn countable() -> Step {
         use crate::diagram2::rules::Rule;
         use crate::graph::{Direction, Match};
         Step {
