@@ -1,0 +1,68 @@
+{
+  "name": "hanoi",
+  "displayName": "Hanoi",
+  "description": "Syntax highlighting and editing support for Hanoi Assembly (.hana) and Hanoi tactics (.hant).",
+  "version": "0.1.0",
+  "publisher": "hjfreyer",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/hjfreyer/hanoi.git"
+  },
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "keywords": [
+    "hanoi",
+    "hana",
+    "stack",
+    "concatenative"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "hana",
+        "aliases": [
+          "Hanoi Assembly",
+          "hana"
+        ],
+        "extensions": [
+          ".hana"
+        ],
+        "configuration": "./language-configuration.json"
+      },
+      {
+        "id": "hant",
+        "aliases": [
+          "Hanoi Tactics",
+          "hant"
+        ],
+        "extensions": [
+          ".hant"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "hana",
+        "scopeName": "source.hana",
+        "path": "./syntaxes/hana.tmLanguage.json"
+      },
+      {
+        "language": "hant",
+        "scopeName": "source.hant",
+        "path": "./syntaxes/hant.tmLanguage.json"
+      }
+    ],
+    "snippets": [
+      {
+        "language": "hana",
+        "path": "./snippets/hana.json"
+      }
+    ]
+  }
+}

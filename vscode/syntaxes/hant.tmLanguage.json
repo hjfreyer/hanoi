@@ -1,0 +1,153 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Hanoi Tactics",
+  "scopeName": "source.hant",
+  "patterns": [
+    {
+      "include": "#comment"
+    },
+    {
+      "include": "#proof"
+    },
+    {
+      "include": "#step"
+    },
+    {
+      "include": "#tactic"
+    },
+    {
+      "include": "#law-list"
+    },
+    {
+      "include": "#primitive"
+    },
+    {
+      "include": "#rule-name"
+    },
+    {
+      "include": "#path"
+    },
+    {
+      "include": "#number"
+    },
+    {
+      "include": "#operator"
+    },
+    {
+      "include": "#punctuation"
+    }
+  ],
+  "repository": {
+    "comment": {
+      "name": "comment.line.double-slash.hant",
+      "begin": "//",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.definition.comment.hant"
+        }
+      },
+      "end": "$"
+    },
+    "proof": {
+      "match": "\\b(proof)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+      "captures": {
+        "1": {
+          "name": "keyword.declaration.proof.hant"
+        },
+        "2": {
+          "name": "entity.name.namespace.hant"
+        }
+      }
+    },
+    "step": {
+      "match": "\\b(diagram|inline|exact|cases|both|symm|lhs|rhs|via)\\b",
+      "name": "keyword.control.step.hant"
+    },
+    "tactic": {
+      "match": "\\b(saturate|branches|decide|repeat|fire|try|at|by)\\b",
+      "name": "support.function.tactic.hant"
+    },
+    "law-list": {
+      "match": "\\b(structural|branching)\\b",
+      "name": "support.constant.law-list.hant"
+    },
+    "primitive": {
+      "match": "\\b(greater|equal|less|not|and|or)\\b",
+      "name": "support.type.primitive.hant"
+    },
+    "rule-name": {
+      "match": "\\b[a-z][a-z0-9]*(-[a-z0-9]+)+\\b",
+      "name": "entity.name.function.rule.hant"
+    },
+    "path": {
+      "patterns": [
+        {
+          "match": "\\b(crate|super)\\b(?=\\s*::)",
+          "name": "keyword.other.path-root.hant"
+        },
+        {
+          "match": "\\b([A-Za-z_][A-Za-z0-9_]*)\\b(?=\\s*::)",
+          "name": "entity.name.namespace.hant"
+        },
+        {
+          "match": "(::)\\s*([A-Za-z_][A-Za-z0-9_]*)\\b(?=\\s*::)",
+          "captures": {
+            "1": {
+              "name": "punctuation.separator.path.hant"
+            },
+            "2": {
+              "name": "entity.name.namespace.hant"
+            }
+          }
+        },
+        {
+          "match": "(::)\\s*([A-Za-z_][A-Za-z0-9_]*)\\b",
+          "captures": {
+            "1": {
+              "name": "punctuation.separator.path.hant"
+            },
+            "2": {
+              "name": "entity.name.function.hant"
+            }
+          }
+        }
+      ]
+    },
+    "number": {
+      "match": "(?<![A-Za-z0-9_])-?\\d+\\b",
+      "name": "constant.numeric.integer.hant"
+    },
+    "operator": {
+      "patterns": [
+        {
+          "match": "=",
+          "name": "keyword.operator.assignment.hant"
+        },
+        {
+          "match": "::",
+          "name": "punctuation.separator.path.hant"
+        }
+      ]
+    },
+    "punctuation": {
+      "patterns": [
+        {
+          "match": "[{}]",
+          "name": "punctuation.section.block.hant"
+        },
+        {
+          "match": "[()]",
+          "name": "punctuation.section.parens.hant"
+        },
+        {
+          "match": ",",
+          "name": "punctuation.separator.comma.hant"
+        },
+        {
+          "match": ";",
+          "name": "punctuation.terminator.hant"
+        }
+      ]
+    }
+  }
+}
