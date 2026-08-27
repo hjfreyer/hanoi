@@ -1,11 +1,11 @@
 # A tactics language for diagram rewriting
 
-*A design proposal, since landed: `rewrite/src/diagram2/query.rs` and
-`rewrite/src/diagram2/tactic.rs` implement what this document designs, and
+*A design proposal, since landed: `lang/rewrite/src/diagram2/query.rs` and
+`lang/rewrite/src/diagram2/tactic.rs` implement what this document designs, and
 the document has been trued up against what implementation taught. Where
 the two disagree, the code and its tests are the record.*
 
-`rewrite/src/diagram2` keeps a table of laws and the operations a driver is
+`lang/rewrite/src/diagram2` keeps a table of laws and the operations a driver is
 built out of — `sides`, `find`, `propose`, `apply`, `replay` — and it
 deliberately keeps no driver. The one it had was deleted on purpose: which
 laws, where, and in what order is a strategy, and a strategy belongs to
@@ -37,7 +37,7 @@ untrusted side *entirely*. It mutates a graph through `Derivation::push`
 and nothing else, so a buggy tactic produces a refused step, never a wrong
 graph. One consequence is worth naming because it dissolves a question
 rather than answering it: the crate-private mutation surface of
-`Graph` (`rewrite/src/graph.rs`) stays exactly as private as it is. The tactic engine
+`Graph` (`lang/rewrite/src/graph.rs`) stays exactly as private as it is. The tactic engine
 needs none of it.
 
 **Backward steps are stated, not found.** `find` declines the patterns that
@@ -65,12 +65,12 @@ proof can cite, not an ordering an engine hardcodes.
 Two new submodules, siblings of `rules.rs`:
 
 ```
-rewrite/src/diagram2/query.rs    — Query, Bindings, eval      (untrusted search)
-rewrite/src/diagram2/tactic.rs   — MatchSpec, Tactic, run     (untrusted orchestration)
+lang/rewrite/src/diagram2/query.rs    — Query, Bindings, eval      (untrusted search)
+lang/rewrite/src/diagram2/tactic.rs   — MatchSpec, Tactic, run     (untrusted orchestration)
 ```
 
 Both are children of `diagram2`, and `Graph`'s links are private to
-`rewrite/src/graph.rs`; they read through the public surface of `Graph`
+`lang/rewrite/src/graph.rs`; they read through the public surface of `Graph`
 (`live`, `kind`, `sources`, `sinks`, `outputs`, `is_live`), search with
 `graph::find_*`, and drive the public operations of `rules`.
 
@@ -679,12 +679,12 @@ against a failed alternative; `out_of_fuel_leaves_the_graph_standing` is
 the fatal-failure invariant, asserted.
 
 The `hant` bridge has since landed, and it ate more than a bridge: a
-[goal](../rewrite/src/goal.rs) is two graphs now, the tactic language is
+[goal](../lang/rewrite/src/goal.rs) is two graphs now, the tactic language is
 embedded in `.hant` strategies as `lhs(…)`, `rhs(…)` and `both(…)`, and
 `exact`'s claim — with the auto-close that tests it before every step —
 is whole-graph **isomorphism** (`graph::isomorphic`, a pinned-boundary
 bijection search, verified link by link before it answers yes). The
-surface (in [rewrite/src/hant.rs](../rewrite/src/hant.rs)) spells
+surface (in [lang/rewrite/src/hant.rs](../lang/rewrite/src/hant.rs)) spells
 `saturate`, `saturate(law, …)`, `branches`, `decide`, `fire(law, …)`,
 `at(#box, law[, forward|backward])`, `repeat(…)` and `try(…)`; queries and
 the *stated* steps remain data-only until a proof needs a spelling for

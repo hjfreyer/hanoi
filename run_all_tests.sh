@@ -4,7 +4,7 @@
 
 set -euo pipefail
 
-# Ensure we are in the script's directory
+# Ensure we are in the script's directory; the workspace is `lang/` under it.
 CDPATH="" cd -- "$(dirname -- "$0")"
 
 echo "======================================"
@@ -12,7 +12,7 @@ echo "Running cargo test..."
 echo "======================================"
 echo ""
 
-if ! cargo test; then
+if ! (cd lang && cargo test); then
     echo "======================================"
     echo "FAILED: cargo test failed."
     exit 1

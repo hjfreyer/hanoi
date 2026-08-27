@@ -1404,8 +1404,9 @@ mod tests {
     fn the_corpus_identities_the_table_decides() {
         let tests = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
-            .expect("the crate sits in the workspace")
-            .join("tests");
+            .and_then(std::path::Path::parent)
+            .expect("the crate sits in the workspace, beside the corpus")
+            .join("hana");
         let mut corpus = crate::corpus::load(&tests).unwrap();
         let library = &corpus.library;
         let terms = &mut corpus.terms;

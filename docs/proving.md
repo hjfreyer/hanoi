@@ -2,7 +2,7 @@
 
 `bin/prove` discharges the claims `identity A = B;` states. It is built on
 **checked rewriting**: both sides of a goal build into the literal graphs
-of `rewrite/src/diagram2`, a driver spends the law table on each until
+of `lang/rewrite/src/diagram2`, a driver spends the law table on each until
 nothing more fires, and either they land on one diagram — isomorphic — or
 they do not. Every step on the way is an instance of a named law, verified
 by `rules::apply` before it lands, so a close is a derivation's worth of
@@ -12,8 +12,9 @@ deliberately never makes on its own — opening a call, and splitting a case
 on an opaque answer, above all.
 
 ```bash
-cargo run --bin prove -- tests
-cargo run --bin prove -- tests --filter two_spellings
+cd lang
+cargo run --bin prove -- ../hana
+cargo run --bin prove -- ../hana --filter two_spellings
 ```
 
 ```
@@ -40,13 +41,13 @@ real: which definitions to spend, and where a claim actually fails.
 
 ## The shape of the thing
 
-Four layers, in `rewrite/src/`:
+Four layers, in `lang/rewrite/src/`:
 
 | layer | module | what it does |
 |---|---|---|
 | proofs | `hant.rs`, `corpus.rs`, `parse.rs` | the strategy language a proof is written in, the loader that attaches each `.hant` entry to the identity it names — and orders them, since `lhs(by name)` spends another identity's proof and so needs it proved first — and the reader that turns a waypoint's text into a term |
-| goals | `goal.rs`, `strategy.rs` | a goal is two [graphs](../rewrite/src/graph.rs), lowered and padded to one arity before they build; the interpreter runs a strategy over one |
-| engine | `diagram2/` | the literal translation of a term into a [graph](../rewrite/src/graph.rs) and back, the law table (`rules.rs`, every law a pair of graphs and every rewrite checked), and the tactic language that drives it (`tactic.rs`, see [docs/tactics.md](tactics.md)) |
+| goals | `goal.rs`, `strategy.rs` | a goal is two [graphs](../lang/rewrite/src/graph.rs), lowered and padded to one arity before they build; the interpreter runs a strategy over one |
+| engine | `diagram2/` | the literal translation of a term into a [graph](../lang/rewrite/src/graph.rs) and back, the law table (`rules.rs`, every law a pair of graphs and every rewrite checked), and the tactic language that drives it (`tactic.rs`, see [docs/tactics.md](tactics.md)) |
 | graphs | `graph.rs` | boxes and the links between them, well-formedness, the isomorphism that says two graphs are one diagram, and the rewrite itself — a `Pair` of graphs spliced in at a checked `Match`. An `Embedding` composes matches, which is how a derivation about one graph is carried into another (`rules::transplant`) |
 
 ### Goals, and where the net-change asymmetry lives
@@ -117,7 +118,7 @@ gone, and what it decided by construction the table now spends as named,
 checked, replayable steps.
 
 Two things the driver deliberately never does: it never opens a
-[call](../rewrite/src/term.rs) (`inline` is a proof's decision), and it
+[call](../lang/rewrite/src/term.rs) (`inline` is a proof's decision), and it
 never reasons by case analysis on an unknown value (`cases` is a proof's
 decision). Everything else it decides by running the table dry.
 
@@ -223,7 +224,7 @@ operation the instruction set guarantees answers a boolean (`equal`,
 `is_int`, `not`, …; the parser refuses anything else). That answer is
 `true` or it is `false`, and there is no third case. So the following is
 an ordinary equation, and a row of the table (the Shannon expansion,
-`shannon` in [rewrite/src/diagram2/rules.rs](../rewrite/src/diagram2/rules.rs)):
+`shannon` in [lang/rewrite/src/diagram2/rules.rs](../lang/rewrite/src/diagram2/rules.rs)):
 
 ```text
 everything downstream of the wire
@@ -336,7 +337,7 @@ in the strategy language above. Attachment is checked both ways: an entry
 naming no stated identity is an error — a renamed identity must not
 silently shed its proof — and a claim discharged twice was discharged once
 too often. A body — a `via` waypoint — is a **term**, read by
-`rewrite/src/parse.rs`, which is the inverse of the printing residuals use.
+`lang/rewrite/src/parse.rs`, which is the inverse of the printing residuals use.
 That is the point: a residual says `copy(1) ; id(1) * push t1 ; equal`, the
 waypoint answering it is written the same way, and nothing is translated by
 hand. Two consequences worth knowing. Nothing pads — the term language says
@@ -374,7 +375,7 @@ the one address in the tactic language that is a name rather than a
 description; and a `NodeId` is stable for the life of a graph (nodes are
 only deleted, never moved), so two reports of one proof compare, which is
 what watching a proof means. Four things make a large one
-legible, and `rewrite/src/diagram2/render.rs` states each: branch
+legible, and `lang/rewrite/src/diagram2/render.rs` states each: branch
 membership is *computed* (downstream of the fork ∩ upstream of the select)
 rather than guessed from what sits between two lines; the order stays
 inside a branch once it enters one, instead of hoisting an arm's constants

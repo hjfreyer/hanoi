@@ -1,6 +1,6 @@
 # Hanoi CSP State Machines
 
-Hanoi supports modeling **Communicating Sequential Processes (CSP)** style state machines. Integration tests for these machines are located in the [tests](../tests) directory.
+Hanoi supports modeling **Communicating Sequential Processes (CSP)** style state machines. Integration tests for these machines are located in the [hana](../hana) directory.
 
 A **CSP Machine** in Hanoi is represented as a module containing standard sentences or functions to manage state initialization (`init`), event acceptance (`accept`), event emission (`emit`), state transitions (`process`), internal/silent transitions (`tau_reduce`), termination status (`is_done`), and checking readiness to finish (`is_ready_to_finish`).
 
@@ -96,7 +96,7 @@ Events can also be structured using **Path Notation** (dot notation) to represen
 
 ## Example: A Simple Iterator Machine
 
-Here is a simplified version of the character iterator machine from the Hanoi Assembly file [string.hana](../tests/string.hana):
+Here is a simplified version of the character iterator machine from the Hanoi Assembly file [string.hana](../hana/string.hana):
 
 ```hana
 symbol next

@@ -1,8 +1,8 @@
 //! `prove` — discharge every identity a corpus states.
 //!
 //! ```bash
-//! cargo run --bin prove -- tests
-//! cargo run --bin prove -- tests --filter two_spellings
+//! cargo run --bin prove -- ../hana
+//! cargo run --bin prove -- ../hana --filter two_spellings
 //! ```
 //!
 //! Per identity, its written strategy runs — the `.hant` beside the `.hana`,

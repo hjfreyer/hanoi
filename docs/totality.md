@@ -52,7 +52,7 @@ What is left is **meta-level or structural**, not a property of the values:
 | gas limit exceeded | the step counter |
 
 Structural faults are ruled out ahead of time rather than handled: arity
-checking is mandatory on every `assemble` path (`bytecode/src/assembly.rs`), so
+checking is mandatory on every `assemble` path (`lang/bytecode/src/assembly.rs`), so
 a sentence that would underflow does not assemble. The one remaining gap is an
 entry point whose inferred arity has `inputs > 0` — it assembles, and then
 underflows when run with an empty stack.
@@ -424,7 +424,7 @@ reconstruction, no guard, no imaginary values.
   previous Z3 typechecker modelled the old partial semantics and has been
   removed; anything that replaces it should be generated from the table above.
 
-  `emit_does_pre_and_post` in `tests/barista.hana` is the smallest interesting
+  `emit_does_pre_and_post` in `hana/barista.hana` is the smallest interesting
   instance: a program that should answer `true` on every input, where seeing
   why requires noticing that the precondition two branches earlier already
   established what the postcondition goes on to ask. Nothing in the workspace

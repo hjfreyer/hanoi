@@ -3,7 +3,7 @@
 A reference sheet for the equational theory the prover works in: every
 structural law stated symbolically and in the term model's spelling, with its
 side conditions, how the machinery embodies it, and what is known about
-completeness. The engine is `rewrite/src/diagram2` now — the literal graph
+completeness. The engine is `lang/rewrite/src/diagram2` now — the literal graph
 and its law table — and where this page's **How** column says a law held by
 representation or by a fold, that reading described the retired
 canonicalizing engine (`diagram.rs`); today every non-representational
@@ -28,7 +28,7 @@ a page of hand-written cuts included.
 - `;` is composition in program order — the left factor runs first. `*` is
   the tensor, and in `W * X` the **deeper** stack region is on the left, so
   `dip { A }` is `A * id(1)`. Both are the term model's own operators
-  (`rewrite/src/term.rs`); objects are stack widths, so on objects `*` is
+  (`lang/rewrite/src/term.rs`); objects are stack widths, so on objects `*` is
   `+`.
 - Generators: `copy(1) : 1 → 2` (δ, the fresh copy lands on top), `drop(1) :
   1 → 0` (ε), `swap : 2 → 2` (σ). The block forms `copy(n)`, `drop(n)`,
@@ -181,7 +181,7 @@ implementation of the semantics at all.
 
 Five more are rows now. The first two fold; the last two are **unpackings** —
 they say a coercion as the program it is, so they grow a graph, and
-[`folding`](../rewrite/src/diagram2/rules.rs) does not carry them. A
+[`folding`](../lang/rewrite/src/diagram2/rules.rs) does not carry them. A
 strategy names the one it wants (`fire(coercion-guard)`, `at(#7,
 as-bool-branch)`), the way `inline` is named: an unpacking changes what is
 in front of the other laws, and that is a decision.
@@ -242,7 +242,7 @@ column exactly:
 - Bonchi–Sobociński–Zanasi, *Interacting Hopf algebras*; the *String Diagram
   Rewrite Theory* series I–III — rewriting these presentations as hypergraph
   rewriting, which dissolves the padding bureaucracy a term presentation
-  pays for; the road `rewrite/src/diagram2` walks in full — laws as pairs
+  pays for; the road `lang/rewrite/src/diagram2` walks in full — laws as pairs
   of open graphs, rewriting as checked cut-and-splice. Kissinger's Chyp is
   the closest working relative of that layer.
 - Altenkirch–Dybjer–Hofmann–Scott, *Normalization by evaluation for typed

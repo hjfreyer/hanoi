@@ -26,7 +26,7 @@ struct Args {
 /// What the test left behind, read as the result it was supposed to return.
 ///
 /// A test ends by handing back `((), prelude::ok)` or `(payload, prelude::err)`
-/// — the `check_equals` in `tests/prelude.hana` builds both — so a test that
+/// — the `check_equals` in `hana/prelude.hana` builds both — so a test that
 /// fails says what it saw rather than halting the machine. Anything else on the
 /// stack is a test that did not answer the question it was asked.
 fn verdict(library: &bytecode::Library, stack: &[bytecode::Value]) -> Result<(), String> {

@@ -154,7 +154,7 @@ undo the scope shift, and are now plain `tag` and `Case1`.
 It also lifted a real restriction. Under the old scope shift a variant payload
 could not name a sibling by a relative path at all — `enum E { A(Small) }`
 failed with *"Item 'Small' not found in module 'crate::E::A'"*, which is why
-`tests/queue.hana` spells out `crate::queue::Elem` in every payload. Relative
+`hana/queue.hana` spells out `crate::queue::Elem` in every payload. Relative
 payload paths now resolve, and `type_tests.hana` pins the behavior.
 
 ### The lowerings

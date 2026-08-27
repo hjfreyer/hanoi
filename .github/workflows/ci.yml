@@ -13,6 +13,11 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
 
+# The workspace is `lang/`; every step below runs from inside it.
+defaults:
+  run:
+    working-directory: lang
+
 jobs:
   rust-tests:
     name: cargo test
@@ -21,6 +26,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: lang
       - run: cargo test --workspace
 
   hanoi-tests:
@@ -30,8 +37,12 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      # Builds test-runner and runs every .hana file under tests/.
+        with:
+          workspaces: lang
+      # Builds test-runner and runs every .hana file under lang/tests/.
+      # The script is at the root and cds into the workspace itself.
       - run: ./run_tests.sh
+        working-directory: .
 
   fmt:
     name: cargo fmt
@@ -52,4 +63,6 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: lang
       - run: cargo clippy --workspace --all-targets -- -D warnings

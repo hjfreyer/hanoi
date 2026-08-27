@@ -5,7 +5,7 @@
 //! a diagram. Its `normalize` *evaluates* a term on a stack of symbolic
 //! wires and lands in the answer — an interned value-DAG under an ordered
 //! case tree — so the structural layer of
-//! [docs/algebra.md](../../docs/algebra.md) is "representation" in the
+//! [docs/algebra.md](../../../../docs/algebra.md) is "representation" in the
 //! strongest sense: it is never data at all. That is exactly why the whole
 //! layer is free there, and exactly why there is nothing to point at, and
 //! nothing for a rewrite to act on.
@@ -27,7 +27,7 @@
 //! boxes in between: a `fork(n)` hands each arm its own view of the stack,
 //! both arms run, and the `select(n)` it is paired with keeps one of the
 //! two answers. That `fork` is exactly the `(pick (n-1))^n` of the
-//! single-arm hoist in [docs/totality.md](../../docs/totality.md), and the
+//! single-arm hoist in [docs/totality.md](../../../../docs/totality.md), and the
 //! hoist is why the translation is allowed: every prim is total and has no
 //! effect but the stack, so work on the path not taken costs an answer
 //! nobody reads rather than a failure.
@@ -731,8 +731,9 @@ pub(crate) mod tests {
     pub(crate) fn corpus() -> (Library, Context, Vec<(SentenceIndex, TermIndex)>) {
         let tests = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
-            .expect("the crate sits in the workspace")
-            .join("tests");
+            .and_then(std::path::Path::parent)
+            .expect("the crate sits in the workspace, beside the corpus")
+            .join("hana");
         let text = std::fs::read_to_string(tests.join("main.hana")).unwrap();
         let mut map = bytecode::SourceMap::new();
         let file = map.add("main.hana", text);

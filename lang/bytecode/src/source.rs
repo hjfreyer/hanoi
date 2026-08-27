@@ -135,7 +135,7 @@ impl SourceMap {
     ///
     /// ```text
     /// error: expected an instruction, found `{`
-    ///  --> tests/main.hana:6:9
+    ///  --> hana/main.hana:6:9
     ///    |
     ///  6 |     add {
     ///    |         ^
