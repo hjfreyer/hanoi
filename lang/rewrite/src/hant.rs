@@ -55,12 +55,16 @@
 //! Two things it asks for. The named claim has to be **proved before this
 //! one**, which the corpus arranges — proofs are run in dependency order,
 //! and two claims that lean on each other are refused by name rather than
-//! ordered away. And its proof has to be a **run on its own left side
-//! alone**: `lhs(…)` steps and nothing on the right, so that what it
-//! records is one side driven onto the other rather than two sides met in
-//! the middle. A lemma written to be reused is written that way; one that
-//! was not says so, in the words
-//! [`Proof::one_sided`](crate::goal::Proof::one_sided) puts it.
+//! ordered away. And its proof has to **drive one side onto the other**
+//! rather than take the two together: steps on one side and none on the
+//! other, all the way down. A `symm` costs nothing — it moves which side
+//! of the goal the claim's left is, so `symm rhs(…) rhs(…)` is the same run
+//! written from the other end — but a step spent on the side that is not
+//! being driven is a second run, and two runs meeting in the middle do not
+//! compose into one without inverting the second and rebasing it through
+//! the isomorphism they met at. Nothing does that yet, and
+//! [`Proof::one_sided`](crate::goal::Proof::one_sided) has the words for
+//! what it hit.
 //!
 //! ```text
 //! proof identities::a_double_negative_is_the_branch_it_makes =
@@ -221,9 +225,10 @@ pub enum Step<V> {
     /// them apart.
     ///
     /// It needs the named identity proved before this one, which is why the
-    /// corpus proves in dependency order, and it needs that proof to be a
-    /// run on its own left side alone — [`one_sided`](crate::goal::Proof::one_sided)
-    /// is what says so when it is not.
+    /// corpus proves in dependency order, and it needs that proof to drive
+    /// one side of its claim onto the other —
+    /// [`one_sided`](crate::goal::Proof::one_sided) is what says so when it
+    /// does not.
     By { side: OnSide, of: V },
     /// Open calls on both sides, in place in the graphs: every one, all
     /// the way down, or — with a label — only the calls to the sentence it
