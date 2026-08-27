@@ -260,12 +260,18 @@ impl Proof {
     ///   lands on is only isomorphic to the graph the right run names. Same
     ///   join, no inversion.
     ///
-    /// And one refuses outright:
+    /// And one refuses for a different reason:
     ///
-    /// - **`inline`.** Not a rewrite at all. It opens calls across the whole
-    ///   graph rather than inside the lemma's window, so there is no step
-    ///   list to carry and no window to carry it into; the honest fix is to
-    ///   state the opened form as its own identity.
+    /// - **`inline`.** An open *is* a rewrite — one call's window against
+    ///   its body's graph, which is exactly how
+    ///   [`inline`](crate::diagram2::inline) performs it. What it is not is
+    ///   a recorded [`Step`]: [`sides`](crate::diagram2::rules::sides) has
+    ///   no library to build a body from, so nothing in the table can state
+    ///   an open, and [`Proof::Inlined`] therefore records the *sentence*
+    ///   and re-performs the open rather than carrying a transcript. So
+    ///   what there is to carry is a whole-graph operation rather than a
+    ///   window's worth of steps, and the honest fix today is to state the
+    ///   opened form as its own identity.
     pub fn one_sided(&self) -> Result<Vec<Step>, String> {
         self.run_on(Side::Left)
     }
@@ -296,8 +302,9 @@ impl Proof {
             // which side of the goal it is written on.
             Proof::Swapped(sub) => sub.run_on(side.flipped()),
             Proof::Inlined { .. } => Err(
-                "it opens a call, which is not a rewrite: state the opened form as its own \
-                 identity and prove that"
+                "it opens calls across the whole graph rather than inside a window, and \
+                 records the sentence rather than the steps, so there is nothing localized \
+                 to carry: state the opened form as its own identity and prove that"
                     .to_string(),
             ),
             Proof::Cut { .. } => Err(
@@ -455,7 +462,12 @@ mod tests {
             name: None,
             sub: Box::new(Proof::Trivial),
         };
-        assert!(opened.one_sided().unwrap_err().contains("opens a call"));
+        assert!(
+            opened
+                .one_sided()
+                .unwrap_err()
+                .contains("nothing localized to carry")
+        );
     }
 
     /// A `symm` moves which side of the goal the claim's left side is, and
