@@ -91,7 +91,8 @@ cargo run --bin typecheck <directory>
 
 For example:
 ```bash
-cargo run --bin typecheck tests/
+cd lang
+cargo run --bin typecheck ../hana/
 ```
 
 ### Verification Output

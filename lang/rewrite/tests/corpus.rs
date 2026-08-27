@@ -15,8 +15,9 @@ use rewrite::strategy::Prover;
 fn the_corpus_identities_close() {
     let tests = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
-        .expect("the crate sits in the workspace")
-        .join("tests");
+        .and_then(std::path::Path::parent)
+        .expect("the crate sits in the workspace, beside the corpus")
+        .join("hana");
     let mut corpus = corpus::load(&tests).unwrap();
     assert_eq!(corpus.problems, Vec::<String>::new());
 

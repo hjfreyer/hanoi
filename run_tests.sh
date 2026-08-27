@@ -4,11 +4,11 @@
 
 set -euo pipefail
 
-# Ensure we are in the script's directory
+# The workspace is `lang/`; the corpus it runs is `hana/`, beside it.
 CDPATH="" cd -- "$(dirname -- "$0")"
 
 echo "Building test runner..."
-cargo build --bin test-runner
+(cd lang && cargo build --bin test-runner)
 
 echo ""
 echo "======================================"
@@ -16,7 +16,7 @@ echo "Running Hanoi integration tests..."
 echo "======================================"
 echo ""
 
-if ./target/debug/test-runner tests "$@"; then
+if ./lang/target/debug/test-runner hana "$@"; then
     echo "======================================"
     echo "All integration tests passed."
     exit 0

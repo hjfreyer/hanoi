@@ -105,10 +105,11 @@ one property of the claim that holds however it might be proved.
 `bin/prove` discharges the claims:
 
 ```bash
-cargo run --bin prove -- tests
+cd lang
+cargo run --bin prove -- ../hana
 ```
 
-Every identity in `tests/identities.hana` closes on the rule set alone; the
+Every identity in `hana/identities.hana` closes on the rule set alone; the
 pipeline, the equations, and the `.hant` stepping-stone file for goals that
 need a bridge are described in [docs/proving.md](docs/proving.md).
 
@@ -130,20 +131,20 @@ The Hanoi VM supports a rich instruction set categorized into five main domains:
 
 ## Project Architecture
 
-The Hanoi codebase is structured as a cargo workspace with several key packages:
+The language lives in `lang/`, a cargo workspace of several key packages, and the corpus it is exercised against lives beside it in `hana/`:
 
-- **[bytecode](bytecode)**: The compiler frontend and validation pipeline.
-  - [bytecode/src/assembly.rs](bytecode/src/assembly.rs): Parser and assembler that turns `.hana` source code into VM bytecode.
-  - [bytecode/src/arity.rs](bytecode/src/arity.rs): Static arity checker for validating stack depths.
-- **[vm](vm)**: The virtual machine execution engine.
-  - [vm/src/lib.rs](vm/src/lib.rs): Core interpreter, instruction dispatch loop, and stack representation.
-  - [vm/src/runtime.rs](vm/src/runtime.rs): Asynchronous CSP coordinator that drives state machine step cycles.
-- **[rewrite](rewrite)**: The prover.
-  - [rewrite/src/term.rs](rewrite/src/term.rs): The algebraic term model — programs as two arity-exact operators (`;` and `*`) over a handful of leaves, built in a `Context` arena and referred to by `TermIndex`.
-  - [rewrite/src/diagram.rs](rewrite/src/diagram.rs): The string-diagram engine — programs as wiring in an interned arena, canonicalized into ordered, shared case trees; the decision procedure `bin/prove` closes goals with.
-  - [rewrite/src/hant.rs](rewrite/src/hant.rs): The strategy language proofs are written in (`peel`, `descend`, `inline`, `via`, `diagram`); [strategy.rs](rewrite/src/strategy.rs) interprets one per identity behind `bin/prove`.
-- **[test-runner](test-runner)**: CLI harness that compiles and runs integration test suites.
-- **[tests](tests)**: A collection of test cases covering all VM features, string/data parsers, queues, and multi-agent CSP networks.
+- **[lang/bytecode](lang/bytecode)**: The compiler frontend and validation pipeline.
+  - [lang/bytecode/src/assembly.rs](lang/bytecode/src/assembly.rs): Parser and assembler that turns `.hana` source code into VM bytecode.
+  - [lang/bytecode/src/arity.rs](lang/bytecode/src/arity.rs): Static arity checker for validating stack depths.
+- **[lang/vm](lang/vm)**: The virtual machine execution engine.
+  - [lang/vm/src/lib.rs](lang/vm/src/lib.rs): Core interpreter, instruction dispatch loop, and stack representation.
+  - [lang/vm/src/runtime.rs](lang/vm/src/runtime.rs): Asynchronous CSP coordinator that drives state machine step cycles.
+- **[lang/rewrite](lang/rewrite)**: The prover.
+  - [lang/rewrite/src/term.rs](lang/rewrite/src/term.rs): The algebraic term model — programs as two arity-exact operators (`;` and `*`) over a handful of leaves, built in a `Context` arena and referred to by `TermIndex`.
+  - [lang/rewrite/src/diagram.rs](lang/rewrite/src/diagram.rs): The string-diagram engine — programs as wiring in an interned arena, canonicalized into ordered, shared case trees; the decision procedure `bin/prove` closes goals with.
+  - [lang/rewrite/src/hant.rs](lang/rewrite/src/hant.rs): The strategy language proofs are written in (`peel`, `descend`, `inline`, `via`, `diagram`); [strategy.rs](lang/rewrite/src/strategy.rs) interprets one per identity behind `bin/prove`.
+- **[lang/test-runner](lang/test-runner)**: CLI harness that compiles and runs integration test suites.
+- **[hana](hana)**: The `.hana`/`.hant` corpus — test cases covering all VM features, string/data parsers, queues, and multi-agent CSP networks, and the identities `bin/prove` discharges.
 
 ---
 
@@ -155,8 +156,9 @@ The Hanoi codebase is structured as a cargo workspace with several key packages:
 
 ### Building the Project
 
-Compile the workspace binaries:
+Compile the workspace binaries, from `lang/`:
 ```bash
+cd lang
 cargo build
 ```
 

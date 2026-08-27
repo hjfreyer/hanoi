@@ -279,7 +279,7 @@ pub enum Step<V> {
     /// which wire the step picks: the outermost box of the operation
     /// **one of whose operands is that pushed literal**, named by any
     /// unambiguous tail of its spelling. This is the sharper addressing
-    /// [docs/proving.md](../../docs/proving.md) asks for: a goal that
+    /// [docs/proving.md](../../../docs/proving.md) asks for: a goal that
     /// holds several tests of one operation splits on the one the proof
     /// means, not on whichever happens to sit outermost.
     Cases {

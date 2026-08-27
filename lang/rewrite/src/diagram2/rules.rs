@@ -44,7 +44,7 @@
 //! [`Law::IdElim`], [`Law::SwapElim`], [`Law::CopyElim`] and
 //! [`Law::DeadNode`] (which is `drop-elim` too — a `drop(n)` has no outputs,
 //! so it is always dead). Layer 1 of
-//! [docs/algebra.md](../../../docs/algebra.md) has no other spelling here:
+//! [docs/algebra.md](../../../../docs/algebra.md) has no other spelling here:
 //! the associativities, the units, the interchange and Yang–Baxter are all
 //! *representation*, true of the wiring because the wiring cannot say them.
 //!
@@ -73,7 +73,7 @@
 //! [`Law::IsTupleBuilt`] says testing its width answers. The second is what
 //! lets the compiler's `type` and `enum` guard be `pick 0 ; is_tuple n`
 //! rather than a coercion compared against a copy — see
-//! [docs/totality.md](../../../docs/totality.md), where that guard has now
+//! [docs/totality.md](../../../../docs/totality.md), where that guard has now
 //! shortened twice.
 //!
 //! Every row on that list **shrinks** a graph, which is what makes it a

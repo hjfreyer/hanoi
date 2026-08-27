@@ -208,7 +208,7 @@ pub enum NodeKind {
     /// graph between the two ends, so a rule reaches into an arm from
     /// outside and a value reaches out of one. Both arms are computed, which
     /// is the single-arm hoist of
-    /// [docs/totality.md](../../docs/totality.md) — sound because every
+    /// [docs/totality.md](../../../docs/totality.md) — sound because every
     /// [`Prim`] is total, has no effect but the stack, and, unlike the
     /// term-level rule, states its arity locally even when it is a
     /// [`NodeKind::Call`].
@@ -238,7 +238,7 @@ impl NodeKind {
     ///
     /// A `fork` is structure by any other reading — it is a `copy` — but it
     /// is not *rewritable* structure, and this predicate is what the rules
-    /// and [`no_structure`](../../tests) are asking about. The branch layer
+    /// and [`no_structure`](../../../hana) are asking about. The branch layer
     /// survives on purpose.
     pub fn is_structural(&self) -> bool {
         matches!(

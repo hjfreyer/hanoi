@@ -1538,8 +1538,9 @@ mod tests {
     fn the_whole_corpus_lowers() {
         let tests = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
-            .expect("the crate sits in the workspace")
-            .join("tests");
+            .and_then(std::path::Path::parent)
+            .expect("the crate sits in the workspace, beside the corpus")
+            .join("hana");
         let text = std::fs::read_to_string(tests.join("main.hana")).unwrap();
 
         let mut map = bytecode::SourceMap::new();

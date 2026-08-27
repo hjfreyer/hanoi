@@ -2,7 +2,7 @@
 
 *A design note, since landed: the structured `cases` of
 [docs/proving.md](proving.md) implements the authoring layer this note
-designs, `Region::Arm` in `rewrite/src/diagram2/tactic.rs` is the seam
+designs, `Region::Arm` in `lang/rewrite/src/diagram2/tactic.rs` is the seam
 it took, and the corpus's biggest goal — the barista contract claim —
 closes as its worked example. The argument of the note stands as the
 argument of the implementation: the construct costs the checker
@@ -45,8 +45,8 @@ the fork, which says *this* is the condition, and the select, which
 holds the discard that makes reasoning from "the condition held" sound —
 the untaken arm is an answer nobody reads. That is the whole of the
 specializing layer (`specialize-equal`, `specialize-bool`,
-`specialize-choice` in `rewrite/src/diagram2/rules.rs`), and
-`rewrite/tests/path_condition.rs` walks the methodology end to end:
+`specialize-choice` in `lang/rewrite/src/diagram2/rules.rs`), and
+`lang/rewrite/tests/path_condition.rs` walks the methodology end to end:
 widen, hoist, dedup, promise, specialize.
 
 So the primitive moves of hypothetical reasoning are already rows:
