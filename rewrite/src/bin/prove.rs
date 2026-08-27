@@ -106,31 +106,51 @@ fn run(args: &Args) -> Result<bool, String> {
 
     let total = corpus.library.identities.len();
     println!("Proving {} identities...", total);
-    let prover = Prover::new(&corpus.library);
+    // Dependency order, not declaration order: a `by` spends another
+    // identity's proof, so that one has to have closed first. A filtered-out
+    // identity is still *proved* when something else leans on it — it is only
+    // the report that is filtered, since a lemma nobody asked to see is not a
+    // reason for the claim that needs it to fail.
+    let order = corpus.proving_order()?;
+    let mut prover = Prover::new(&corpus.library);
     let (mut passed, mut failed, mut filtered) = (0usize, 0usize, 0usize);
-    for (idx, identity) in corpus.library.identities.iter_enumerated() {
-        if let Some(f) = &args.filter
-            && !identity.name.contains(f.as_str())
-        {
+    for idx in order {
+        let identity = &corpus.library.identities[idx];
+        let name = identity.name.clone();
+        let shown = args
+            .filter
+            .as_ref()
+            .is_none_or(|f| name.contains(f.as_str()));
+        if !shown {
             filtered += 1;
-            continue;
         }
         // One arena for the whole run: the waypoints the corpus read at load
         // time and the goals lowered here are places in it.
         let goal = Goal::of_identity(&mut corpus.terms, &corpus.library, idx)
             .map_err(|e| e.to_string())?;
+        let lhs = goal.lhs.clone();
         let strategy = corpus.proofs.get(&idx);
         match prover
             .prove(&mut corpus.terms, goal, strategy)
             .map_err(|e| e.to_string())?
         {
             Outcome::Closed(proof) => {
+                // Whether it can be spent is not this loop's business to
+                // insist on: most proofs are not runs on one side, and only a
+                // `by` naming this one would ever care.
+                prover.learn(idx, lhs, &proof);
+                if !shown {
+                    continue;
+                }
                 passed += 1;
-                println!("identity {} ... ok ({})", identity.name, proof.summary());
+                println!("identity {} ... ok ({})", name, proof.summary());
             }
             Outcome::Stuck(residual) => {
+                if !shown {
+                    continue;
+                }
                 failed += 1;
-                println!("identity {} ... FAILED", identity.name);
+                println!("identity {} ... FAILED", name);
                 println!();
                 if args.terms_only {
                     // What to write back. With the library at hand a call

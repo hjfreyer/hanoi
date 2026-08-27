@@ -14,7 +14,7 @@
 //! fixpoint, `view-value` held to last — and asks whether they landed on
 //! one diagram, by isomorphism. Every rewrite on the way is an instance of
 //! a named law checked by
-//! [`rules::apply`](crate::diagram2::rules::apply), so the verdict is a
+//! [`rules::apply`], so the verdict is a
 //! derivation's worth of checked steps and one final isomorphism, rather
 //! than one engine's word. A stuck `diagram` means the claim is false, or
 //! true only for reasons the table cannot yet say — and `cases` is the
@@ -34,9 +34,11 @@
 
 use std::collections::HashSet;
 
-use bytecode::Library;
+use std::collections::HashMap;
 
-use crate::diagram2::rules::{Derivation, Law};
+use bytecode::{IdentityIndex, Library};
+
+use crate::diagram2::rules::{self, Derivation, Law};
 use crate::diagram2::tactic::{Region, Tactic};
 use crate::diagram2::{self, read_back, tactic};
 use crate::goal::{Goal, Outcome, Proof, Residual, against};
@@ -47,19 +49,54 @@ use crate::term::{Context, Error, Prim, Term, TermIndex};
 /// One side of a goal, picked out for a mutation that borrows it alone.
 type Pick = fn(&mut Goal) -> &mut Graph;
 
+/// An identity already proved, in the form another proof can spend it: the
+/// left side as it was built, and the run that took it to the right.
+struct Lemma {
+    lhs: Graph,
+    run: Vec<diagram2::rules::Step>,
+}
+
 /// Proves goals against one library.
 ///
 /// Every step reads the goal's terms out of a [`Context`] and writes the
 /// terms it makes back into it, so the one arena is threaded through: a
 /// waypoint read at load time, the goal, and every subgoal a strategy carves
 /// out of it are all places in it.
+///
+/// It also **remembers what it has proved**, which is what a `by` spends. A
+/// prover is filled by whoever drives it — [`Prover::learn`] after each
+/// close, in the corpus's [proving
+/// order](crate::corpus::Corpus::proving_order) — and a `by` naming a claim
+/// this prover has not been taught fails saying so, rather than quietly
+/// assuming it.
 pub struct Prover<'l> {
     pub library: &'l Library,
+    /// What each closed identity left behind: the run a `by` may spend, or
+    /// why its proof is not one. Keeping the refusal is the point — a claim
+    /// that closed and cannot be carried is a different report from one that
+    /// has not closed at all, and a proof that names it deserves to be told
+    /// which.
+    lemmas: HashMap<IdentityIndex, Result<Lemma, String>>,
 }
 
 impl<'l> Prover<'l> {
     pub fn new(library: &'l Library) -> Self {
-        Prover { library }
+        Prover {
+            library,
+            lemmas: HashMap::new(),
+        }
+    }
+
+    /// Records a closed identity so later proofs may spend it with `by`.
+    ///
+    /// `lhs` is the goal's left side as it was *built* — a `by` looks for
+    /// that graph, so it has to be the same one the run was written against.
+    /// The run itself is [`Proof::one_sided`]'s answer, and where there is
+    /// none the reason is recorded in its place, to be handed to whatever
+    /// `by` goes looking.
+    pub fn learn(&mut self, idx: IdentityIndex, lhs: Graph, proof: &Proof) {
+        let learned = proof.one_sided().map(|run| Lemma { lhs, run });
+        self.lemmas.insert(idx, learned);
     }
 
     /// Runs a strategy on a goal — the written one, or the default
@@ -258,6 +295,89 @@ impl<'l> Prover<'l> {
                         residual
                             .path
                             .insert(0, format!("after rewriting {}", side.word()));
+                        Outcome::Stuck(residual)
+                    }
+                })
+            }
+
+            // Another identity, spent where it occurs. Not an axiom: what
+            // lands is that identity's own proof, carried through the
+            // embedding of its left side in this one — so the steps recorded
+            // here are ordinary rewrites in this goal's coordinates, and
+            // `Proof::check` re-applies them knowing nothing of lemmas.
+            Step::By { side, of } => {
+                let Body::Lemma(idx) = *of else {
+                    return Ok(Outcome::Stuck(gave_up(
+                        ctx,
+                        &goal,
+                        "`by` was handed something that is not an identity",
+                    )));
+                };
+                let name = self.library.identities[idx].name.as_str();
+                let lemma = match self.lemmas.get(&idx) {
+                    Some(Ok(lemma)) => lemma,
+                    Some(Err(why)) => {
+                        let why = format!(
+                            "`{}(by {})`: that identity closed, but its proof cannot be \
+                             carried anywhere — {}",
+                            side.word(),
+                            name,
+                            why
+                        );
+                        return Ok(Outcome::Stuck(gave_up(ctx, &goal, &why)));
+                    }
+                    None => {
+                        let why = format!(
+                            "`{}(by {})`: that identity is not proved, so there is nothing \
+                             to spend",
+                            side.word(),
+                            name
+                        );
+                        return Ok(Outcome::Stuck(gave_up(ctx, &goal, &why)));
+                    }
+                };
+                let mut goal = goal;
+                let mut spent: [Vec<diagram2::rules::Step>; 2] = [Vec::new(), Vec::new()];
+                let picks: &[(Pick, usize)] = match side {
+                    OnSide::Lhs => &[(|g| &mut g.lhs, 0)],
+                    OnSide::Rhs => &[(|g| &mut g.rhs, 1)],
+                    OnSide::Both => &[(|g| &mut g.lhs, 0), (|g| &mut g.rhs, 1)],
+                };
+                for &(pick, at) in picks {
+                    let host = pick(&mut goal);
+                    // The first embedding, canonically. Which one is a
+                    // choice a proof may need to make some day; today the
+                    // sweep's own order is the answer, and it is the same
+                    // order `fire` takes its proposal in.
+                    let Some(found) = graph::find(host, &lemma.lhs).into_iter().next() else {
+                        let why = format!(
+                            "`{}(by {})`: that identity's left side does not occur here",
+                            side.word(),
+                            name
+                        );
+                        return Ok(Outcome::Stuck(gave_up(ctx, &goal, &why)));
+                    };
+                    match rules::transplant(host, &lemma.lhs, &found, &lemma.run) {
+                        Ok(run) => spent[at] = run.steps().cloned().collect(),
+                        Err(e) => {
+                            let why = format!("`{}(by {})`: {}", side.word(), name, e);
+                            return Ok(Outcome::Stuck(gave_up(ctx, &goal, &why)));
+                        }
+                    }
+                }
+                let [lhs, rhs] = spent;
+                Ok(match self.run(ctx, rest, goal)? {
+                    Outcome::Closed(sub) => Outcome::Closed(Proof::Rewrote {
+                        side: side.word(),
+                        lhs,
+                        rhs,
+                        sub: Box::new(sub),
+                    }),
+                    Outcome::Stuck(mut residual) => {
+                        residual.path.insert(
+                            0,
+                            format!("after spending an identity on the {}", side.word()),
+                        );
                         Outcome::Stuck(residual)
                     }
                 })
