@@ -22,6 +22,7 @@
 //! | `lhs(tactic)` | runs a graph tactic (see below) on the left side | the tactic fails — and the residual is the goal as it now stands, the last step that landed still standing |
 //! | `rhs(tactic)` | the same on the right | likewise |
 //! | `both(tactic)` | the same on each side in turn | likewise |
+//! | `lhs(by name)` | spends another identity where its left side occurs on this one — that identity's **own proof**, carried in | the named claim is not proved, its proof is not a run on one side, or its left side does not occur here |
 //! | `inline` | opens every call in both graphs, all the way down | there are no calls |
 //! | `inline(name)` | opens the calls to that one sentence | it is not called here |
 //! | `symm` | swaps the two sides | never — but two in a row are refused |
@@ -38,6 +39,41 @@
 //! via { c2 })` — and each link may take a different road. A strategy that
 //! ends on a manipulation is allowed: it closes only if the goal has
 //! become one diagram, and says so otherwise.
+//!
+//! ## Spending one claim on another
+//!
+//! `lhs(by identities::a_lemma)` is how a proof uses a proof. It is not a
+//! law and not an axiom: the named identity has a proof of its own, and what
+//! lands here is *that proof's steps*, carried through the embedding of its
+//! left side in this goal —
+//! [`transplant`](crate::diagram2::rules::transplant). So the record a `by`
+//! leaves is a run of ordinary rewrites in this goal's coordinates, and the
+//! checker re-applies them knowing nothing about lemmas at all. Nothing new
+//! is trusted, which is the whole reason it is spelled this way rather than
+//! as another row of the table.
+//!
+//! Two things it asks for. The named claim has to be **proved before this
+//! one**, which the corpus arranges — proofs are run in dependency order,
+//! and two claims that lean on each other are refused by name rather than
+//! ordered away. And its proof has to be a **run on its own left side
+//! alone**: `lhs(…)` steps and nothing on the right, so that what it
+//! records is one side driven onto the other rather than two sides met in
+//! the middle. A lemma written to be reused is written that way; one that
+//! was not says so, in the words
+//! [`Proof::one_sided`](crate::goal::Proof::one_sided) puts it.
+//!
+//! ```text
+//! proof identities::a_double_negative_is_the_branch_it_makes =
+//!     lhs(fire(not-not)) lhs(fire(as-bool-branch));
+//!
+//! proof identities::three_negatives_are_a_branch_and_a_negative =
+//!     lhs(by identities::a_double_negative_is_the_branch_it_makes);
+//! ```
+//!
+//! The first embedding is the one spent, in the sweep's own order — the same
+//! order `fire` takes its proposal in. Which one, where a lemma occurs more
+//! than once, is a choice a proof may need to make some day; there is no
+//! spelling for it yet.
 //!
 //! ## The tactic language, embedded
 //!
@@ -126,7 +162,7 @@
 
 use std::fmt;
 
-use bytecode::SentenceIndex;
+use bytecode::{IdentityIndex, SentenceIndex};
 
 use crate::diagram2::rules::{self, Law};
 use crate::diagram2::tactic::{self, Tactic};
@@ -174,6 +210,21 @@ pub enum Step<V> {
     /// and the residual shows exactly that. Boxed: a tactic is by far the
     /// widest thing a step can carry.
     Rewrite { side: OnSide, tactic: Box<Tactic> },
+    /// Spend another identity where it occurs: `lhs(by name)`.
+    ///
+    /// Not a law and not an axiom. The identity named has a proof of its
+    /// own, and what happens here is that its proof's **steps** are carried
+    /// into this goal — [`transplant`](crate::diagram2::rules::transplant)
+    /// — so what lands is a run of the same ordinary rewrites, checked the
+    /// same way, in this goal's coordinates. Nothing new is trusted: a
+    /// `by` records what a `lhs(…)` records and the checker cannot tell
+    /// them apart.
+    ///
+    /// It needs the named identity proved before this one, which is why the
+    /// corpus proves in dependency order, and it needs that proof to be a
+    /// run on its own left side alone — [`one_sided`](crate::goal::Proof::one_sided)
+    /// is what says so when it is not.
+    By { side: OnSide, of: V },
     /// Open calls on both sides, in place in the graphs: every one, all
     /// the way down, or — with a label — only the calls to the sentence it
     /// names, whose own calls stay closed. Recursion is forbidden, so one
@@ -248,6 +299,8 @@ pub enum Body {
     Stone(TermIndex),
     /// An `inline` label: the one sentence it opens.
     Target(SentenceIndex),
+    /// A `by` name: the one identity it spends.
+    Lemma(IdentityIndex),
 }
 
 /// A strategy: steps in order, manipulations first, at most one closer last.
@@ -270,6 +323,7 @@ impl<V> fmt::Display for Step<V> {
         match self {
             Step::Diagram => write!(f, "diagram"),
             Step::Rewrite { side, .. } => write!(f, "{}(…)", side.word()),
+            Step::By { side, .. } => write!(f, "{}(by …)", side.word()),
             Step::Inline(None) => write!(f, "inline"),
             Step::Inline(Some(_)) => write!(f, "inline(…)"),
             Step::Symm => write!(f, "symm"),
@@ -352,6 +406,26 @@ fn parse_step(input: &str) -> Result<(Step<String>, &str), String> {
             };
             let (inside, after) = paren_block(rest.trim_start())
                 .ok_or_else(|| format!("`{}` expects a parenthesized tactic", word))?;
+            // `by` is the one thing inside a side that is not a tactic: it
+            // spends a whole identity rather than a law, and what it needs —
+            // that identity's own proof — is the prover's to look up, not the
+            // rewrite language's. So it is dispatched here, on the head word,
+            // and the surface stays `lhs(…)` either way.
+            if let Some(name) = inside.trim().strip_prefix("by")
+                && name.starts_with(|c: char| c.is_whitespace())
+            {
+                let name = name.trim();
+                if name.is_empty() {
+                    return Err(format!("`{}(by …)` names no identity", word));
+                }
+                return Ok((
+                    Step::By {
+                        side,
+                        of: name.to_string(),
+                    },
+                    after,
+                ));
+            }
             let tactic = parse_tactics(inside).map_err(|e| format!("`{}`: {}", word, e))?;
             Ok((
                 Step::Rewrite {
@@ -809,6 +883,38 @@ fn paren_block(text: &str) -> Option<(&str, &str)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `by` is the one thing inside a side that is not a tactic, and it is
+    /// told apart by its head word alone — so a law or a tactic whose name
+    /// merely begins with those two letters is still a tactic.
+    #[test]
+    fn a_side_takes_a_lemma_as_well_as_a_tactic() {
+        let entries = parse_hant(
+            "proof identities::spends_one = lhs(by identities::a_lemma) rhs(by other) diagram;",
+        )
+        .unwrap();
+        assert_eq!(
+            entries[0].strategy,
+            vec![
+                Step::By {
+                    side: OnSide::Lhs,
+                    of: "identities::a_lemma".to_string()
+                },
+                Step::By {
+                    side: OnSide::Rhs,
+                    of: "other".to_string()
+                },
+                Step::Diagram,
+            ]
+        );
+
+        // A tactic still parses as one, `by`-shaped name or not.
+        let entries = parse_hant("proof identities::x = both(branches);").unwrap();
+        assert!(matches!(entries[0].strategy[..], [Step::Rewrite { .. }]));
+
+        assert!(parse_hant("proof identities::x = lhs(by);").is_err());
+        assert!(parse_hant("proof identities::x = lhs(by );").is_err());
+    }
 
     #[test]
     fn a_proof_file_parses_into_its_entries() {

@@ -26,3 +26,18 @@ proof identities::as_tuple_is_a_guarded_identity = lhs(fire(coercion-guard)) dia
 // `negate`, the two sides are the one diagram.
 proof identities::what_follows_a_branch_runs_inside_it =
     lhs(fire(select-hoist)) diagram;
+
+// The lemma. Left-only on purpose: two rows drive `not ; not` onto the branch
+// it makes, and the right side is left exactly as written, so what the proof
+// records is a run from one side to the other rather than two runs meeting in
+// the middle. That is what `by` can carry; a proof that met in the middle
+// would have to be inverted first, and nothing does that yet.
+proof identities::a_double_negative_is_the_branch_it_makes =
+    lhs(fire(not-not)) lhs(fire(as-bool-branch));
+
+// And the claim that spends it. `by` finds the lemma's left side in this
+// goal's left side and carries the lemma's own steps in — no new law, no new
+// axiom, and the third `not` left exactly where it was, still reading what the
+// branch now leaves.
+proof identities::three_negatives_are_a_branch_and_a_negative =
+    lhs(by identities::a_double_negative_is_the_branch_it_makes);

@@ -26,18 +26,27 @@ fn the_corpus_identities_close() {
     // closes now, by the structured `cases` tree its `.hant` writes.
     let expected_stragglers: [&str; 0] = [];
 
-    let prover = Prover::new(&corpus.library);
+    // Dependency order: a proof that spends another identity with `by` needs
+    // that one closed first, and a cycle is a load-time refusal.
+    let order = corpus.proving_order().unwrap();
+    assert_eq!(order.len(), corpus.library.identities.len());
+    let mut prover = Prover::new(&corpus.library);
     let mut stragglers = Vec::new();
-    for (idx, identity) in corpus.library.identities.iter_enumerated() {
+    for idx in order {
+        let name = corpus.library.identities[idx].name.clone();
         let goal = Goal::of_identity(&mut corpus.terms, &corpus.library, idx).unwrap();
+        let lhs = goal.lhs.clone();
         match prover
             .prove(&mut corpus.terms, goal, corpus.proofs.get(&idx))
             .unwrap()
         {
-            Outcome::Closed(_) => {}
-            Outcome::Stuck(_) => stragglers.push(identity.name.clone()),
+            Outcome::Closed(proof) => {
+                prover.learn(idx, lhs, &proof);
+            }
+            Outcome::Stuck(_) => stragglers.push(name),
         }
     }
+    stragglers.sort();
     assert_eq!(
         stragglers, expected_stragglers,
         "the set of unproved identities moved; if one now closes, take it off the list"

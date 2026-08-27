@@ -633,3 +633,32 @@ test sentence what_follows_a_branch_agrees_either_way {
 identity what_follows_a_branch_runs_inside_it
     { branch { not } { as_bool } negate }
   = { branch { not negate } { as_bool negate } };
+
+// A lemma, and the claim that spends it.
+// ---------------------------------------------------------------------------
+//
+// Everything above is proved on its own. These two are the other thing a proof
+// language has to be able to do: prove something once, and then *use* it.
+//
+// `not ; not` = `branch { push true } { push false }` — a double negative is
+// the branch it makes. Two rows spell it: `not-not` says the pair is
+// `as_bool`, and `as-bool-branch` says `as_bool` is that branch. The proof
+// drives the left onto the right and touches the right not at all, which is
+// what makes it a lemma another proof can carry: what it records is a run of
+// rewrites taking one side to the other, and a run is a thing you can take
+// somewhere else.
+identity a_double_negative_is_the_branch_it_makes
+    { not not }
+  = { branch { push true } { push false } };
+
+// The same pair, with a third `not` reading its answer.
+//
+// The claim above sits inside this one — twice over, since either adjacent
+// pair is a double negative — and nothing in the table names it: it is a
+// user's claim, not a row. `by` is what spends it, and what lands is not an
+// axiom but the lemma's own two rewrites, said again in this goal's
+// coordinates. The proof that comes back holds those steps and no others, so
+// the checker re-applies them knowing nothing about lemmas at all.
+identity three_negatives_are_a_branch_and_a_negative
+    { not not not }
+  = { branch { push true } { push false } not };
