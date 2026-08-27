@@ -42,18 +42,40 @@ use crate::diagram2::rules::{self, Derivation, Law};
 use crate::diagram2::tactic::{Region, Tactic};
 use crate::diagram2::{self, read_back, tactic};
 use crate::goal::{Goal, Outcome, Proof, Residual, against};
-use crate::graph::{self, BranchId, Graph, NodeId, Source};
+use crate::graph::{self, BranchId, Direction, Graph, Match, NodeId, Pair, Source};
 use crate::hant::{Body, OnSide, Step, Strategy, default_strategy};
 use crate::term::{Context, Error, Prim, Term, TermIndex};
 
 /// One side of a goal, picked out for a mutation that borrows it alone.
 type Pick = fn(&mut Goal) -> &mut Graph;
 
-/// An identity already proved, in the form another proof can spend it: the
-/// left side as it was built, and the run that took it to the right.
+/// A claim that has closed, in the two forms a `by` might spend it: the
+/// pair a citation applies, and the run that would discharge that citation.
 struct Lemma {
-    lhs: Graph,
-    run: Vec<diagram2::rules::Step>,
+    pair: Pair,
+    run: Result<Vec<diagram2::rules::Step>, String>,
+}
+
+/// How a `by` spends the claim it names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Citing {
+    /// **One rewrite by the claim itself**, recorded as a
+    /// [`Cited`](Proof::Cited) node. The claim is taken on the corpus's
+    /// word — it closed, in this same run, before this proof began — and
+    /// what the checker re-derives is the claim's two sides, not the
+    /// argument behind them.
+    #[default]
+    OnTrust,
+    /// **The cited proof's own steps**, carried in and re-checked here —
+    /// [`transplant`](crate::diagram2::rules::transplant). What a citation
+    /// *means*, spent in full at every use rather than once at the claim.
+    ///
+    /// Slower by exactly the amount the default saves, and it is the
+    /// question the default is an answer to: a citation is only honest if it
+    /// could have been discharged, and this is what discharges it. It works
+    /// on a claim whose proof is [`one_sided`](Proof::one_sided) and says so
+    /// on one that is not.
+    Expanded,
 }
 
 /// Proves goals against one library.
@@ -71,12 +93,16 @@ struct Lemma {
 /// assuming it.
 pub struct Prover<'l> {
     pub library: &'l Library,
-    /// What each closed identity left behind: the run a `by` may spend, or
-    /// why its proof is not one. Keeping the refusal is the point — a claim
-    /// that closed and cannot be carried is a different report from one that
-    /// has not closed at all, and a proof that names it deserves to be told
-    /// which.
-    lemmas: HashMap<IdentityIndex, Result<Lemma, String>>,
+    /// The claims that have closed, as the [`Pair`] a `by` spends — the
+    /// identity's two sides, built and aligned exactly as its own goal was —
+    /// beside the run that would discharge a citation of it, or why there is
+    /// none.
+    ///
+    /// Only closed claims go in, which is the whole of what makes a citation
+    /// honest: a `by` can name nothing this prover has not already seen
+    /// discharged.
+    lemmas: HashMap<IdentityIndex, Lemma>,
+    citing: Citing,
 }
 
 impl<'l> Prover<'l> {
@@ -84,19 +110,37 @@ impl<'l> Prover<'l> {
         Prover {
             library,
             lemmas: HashMap::new(),
+            citing: Citing::default(),
         }
     }
 
-    /// Records a closed identity so later proofs may spend it with `by`.
+    /// The same prover, spending every `by` in full rather than on trust.
+    pub fn citing(self, citing: Citing) -> Self {
+        Prover { citing, ..self }
+    }
+
+    /// Records a closed identity so later proofs may cite it with `by`.
     ///
-    /// `lhs` is the goal's left side as it was *built* — a `by` looks for
-    /// that graph, so it has to be the same one the run was written against.
-    /// The run itself is [`Proof::one_sided`]'s answer, and where there is
-    /// none the reason is recorded in its place, to be handed to whatever
-    /// `by` goes looking.
-    pub fn learn(&mut self, idx: IdentityIndex, lhs: Graph, proof: &Proof) {
-        let learned = proof.one_sided().map(|run| Lemma { lhs, run });
-        self.lemmas.insert(idx, learned);
+    /// `goal` is the claim **as stated** — before its own strategy touched
+    /// it — because that is the claim, and a `by` looks for its left side.
+    /// Nothing about *how* it closed is kept: a citation spends the claim,
+    /// not the proof behind it, so a claim proved by `via`, by `inline`, or
+    /// by driving both sides together is as citable as one driven from the
+    /// left. That is the whole difference from carrying a proof, and the
+    /// reason a citation is worth having.
+    ///
+    /// The run behind it is kept too, but only so [`Citing::Expanded`] can
+    /// spend it; the default never reads it, and a claim whose proof is not
+    /// a run is as citable as one whose proof is.
+    ///
+    /// Only ever called on a claim that closed. That is not this method's
+    /// to enforce — [`Proof::cites`] is what lets a caller check it after
+    /// the fact — but it is what the promise rests on.
+    pub fn learn(&mut self, idx: IdentityIndex, goal: &Goal, proof: &Proof) {
+        let pair = Pair::new(goal.lhs.clone(), goal.rhs.clone())
+            .expect("a goal's sides are built, and aligned to one arity");
+        let run = proof.one_sided();
+        self.lemmas.insert(idx, Lemma { pair, run });
     }
 
     /// Runs a strategy on a goal — the written one, or the default
@@ -300,11 +344,21 @@ impl<'l> Prover<'l> {
                 })
             }
 
-            // Another identity, spent where it occurs. Not an axiom: what
-            // lands is that identity's own proof, carried through the
-            // embedding of its left side in this one — so the steps recorded
-            // here are ordinary rewrites in this goal's coordinates, and
-            // `Proof::check` re-applies them knowing nothing of lemmas.
+            // Another identity, cited where it occurs.
+            //
+            // One rewrite by the claim itself: its two sides are a `Pair`
+            // like any other, the match is held to `check_match` like any
+            // other, and what lands is a graph the checker can re-derive
+            // from the library alone. What is *not* asked here — or by
+            // `Proof::check` later — is whether the cited claim is true.
+            // That is the corpus's, and it has already answered: only a
+            // claim that closed is in this table at all, and the citation
+            // order is a DAG or the corpus refused to run.
+            //
+            // The alternative is to carry the cited proof's own steps in and
+            // re-check them at every use site, which is `transplant`. It
+            // stays available and stays the *meaning* of a citation; it is
+            // just not what every use pays for.
             Step::By { side, of } => {
                 let Body::Lemma(idx) = *of else {
                     return Ok(Outcome::Stuck(gave_up(
@@ -313,30 +367,38 @@ impl<'l> Prover<'l> {
                         "`by` was handed something that is not an identity",
                     )));
                 };
-                let name = self.library.identities[idx].name.as_str();
-                let lemma = match self.lemmas.get(&idx) {
-                    Some(Ok(lemma)) => lemma,
-                    Some(Err(why)) => {
-                        let why = format!(
-                            "`{}(by {})`: that identity closed, but its proof cannot be \
-                             carried anywhere — {}",
-                            side.word(),
-                            name,
-                            why
-                        );
-                        return Ok(Outcome::Stuck(gave_up(ctx, &goal, &why)));
-                    }
-                    None => {
-                        let why = format!(
-                            "`{}(by {})`: that identity is not proved, so there is nothing \
-                             to spend",
-                            side.word(),
-                            name
-                        );
-                        return Ok(Outcome::Stuck(gave_up(ctx, &goal, &why)));
-                    }
+                let name = self.library.identities[idx].name.clone();
+                let Some(lemma) = self.lemmas.get(&idx) else {
+                    let why = format!(
+                        "`{}(by {})`: that identity is not proved, so there is nothing to \
+                         cite",
+                        side.word(),
+                        name
+                    );
+                    return Ok(Outcome::Stuck(gave_up(ctx, &goal, &why)));
+                };
+                // Expanding costs the claim's own run at every use, and it
+                // needs one: a claim proved by meeting in the middle, or by a
+                // cut, is citable but not yet carryable. The default asks for
+                // neither.
+                let carried = match self.citing {
+                    Citing::OnTrust => None,
+                    Citing::Expanded => match &lemma.run {
+                        Ok(run) => Some(run),
+                        Err(why) => {
+                            let why = format!(
+                                "`{}(by {})`: asked to spend it in full, and its proof is \
+                                 not a run that can be carried — {}",
+                                side.word(),
+                                name,
+                                why
+                            );
+                            return Ok(Outcome::Stuck(gave_up(ctx, &goal, &why)));
+                        }
+                    },
                 };
                 let mut goal = goal;
+                let mut found: [Option<Match>; 2] = [None, None];
                 let mut spent: [Vec<diagram2::rules::Step>; 2] = [Vec::new(), Vec::new()];
                 let picks: &[(Pick, usize)] = match side {
                     OnSide::Lhs => &[(|g| &mut g.lhs, 0)],
@@ -349,7 +411,7 @@ impl<'l> Prover<'l> {
                     // choice a proof may need to make some day; today the
                     // sweep's own order is the answer, and it is the same
                     // order `fire` takes its proposal in.
-                    let Some(found) = graph::find(host, &lemma.lhs).into_iter().next() else {
+                    let Some(here) = graph::find(host, lemma.pair.lhs()).into_iter().next() else {
                         let why = format!(
                             "`{}(by {})`: that identity's left side does not occur here",
                             side.word(),
@@ -357,27 +419,49 @@ impl<'l> Prover<'l> {
                         );
                         return Ok(Outcome::Stuck(gave_up(ctx, &goal, &why)));
                     };
-                    match rules::transplant(host, &lemma.lhs, &found, &lemma.run) {
-                        Ok(run) => spent[at] = run.steps().cloned().collect(),
+                    let outcome = match carried {
+                        None => lemma
+                            .pair
+                            .apply(host, Direction::Forward, &here)
+                            .map(|_| Vec::new())
+                            .map_err(|e| e.to_string()),
+                        Some(run) => rules::transplant(host, lemma.pair.lhs(), &here, run)
+                            .map(|ran| ran.steps().cloned().collect())
+                            .map_err(|e| e.to_string()),
+                    };
+                    match outcome {
+                        Ok(steps) => spent[at] = steps,
                         Err(e) => {
                             let why = format!("`{}(by {})`: {}", side.word(), name, e);
                             return Ok(Outcome::Stuck(gave_up(ctx, &goal, &why)));
                         }
                     }
+                    found[at] = Some(here);
                 }
+                let expanded = carried.is_some();
+                let [lhs_at, rhs_at] = found;
                 let [lhs, rhs] = spent;
                 Ok(match self.run(ctx, rest, goal)? {
-                    Outcome::Closed(sub) => Outcome::Closed(Proof::Rewrote {
+                    // Expanded, the citation is gone: what is left is the
+                    // cited proof's own rewrites, which the checker takes for
+                    // what they are without knowing where they came from.
+                    Outcome::Closed(sub) if expanded => Outcome::Closed(Proof::Rewrote {
                         side: side.word(),
                         lhs,
                         rhs,
                         sub: Box::new(sub),
                     }),
+                    Outcome::Closed(sub) => Outcome::Closed(Proof::Cited {
+                        of: idx,
+                        name,
+                        lhs: lhs_at,
+                        rhs: rhs_at,
+                        sub: Box::new(sub),
+                    }),
                     Outcome::Stuck(mut residual) => {
-                        residual.path.insert(
-                            0,
-                            format!("after spending an identity on the {}", side.word()),
-                        );
+                        residual
+                            .path
+                            .insert(0, format!("after citing {} on the {}", name, side.word()));
                         Outcome::Stuck(residual)
                     }
                 })

@@ -40,31 +40,25 @@
 //! ends on a manipulation is allowed: it closes only if the goal has
 //! become one diagram, and says so otherwise.
 //!
-//! ## Spending one claim on another
+//! ## Citing one claim in another
 //!
-//! `lhs(by identities::a_lemma)` is how a proof uses a proof. It is not a
-//! law and not an axiom: the named identity has a proof of its own, and what
-//! lands here is *that proof's steps*, carried through the embedding of its
-//! left side in this goal —
-//! [`transplant`](crate::diagram2::rules::transplant). So the record a `by`
-//! leaves is a run of ordinary rewrites in this goal's coordinates, and the
-//! checker re-applies them knowing nothing about lemmas at all. Nothing new
-//! is trusted, which is the whole reason it is spelled this way rather than
-//! as another row of the table.
+//! `lhs(by identities::a_lemma)` is how a proof uses a proof. It is one
+//! rewrite by the claim named — its two sides are a [`Pair`](crate::graph::Pair) like the
+//! table's own rows, the match is held to
+//! [`check_match`](crate::graph::check_match) like any other, and what the
+//! checker re-derives is the claim's two graphs, from the library, by name.
 //!
-//! Two things it asks for. The named claim has to be **proved before this
-//! one**, which the corpus arranges — proofs are run in dependency order,
-//! and two claims that lean on each other are refused by name rather than
-//! ordered away. And its proof has to **drive one side onto the other**
-//! rather than take the two together: steps on one side and none on the
-//! other, all the way down. A `symm` costs nothing — it moves which side
-//! of the goal the claim's left is, so `symm rhs(…) rhs(…)` is the same run
-//! written from the other end — but a step spent on the side that is not
-//! being driven is a second run, and two runs meeting in the middle do not
-//! compose into one without inverting the second and rebasing it through
-//! the isomorphism they met at. Nothing does that yet, and
-//! [`Proof::one_sided`](crate::goal::Proof::one_sided) has the words for
-//! what it hit.
+//! What it does **not** check is whether that claim is true. It is a
+//! *citation*: the corpus proves every identity it states, the citation
+//! order is a DAG or the corpus refuses to run, and a claim that did not
+//! close is never citable at all — so the argument is made once, where the
+//! claim is, rather than again at every use.
+//!
+//! That is a real change in what a single proof means. A `Proof` holding a
+//! citation stands **given the corpus** rather than on its own, and
+//! [`Proof::cites`](crate::goal::Proof::cites) is how a caller reads off
+//! exactly which claims that is. It is the ordinary bargain of a proof
+//! library, and it is worth naming rather than assuming.
 //!
 //! ```text
 //! proof identities::a_double_negative_is_the_branch_it_makes =
@@ -74,10 +68,28 @@
 //!     lhs(by identities::a_double_negative_is_the_branch_it_makes);
 //! ```
 //!
-//! The first embedding is the one spent, in the sweep's own order — the same
-//! order `fire` takes its proposal in. Which one, where a lemma occurs more
-//! than once, is a choice a proof may need to make some day; there is no
-//! spelling for it yet.
+//! **Any closed claim may be cited** — however it closed. A lemma proved by
+//! a cut, by opening a call, or by driving both sides together is as
+//! citable as one driven from the left, because what is spent is the claim
+//! and not the argument.
+//!
+//! **And a citation can be cashed.** `prove --expand`
+//! ([`Citing::Expanded`](crate::strategy::Citing)) spends every `by` in
+//! full instead: the cited proof's own steps, carried into this goal
+//! through the embedding of its left side —
+//! [`transplant`](crate::diagram2::rules::transplant) — and re-checked here
+//! as ordinary rewrites, with no citation left in the record. That is what
+//! a citation *means*, and running it is what says the shorthand was
+//! honest. It asks more of the cited proof than citing does: it has to be a
+//! run from one side of its claim to the other, which
+//! [`one_sided`](crate::goal::Proof::one_sided) judges and says no to in
+//! its own words. The corpus is held to closing both ways.
+//!
+//! The one thing a citation still needs of the corpus is order: the claim
+//! has to be **proved before this one**, which the corpus arranges, and two
+//! claims that lean on each other are refused by name rather than ordered
+//! away. The first embedding is the one spent, in the sweep's own order —
+//! the same order `fire` takes its proposal in.
 //!
 //! ## The tactic language, embedded
 //!

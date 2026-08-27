@@ -18,7 +18,7 @@ use bytecode::{IdentityIndex, Library, SentenceIndex};
 
 use crate::diagram2;
 use crate::diagram2::rules::{Step, replay};
-use crate::graph::{self, Graph};
+use crate::graph::{self, Direction, Graph, Match, Pair};
 use crate::term::{Context, Error, TermIndex, lower};
 
 /// Two graphs of one arity, claimed to be the same program.
@@ -134,6 +134,43 @@ pub enum Proof {
         name: Option<String>,
         sub: Box<Proof>,
     },
+    /// A `by` **cited** another identity where its left side occurred, and
+    /// the goal that citation left closed.
+    ///
+    /// The one node whose claim this proof does not discharge. It records a
+    /// name and, per side, the [`Match`] saying where the cited claim's left
+    /// side sat — enough for [`check`](Proof::check) to rebuild that claim's
+    /// two graphs from the library, hold the match to
+    /// [`check_match`](crate::graph::check_match), and put the right side
+    /// down. What it does **not** do is ask whether the cited claim is true.
+    /// That is the corpus's job, and the corpus does it: every identity is
+    /// proved, the citation order is a DAG, and a claim that did not close
+    /// is never citable in the first place.
+    ///
+    /// So a `Proof` holding one of these stands **given the corpus** rather
+    /// than on its own, and [`cites`](Proof::cites) is how a caller reads
+    /// off exactly what that means for this one. The alternative — carrying
+    /// the cited proof's steps at every use site and re-checking them there
+    /// — is [`one_sided`](Proof::one_sided) and
+    /// [`transplant`](crate::diagram2::rules::transplant), which is what
+    /// discharges a citation when something asks.
+    ///
+    /// The pair is rebuilt from the name rather than recorded beside it, on
+    /// purpose: a claim's sides are the library's to say, and a proof that
+    /// carried its own copy could carry a copy of something else. The
+    /// checker holds the library already — [`Proof::Inlined`] needs it too —
+    /// so there is nothing to gain by writing them down twice.
+    Cited {
+        of: IdentityIndex,
+        /// The name as written, for the report; the index is what is read.
+        name: String,
+        /// Where the cited claim's left side sat on the goal's left, if it
+        /// was spent there.
+        lhs: Option<Match>,
+        /// The same on the right.
+        rhs: Option<Match>,
+        sub: Box<Proof>,
+    },
     /// A `symm` swapped the sides, and the swapped goal closed. It records
     /// nothing but itself: the claim either way is the same one.
     Swapped(Box<Proof>),
@@ -208,6 +245,33 @@ impl Proof {
                     .map_err(|e| format!("the recorded inline does not re-open: {}", e))?;
                 diagram2::inline(&mut goal.rhs, ctx, library, *target)
                     .map_err(|e| format!("the recorded inline does not re-open: {}", e))?;
+                sub.check(goal, ctx, library)
+            }
+            Proof::Cited {
+                of,
+                name,
+                lhs,
+                rhs,
+                sub,
+            } => {
+                // Rebuilt, not read off the proof: what a name means is the
+                // library's to say.
+                let cited = Goal::of_identity(ctx, library, *of)
+                    .map_err(|e| format!("the cited identity {} does not build: {}", name, e))?;
+                let pair = Pair::new(cited.lhs, cited.rhs)
+                    .map_err(|e| format!("the cited identity {} is no pair: {}", name, e))?;
+                for (at, side) in [(lhs, true), (rhs, false)] {
+                    let Some(at) = at else { continue };
+                    let host = if side { &mut goal.lhs } else { &mut goal.rhs };
+                    pair.apply(host, Direction::Forward, at).map_err(|e| {
+                        format!(
+                            "the recorded citation of {} does not apply to the {}: {}",
+                            name,
+                            if side { "left" } else { "right" },
+                            e
+                        )
+                    })?;
+                }
                 sub.check(goal, ctx, library)
             }
             Proof::Swapped(sub) => {
@@ -301,6 +365,11 @@ impl Proof {
             // The claim is the same claim either way round; what moved is
             // which side of the goal it is written on.
             Proof::Swapped(sub) => sub.run_on(side.flipped()),
+            Proof::Cited { name, .. } => Err(format!(
+                "it cites {}, and a citation is one rewrite by that claim rather than the \
+                 steps behind it: expand it first, or carry it as the citation it is",
+                name
+            )),
             Proof::Inlined { .. } => Err(
                 "it opens calls across the whole graph rather than inside a window, and \
                  records the sentence rather than the steps, so there is nothing localized \
@@ -312,6 +381,37 @@ impl Proof {
                  halves do not meet on the nose"
                     .to_string(),
             ),
+        }
+    }
+
+    /// Every identity this proof **leans on** rather than discharges.
+    ///
+    /// A [`Cited`](Proof::Cited) node is checked against the claim it names
+    /// without asking whether that claim holds, so a proof holding one is
+    /// conditional. This is the condition, read off the tree — what a corpus
+    /// needs in order to say that a run of proofs adds up to more than each
+    /// of them separately.
+    pub fn cites(&self, out: &mut Vec<IdentityIndex>) {
+        match self {
+            Proof::Trivial | Proof::Diagram { .. } => {}
+            Proof::Cited { of, sub, .. } => {
+                if !out.contains(of) {
+                    out.push(*of);
+                }
+                sub.cites(out);
+            }
+            Proof::Rewrote { sub, .. } | Proof::Cases { sub, .. } | Proof::Inlined { sub, .. } => {
+                sub.cites(out)
+            }
+            Proof::Swapped(sub) => sub.cites(out),
+            Proof::Cut {
+                left_sub,
+                right_sub,
+                ..
+            } => {
+                left_sub.cites(out);
+                right_sub.cites(out);
+            }
         }
     }
 
@@ -334,6 +434,7 @@ impl Proof {
                 None => format!("inline; {}", sub.summary()),
                 Some(name) => format!("inline {}; {}", name, sub.summary()),
             },
+            Proof::Cited { name, sub, .. } => format!("by {}; {}", name, sub.summary()),
             Proof::Swapped(sub) => format!("symm; {}", sub.summary()),
             Proof::Cut {
                 left_sub,
@@ -467,6 +568,48 @@ mod tests {
                 .one_sided()
                 .unwrap_err()
                 .contains("nothing localized to carry")
+        );
+    }
+
+    /// A citation is the one thing a proof leans on rather than discharges,
+    /// so it is the one thing a caller has to be able to read off the tree.
+    #[test]
+    fn what_a_proof_leans_on_is_readable_from_it() {
+        let cite = |of: usize, sub| Proof::Cited {
+            of: IdentityIndex::from(of),
+            name: format!("#{}", of),
+            lhs: None,
+            rhs: None,
+            sub: Box::new(sub),
+        };
+        let mut leans_on = Vec::new();
+        Proof::Trivial.cites(&mut leans_on);
+        assert!(
+            leans_on.is_empty(),
+            "a proof that cites nothing leans on nothing"
+        );
+
+        // Nested, through the shapes that carry sub-proofs, and each named
+        // once however often it is spent.
+        let proof = Proof::Swapped(Box::new(Proof::Cut {
+            waypoint: crate::term::TermIndex::from(0),
+            left_sub: Box::new(cite(1, cite(2, Proof::Trivial))),
+            right_sub: Box::new(cite(1, Proof::Trivial)),
+        }));
+        let mut leans_on = Vec::new();
+        proof.cites(&mut leans_on);
+        assert_eq!(
+            leans_on,
+            vec![IdentityIndex::from(1), IdentityIndex::from(2)]
+        );
+
+        // And a citation is not a run: spending one is a rewrite by the
+        // claim, not the argument behind it.
+        assert!(
+            cite(1, Proof::Trivial)
+                .one_sided()
+                .unwrap_err()
+                .contains("citation is one rewrite by that claim")
         );
     }
 
