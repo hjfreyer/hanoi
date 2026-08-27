@@ -177,6 +177,12 @@ Use the helper shell scripts at the project root to execute test suites:
 
 ---
 
+## Editor Support
+
+- [vscode](vscode): A VS Code extension with syntax highlighting and comment support for `.hana` and `.hant` files. It is plain JSON — symlink the directory into `~/.vscode/extensions/` to use it.
+
+---
+
 ## Documentation
 
 - [docs/hana.md](docs/hana.md): Detailed guide for Hanoi Assembly syntax, stack behavior, contract annotations, and key gotchas.

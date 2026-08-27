@@ -1,0 +1,79 @@
+{
+  "Sentence": {
+    "prefix": "sentence",
+    "body": [
+      "#[arity(${1:0}, ${2:1})]",
+      "sentence ${3:name} {",
+      "\t$0",
+      "}"
+    ],
+    "description": "A sentence with an arity annotation"
+  },
+  "Function": {
+    "prefix": "function",
+    "body": [
+      "function ${1:name} {",
+      "\t$0",
+      "}"
+    ],
+    "description": "A function (implicitly #[arity(1, 1)])"
+  },
+  "Test sentence": {
+    "prefix": "test",
+    "body": [
+      "test sentence ${1:name} {",
+      "\t$0",
+      "\tjump crate::prelude::check_equals",
+      "}"
+    ],
+    "description": "A test sentence answering a result"
+  },
+  "Branch": {
+    "prefix": "branch",
+    "body": [
+      "branch {",
+      "\t$1",
+      "} {",
+      "\t$2",
+      "}"
+    ],
+    "description": "Conditional execution on the top of the stack"
+  },
+  "Dip": {
+    "prefix": "dip",
+    "body": [
+      "dip ${1:1} {",
+      "\t$0",
+      "}"
+    ],
+    "description": "Run a block with the top N values hidden"
+  },
+  "Module": {
+    "prefix": "mod",
+    "body": [
+      "mod ${1:name} {",
+      "\t$0",
+      "}"
+    ],
+    "description": "A module declaration"
+  },
+  "Enum": {
+    "prefix": "enum",
+    "body": [
+      "enum ${1:Name} {",
+      "\t${2:Variant}(${3:spec}),",
+      "}"
+    ],
+    "description": "An enum predicate declaration"
+  },
+  "Type": {
+    "prefix": "type",
+    "body": "type ${1:Name} ${2:spec};",
+    "description": "A value predicate declaration"
+  },
+  "Identity": {
+    "prefix": "identity",
+    "body": "identity ${1:name} { $2 } = { $3 };",
+    "description": "A stated identity between two programs"
+  }
+}

@@ -1,0 +1,414 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Hanoi Assembly",
+  "scopeName": "source.hana",
+  "patterns": [
+    {
+      "include": "#comment"
+    },
+    {
+      "include": "#annotation"
+    },
+    {
+      "include": "#type-declaration"
+    },
+    {
+      "include": "#enum-declaration"
+    },
+    {
+      "include": "#declaration"
+    },
+    {
+      "include": "#module-declaration"
+    },
+    {
+      "include": "#identity-declaration"
+    },
+    {
+      "include": "#composer"
+    },
+    {
+      "include": "#keyword"
+    },
+    {
+      "include": "#instruction"
+    },
+    {
+      "include": "#string"
+    },
+    {
+      "include": "#constant"
+    },
+    {
+      "include": "#number"
+    },
+    {
+      "include": "#path"
+    },
+    {
+      "include": "#operator"
+    },
+    {
+      "include": "#punctuation"
+    }
+  ],
+  "repository": {
+    "comment": {
+      "name": "comment.line.double-slash.hana",
+      "begin": "//",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.definition.comment.hana"
+        }
+      },
+      "end": "$"
+    },
+    "annotation": {
+      "name": "meta.annotation.hana",
+      "begin": "(#)(\\[)",
+      "beginCaptures": {
+        "1": {
+          "name": "punctuation.definition.annotation.hana"
+        },
+        "2": {
+          "name": "punctuation.definition.annotation.begin.hana"
+        }
+      },
+      "end": "\\]",
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.definition.annotation.end.hana"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#comment"
+        },
+        {
+          "match": "\\b(arity|precondition|postcondition)\\b",
+          "name": "entity.name.function.annotation.hana"
+        },
+        {
+          "include": "#number"
+        },
+        {
+          "include": "#path"
+        },
+        {
+          "include": "#punctuation"
+        }
+      ]
+    },
+    "type-declaration": {
+      "name": "meta.type.hana",
+      "begin": "\\b(type)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+      "beginCaptures": {
+        "1": {
+          "name": "keyword.declaration.type.hana"
+        },
+        "2": {
+          "name": "entity.name.type.hana"
+        }
+      },
+      "end": ";",
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.terminator.hana"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#type-spec"
+        }
+      ]
+    },
+    "enum-declaration": {
+      "name": "meta.enum.hana",
+      "begin": "\\b(enum)\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*(\\{)",
+      "beginCaptures": {
+        "1": {
+          "name": "keyword.declaration.enum.hana"
+        },
+        "2": {
+          "name": "entity.name.type.hana"
+        },
+        "3": {
+          "name": "punctuation.section.block.begin.hana"
+        }
+      },
+      "end": "\\}",
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.section.block.end.hana"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#comment"
+        },
+        {
+          "match": "\\b([A-Za-z_][A-Za-z0-9_]*)\\s*(?=\\()",
+          "name": "entity.name.function.enum-variant.hana"
+        },
+        {
+          "include": "#type-spec"
+        }
+      ]
+    },
+    "type-spec": {
+      "patterns": [
+        {
+          "include": "#comment"
+        },
+        {
+          "match": "\\b(const_string|symbol|tuple|bool|int)\\b",
+          "name": "support.type.primitive.hana"
+        },
+        {
+          "include": "#string"
+        },
+        {
+          "include": "#constant"
+        },
+        {
+          "include": "#number"
+        },
+        {
+          "include": "#path"
+        },
+        {
+          "match": "\\|",
+          "name": "keyword.operator.union.hana"
+        },
+        {
+          "include": "#punctuation"
+        }
+      ]
+    },
+    "declaration": {
+      "patterns": [
+        {
+          "match": "\\b(sentence|function)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": {
+              "name": "keyword.declaration.function.hana"
+            },
+            "2": {
+              "name": "entity.name.function.hana"
+            }
+          }
+        },
+        {
+          "match": "\\b(symbol)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": {
+              "name": "keyword.declaration.symbol.hana"
+            },
+            "2": {
+              "name": "entity.name.constant.symbol.hana"
+            }
+          }
+        },
+        {
+          "match": "\\b(const_string)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": {
+              "name": "keyword.declaration.const-string.hana"
+            },
+            "2": {
+              "name": "entity.name.constant.string.hana"
+            }
+          }
+        }
+      ]
+    },
+    "module-declaration": {
+      "match": "\\b(mod)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+      "captures": {
+        "1": {
+          "name": "keyword.declaration.module.hana"
+        },
+        "2": {
+          "name": "entity.name.namespace.hana"
+        }
+      }
+    },
+    "identity-declaration": {
+      "match": "\\b(identity)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+      "captures": {
+        "1": {
+          "name": "keyword.declaration.identity.hana"
+        },
+        "2": {
+          "name": "entity.name.function.identity.hana"
+        }
+      }
+    },
+    "composer": {
+      "match": "\\b(compose_static_closure|compose_rename_prefix|compose_accept_static|compose_emit_static|compose_concurrent|compose_hidden|compose_prefix|compose_accept|compose_done|compose_emit)\\b",
+      "name": "support.function.composer.hana"
+    },
+    "keyword": {
+      "patterns": [
+        {
+          "match": "\\b(export|test)\\b",
+          "name": "storage.modifier.hana"
+        },
+        {
+          "match": "\\b(jump)\\s+([A-Za-z_][A-Za-z0-9_]*)\\b(?!\\s*::)",
+          "captures": {
+            "1": {
+              "name": "keyword.control.hana"
+            },
+            "2": {
+              "name": "entity.name.function.hana"
+            }
+          }
+        },
+        {
+          "match": "\\b(push)\\s+(?!true\\b|false\\b)([a-z_][A-Za-z0-9_]*)\\b(?!\\s*::)",
+          "captures": {
+            "1": {
+              "name": "keyword.operator.word.instruction.hana"
+            },
+            "2": {
+              "name": "variable.other.constant.hana"
+            }
+          }
+        },
+        {
+          "match": "\\b(branch|jump|dip)\\b",
+          "name": "keyword.control.hana"
+        },
+        {
+          "match": "\\b(sentence|function|symbol|const_string|type|enum|identity)\\b",
+          "name": "keyword.declaration.hana"
+        }
+      ]
+    },
+    "instruction": {
+      "match": "\\b(const_string_char_at|const_string_len|is_const_string|tuple_length|is_symbol|subtract|multiply|is_tuple|as_tuple|greater|untuple|is_bool|as_bool|divide|modulo|negate|is_int|as_int|equal|tuple|push|drop|pick|roll|copy|swap|less|add|sub|mul|div|mod|not|and|neg|or)\\b",
+      "name": "keyword.operator.word.instruction.hana"
+    },
+    "string": {
+      "name": "string.quoted.double.hana",
+      "begin": "\"",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.definition.string.begin.hana"
+        }
+      },
+      "end": "\"",
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.definition.string.end.hana"
+        }
+      }
+    },
+    "constant": {
+      "match": "\\b(true|false)\\b",
+      "name": "constant.language.boolean.hana"
+    },
+    "number": {
+      "match": "(?<![A-Za-z0-9_])-?\\d+\\b",
+      "name": "constant.numeric.integer.hana"
+    },
+    "path": {
+      "patterns": [
+        {
+          "match": "\\b(crate|super)\\b(?=\\s*::)",
+          "name": "keyword.other.path-root.hana"
+        },
+        {
+          "match": "\\b([A-Za-z_][A-Za-z0-9_]*)\\b(?=\\s*::)",
+          "name": "entity.name.namespace.hana"
+        },
+        {
+          "match": "(::)\\s*([A-Za-z_][A-Za-z0-9_]*)\\b(?=\\s*::)",
+          "captures": {
+            "1": {
+              "name": "punctuation.separator.path.hana"
+            },
+            "2": {
+              "name": "entity.name.namespace.hana"
+            }
+          }
+        },
+        {
+          "match": "(::)\\s*([A-Z][A-Za-z0-9_]*)\\b",
+          "captures": {
+            "1": {
+              "name": "punctuation.separator.path.hana"
+            },
+            "2": {
+              "name": "entity.name.type.hana"
+            }
+          }
+        },
+        {
+          "match": "(::)\\s*([A-Za-z_][A-Za-z0-9_]*)\\b",
+          "captures": {
+            "1": {
+              "name": "punctuation.separator.path.hana"
+            },
+            "2": {
+              "name": "entity.name.function.hana"
+            }
+          }
+        },
+        {
+          "match": "\\b[A-Z][A-Za-z0-9_]*\\b",
+          "name": "entity.name.type.hana"
+        }
+      ]
+    },
+    "operator": {
+      "patterns": [
+        {
+          "match": "\\?",
+          "name": "keyword.control.result.hana"
+        },
+        {
+          "match": "=",
+          "name": "keyword.operator.assignment.hana"
+        },
+        {
+          "match": "\\|",
+          "name": "keyword.operator.union.hana"
+        },
+        {
+          "match": "::",
+          "name": "punctuation.separator.path.hana"
+        }
+      ]
+    },
+    "punctuation": {
+      "patterns": [
+        {
+          "match": "[{}]",
+          "name": "punctuation.section.block.hana"
+        },
+        {
+          "match": "[()]",
+          "name": "punctuation.section.parens.hana"
+        },
+        {
+          "match": "[\\[\\]]",
+          "name": "punctuation.section.brackets.hana"
+        },
+        {
+          "match": ",",
+          "name": "punctuation.separator.comma.hana"
+        },
+        {
+          "match": ";",
+          "name": "punctuation.terminator.hana"
+        },
+        {
+          "match": ":",
+          "name": "punctuation.separator.colon.hana"
+        }
+      ]
+    }
+  }
+}
