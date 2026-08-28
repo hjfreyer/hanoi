@@ -21,7 +21,7 @@ Hanoi is a stack-oriented, VM-executed language designed to explore static analy
 - **Static Arity Verification**: An arity checker runs before execution to ensure that stack push/pop operations match function signatures, avoiding runtime stack underflows.
 - **No Recursion**: A sentence may not reach itself, by any route, and the compiler refuses one that does. Arity inference is what enforces it — a cycle is where inference cannot terminate — so every sentence has an inferred arity and a finite expansion, and a loop is written as the steps it takes. See [the reference](docs/hana.md#recursion-is-forbidden).
 - **Namespacing & Modularity**: Hierarchical module declarations (`mod name { ... }` or `mod name;`) with file-import support, relative/absolute path routing, and name visibility exports.
-- **Stated & Proved Identities**: `identity A = B;` states that two programs are interchangeable, and `bin/prove` discharges the claim by equality saturation over an algebraic term model — both sides of a goal go into one e-graph and the equations fire until they meet. A goal that sticks prints a **residual**: the smallest spelling each side reached, which is what says what to try next. See [docs/proving.md](docs/proving.md) and [docs/algebra.md](docs/algebra.md).
+- **Stated & Proved Identities**: `identity A = B;` states that two programs are interchangeable, and `bin/prove` discharges the claim by checked rewriting: both sides build into program graphs, a law table fires on each until they land on one diagram, and every step is verified before it lands. A goal that sticks prints a **residual**: both sides as they stand, which is what says what to try next. See [docs/proving.md](docs/proving.md) and [docs/rules.md](docs/rules.md).
 
 ---
 
@@ -109,9 +109,9 @@ cd lang
 cargo run --bin prove -- ../hana
 ```
 
-Every identity in `hana/identities.hana` closes on the rule set alone; the
-pipeline, the equations, and the `.hant` stepping-stone file for goals that
-need a bridge are described in [docs/proving.md](docs/proving.md).
+Most identities close with no direction at all; the pipeline, the law
+table, and the `.hant` proof files for goals that need a human's direction
+are described in [docs/proving.md](docs/proving.md).
 
 ---
 
@@ -140,9 +140,9 @@ The language lives in `lang/`, a cargo workspace of several key packages, and th
   - [lang/vm/src/lib.rs](lang/vm/src/lib.rs): Core interpreter, instruction dispatch loop, and stack representation.
   - [lang/vm/src/runtime.rs](lang/vm/src/runtime.rs): Asynchronous CSP coordinator that drives state machine step cycles.
 - **[lang/rewrite](lang/rewrite)**: The prover.
-  - [lang/rewrite/src/term.rs](lang/rewrite/src/term.rs): The algebraic term model — programs as two arity-exact operators (`;` and `*`) over a handful of leaves, built in a `Context` arena and referred to by `TermIndex`.
-  - [lang/rewrite/src/diagram.rs](lang/rewrite/src/diagram.rs): The string-diagram engine — programs as wiring in an interned arena, canonicalized into ordered, shared case trees; the decision procedure `bin/prove` closes goals with.
-  - [lang/rewrite/src/hant.rs](lang/rewrite/src/hant.rs): The strategy language proofs are written in (`peel`, `descend`, `inline`, `via`, `diagram`); [strategy.rs](lang/rewrite/src/strategy.rs) interprets one per identity behind `bin/prove`.
+  - [lang/rewrite/src/term.rs](lang/rewrite/src/term.rs): The term model — programs as two arity-exact operators (`;` and `*`) over a handful of leaves; the language goals are lowered from and residuals are read back into.
+  - [lang/rewrite/src/diagram2](lang/rewrite/src/diagram2): The graph engine — programs as literal graphs of boxes and wires, the law table (`rules.rs`), and the tactic language that drives it (`tactic.rs`).
+  - [lang/rewrite/src/hant.rs](lang/rewrite/src/hant.rs): The strategy language proofs are written in (`inline`, `cases`, `via`, `diagram`, `by`); [strategy.rs](lang/rewrite/src/strategy.rs) interprets one per identity behind `bin/prove`.
 - **[lang/test-runner](lang/test-runner)**: CLI harness that compiles and runs integration test suites.
 - **[hana](hana)**: The `.hana`/`.hant` corpus — test cases covering all VM features, string/data parsers, queues, and multi-agent CSP networks, and the identities `bin/prove` discharges.
 
@@ -191,6 +191,7 @@ Use the helper shell scripts at the project root to execute test suites:
 - [docs/machines.md](docs/machines.md): Specification of Hanoi's Communicating Sequential Processes (CSP) state machine semantics.
 - [docs/compilation.md](docs/compilation.md): The compilation pipeline — the sugar and core ASTs, and what each phase from tokens to bytecode may assume.
 - [docs/totality.md](docs/totality.md): Why every instruction answers on every input, and what that buys.
-- [docs/proving.md](docs/proving.md): How `bin/prove` discharges identities — the goal pipeline, the e-graph, and the `.hant` stepping-stone files.
-- [docs/algebra.md](docs/algebra.md): The equational theory itself — every structural law with its side conditions, and the map to the category-theory literature it comes from.
-- [docs/hypotheses.md](docs/hypotheses.md): A design note on hypothesis-style proof authorship — assume a condition, prove each case — and why it compiles to the linear derivations the checker already replays.
+- [docs/proving.md](docs/proving.md): The guide to `bin/prove` — how identities are discharged, the strategy language `.hant` proofs are written in, and how to read a stuck goal's residual.
+- [docs/rules.md](docs/rules.md): The reference for the law table — what each rewrite rule says, which driver list carries it, and how a proof names it.
+- [docs/tactics.md](docs/tactics.md): The reference for the tactic language — the rewrite steps a proof drives one side of a goal with, and the query/combinator model underneath.
+- [docs/invariants.md](docs/invariants.md): The prover's invariants — the trust boundary, what licenses the laws, and the properties any refactor must keep.

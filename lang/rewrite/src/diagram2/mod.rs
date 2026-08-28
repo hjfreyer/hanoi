@@ -1,19 +1,13 @@
 //! The literal diagram: a term as a graph of boxes, rewritten until the
 //! connections are direct.
 //!
-//! [`crate::diagram`] is called a string-diagram engine, but it never builds
-//! a diagram. Its `normalize` *evaluates* a term on a stack of symbolic
-//! wires and lands in the answer — an interned value-DAG under an ordered
-//! case tree — so the structural layer of
-//! [docs/algebra.md](../../../../docs/algebra.md) is "representation" in the
-//! strongest sense: it is never data at all. That is exactly why the whole
-//! layer is free there, and exactly why there is nothing to point at, and
-//! nothing for a rewrite to act on.
-//!
-//! This module takes the other road. A term becomes a graph **one leaf at a
-//! time**, `id`, `swap`, `copy` and `drop` each getting a box of their own,
-//! and only then does anything get simplified — by rewriting, against the
-//! table in [`rules`].
+//! A term becomes a graph **one leaf at a time**, `id`, `swap`, `copy` and
+//! `drop` each getting a box of their own, and only then does anything get
+//! simplified — by rewriting, against the table in [`rules`]. Nothing is
+//! simplified by representation beyond what the wiring cannot say
+//! ([docs/rules.md](../../../../docs/rules.md) opens with that list): the
+//! point of the literal reading is that every other identification is a
+//! *step*, named, checked, and on the record.
 //!
 //! The graph itself is [`crate::graph`] — boxes, the links between them,
 //! well-formedness, and whether two of them are the same diagram. What is
