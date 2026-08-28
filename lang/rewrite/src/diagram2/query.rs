@@ -65,7 +65,6 @@ pub enum KindPat {
     AnyPush,
     Push(Value),
     Call(Option<SentenceIndex>),
-    Fork,
     Select,
 }
 
@@ -83,7 +82,6 @@ impl KindPat {
             (KindPat::Call(want), NodeKind::Call { target, .. }) => {
                 want.as_ref().is_none_or(|w| w == target)
             }
-            (KindPat::Fork, NodeKind::Fork { .. }) => true,
             (KindPat::Select, NodeKind::Select { .. }) => true,
             _ => false,
         }
@@ -141,9 +139,6 @@ pub enum Atom {
     Exported { node: Var, port: Option<usize> },
     /// Output `port` of `node` has no readers at all.
     Unread { node: Var, port: usize },
-    /// The two ends of one branch: a fork and a select holding the same
-    /// [`BranchId`](crate::graph::BranchId).
-    Paired { fork: Var, select: Var },
     /// Two distinct nodes. Distinctness is otherwise **not** imposed: two
     /// variables may bind one box, and a query that means two boxes says
     /// so.
@@ -162,10 +157,6 @@ impl Atom {
             Atom::ReadsInput { node, .. }
             | Atom::Exported { node, .. }
             | Atom::Unread { node, .. } => note(node),
-            Atom::Paired { fork, select } => {
-                note(fork);
-                note(select);
-            }
             Atom::Ne(a, b) => {
                 note(a);
                 note(b);
@@ -249,14 +240,6 @@ impl Query {
         self.atoms.push(Atom::Unread {
             node: Var(node),
             port,
-        });
-        self
-    }
-
-    pub fn paired(mut self, fork: &'static str, select: &'static str) -> Query {
-        self.atoms.push(Atom::Paired {
-            fork: Var(fork),
-            select: Var(select),
         });
         self
     }
@@ -440,14 +423,6 @@ impl Eval<'_> {
                 let n = of(node)?;
                 g.sinks(Source::Port { node: n, port }).is_empty()
             }
-            Atom::Paired { fork, select } => {
-                let (f, s) = (of(fork)?, of(select)?);
-                matches!(
-                    (g.kind(f), g.kind(s)),
-                    (NodeKind::Fork { branch: a, .. }, NodeKind::Select { branch: b, .. })
-                        if a == b
-                )
-            }
             Atom::Ne(a, b) => of(a)? != of(b)?,
         })
     }
@@ -511,25 +486,23 @@ mod tests {
     #[test]
     fn relations_read_what_the_graph_records() {
         let graph = built("branch { add } { add }");
-        // The two ends of the one branch.
+        // One select, the whole of the branch.
         let ends = eval(
             &graph,
-            &Query::new()
-                .is("f", NodePred::Kind(KindPat::Fork))
-                .is("s", NodePred::Kind(KindPat::Select))
-                .paired("f", "s"),
+            &Query::new().is("s", NodePred::Kind(KindPat::Select)),
         );
-        assert_eq!(ends.len(), 1, "one branch, one pairing:\n{}", graph);
-        // Two adds, distinct, both reading the fork.
+        assert_eq!(ends.len(), 1, "one branch, one select:\n{}", graph);
+        // Two adds, distinct, both reading the copy that hands out the
+        // stack.
         let adds = eval(
             &graph,
             &Query::new()
                 .is("a", NodePred::Kind(KindPat::Op(Some(Prim::Add))))
                 .is("b", NodePred::Kind(KindPat::Op(Some(Prim::Add))))
                 .ne("a", "b")
-                .feeds("f", None, "a", None)
-                .feeds("f", None, "b", None)
-                .is("f", NodePred::Kind(KindPat::Fork)),
+                .feeds("c", None, "a", None)
+                .feeds("c", None, "b", None)
+                .is("c", NodePred::Kind(KindPat::Copy(None))),
         );
         assert_eq!(adds.len(), 2, "two adds, two orders:\n{}", graph);
     }

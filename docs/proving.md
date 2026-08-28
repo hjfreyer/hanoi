@@ -50,8 +50,8 @@ Four layers, in `lang/rewrite/src/`:
 | graphs | `graph.rs` | boxes and the links between them, well-formedness, the isomorphism that says two graphs are one diagram, and the rewrite itself — a `Pair` of graphs spliced in at a checked `Match` |
 
 A program in the engine is a **literal** graph: one box per term leaf —
-`id`, `swap`, `copy` and `drop` included — and a branch as a
-`fork`/`select` pair with its arms flattened between them. Nothing is
+`id`, `swap`, `copy` and `drop` included — and a branch as a `select`
+with its arms flattened in front of it. Nothing is
 simplified by representation beyond what the wiring cannot say
 ([docs/rules.md](rules.md) opens with that list); everything else is
 simplified by *rewriting*, against the table.
@@ -134,12 +134,12 @@ structural laws to fixpoint), `saturate(law, …)`, `branches` (the branch
 layer with its cleanup), `decide` (the whole table — what `diagram`
 drives), `fire(law, …)` (one directed firing), `at(#box, law)` (one
 firing at a **named box**), `repeat(…)` and `try(…)`. Laws are named as
-[docs/rules.md](rules.md) names them — `copy-elim`, `select-view`,
+[docs/rules.md](rules.md) names them — `copy-elim`, `select-same`,
 `dead-node` — and `structural` and `branching` name the two lists.
 
 `at` is the step that answers a report in the report's own words. `fire`
 takes the first match it is offered anywhere on the side; when that is
-the wrong one, `at(#41, fork-hoist)` names the box the residual listing
+the wrong one, `at(#41, dedup)` names the box the residual listing
 printed beside the line, and fires the law in a match that holds *that*
 box — anywhere in the match, not only where the law's pattern happens to
 anchor. A third field is the direction, `forward` when left out:
@@ -206,7 +206,7 @@ assumed answer pasted in as a literal — the `shannon` row of the table
 that computes `op`, at the earliest such wire, and that firing is an
 ordinary checked rewrite. The power is in what the rest of the table does
 *afterwards*, inside the copies, where the assumption is now a literal: a
-branch on it resolves (`select-const`), a test against it computes
+branch on it resolves (`select-literal`), a test against it computes
 (`fold`), untouched code falls away (`dead-node`). When both copies
 simplify to the same thing, the introduced branch collapses too (`dedup`,
 then `select-same`), and the goal closes by plain rewriting — the case
@@ -218,10 +218,10 @@ takes the earliest test and leaves later ones to be decided along the
 way — or split in turn: `cases(equal) cases(equal)` is a two-variable
 case analysis, four leaves, all folded shut by the closing `diagram`.
 And *identification comes first*: a program often retests one condition
-in several places (through copies and branch views), and the split only
-helps once the driver has recognized those as a single wire — which
-`both(decide)` does, via `view-value` and `dedup` — so `cases` almost
-always follows a drive.
+in several places (through copies, and in both arms of a branch), and the
+split only helps once the driver has recognized those as a single wire —
+which `both(decide)` does, via `copy-elim` and `dedup` — so `cases`
+almost always follows a drive.
 
 The first worked example, the `types_test` contract claim — a case
 analysis over the two tags an input might be:
@@ -336,17 +336,19 @@ different jobs.
 
 **The graphs are what it shows** (`--boxes`). One line per box — its id,
 what it reads, what reads it — with a branch written as the block it is:
-`if <condition>` at the `fork`, `else` where the second arm begins,
-`endif <condition>` at the `select`, the arms indented between them. The
-condition is named on all three lines, so a block deep in a nest says
-which wire it turns on. This is what the tactics acted on, so a next step
+`if <condition>` where its first arm begins, `else` where the second
+does, `endif <condition>` at the `select`, the arms indented between
+them. Only the `endif` is a box; the other two lines the listing draws,
+which is what their empty id column says. The condition is named on all
+three lines, so a block deep in a nest says which wire it turns on. This is what the tactics acted on, so a next step
 names the boxes it names — literally, with `at(#41, law)` — and a
 `NodeId` is stable for the life of a graph (nodes are only deleted, never
 moved), so two reports of one proof compare, which is what watching a
 proof means. Four things keep a large listing legible, each stated in
 `lang/rewrite/src/diagram2/render.rs`: branch membership is *computed*
-(downstream of the fork ∩ upstream of the select) rather than guessed
-from what sits between two lines; the order stays inside a branch once it
+(upstream of the select's blocks, less what feeds its condition, less
+whatever something outside reads) rather than guessed from what sits
+between two lines; the order stays inside a branch once it
 enters one; a box that reads nothing is placed just before the box that
 reads it, so an operand sits with its `equal`; and `id` and `copy` are
 read through, since a `copy` says what the links already say.

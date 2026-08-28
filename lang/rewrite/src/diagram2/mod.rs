@@ -16,37 +16,20 @@
 //! [`inline`] opens a call in place, and [`rules`] and [`tactic`] are the
 //! table and the driving of it.
 //!
-//! A branch is not one box either, and that is the one place this is not a
-//! literal reading of the term. It is **two**, with its arms as ordinary
-//! boxes in between: a `fork(n)` hands each arm its own view of the stack,
-//! both arms run, and the `select(n)` it is paired with keeps one of the
-//! two answers. That `fork` is exactly the `(pick (n-1))^n` of the
-//! single-arm hoist in [docs/totality.md](../../../../docs/totality.md), and the
-//! hoist is why the translation is allowed: every prim is total and has no
-//! effect but the stack, so work on the path not taken costs an answer
-//! nobody reads rather than a failure.
+//! A branch is one box, and its arms are not inside it. A `copy(n)` hands
+//! both arms the stack, both arms are emitted as ordinary boxes, and the
+//! `select(n)` keeps one of the two answers. That `copy` is exactly the
+//! `(pick (n-1))^n` of the single-arm hoist in
+//! [docs/totality.md](../../../../docs/totality.md), and the hoist is why the
+//! translation is allowed: every prim is total and has no effect but the
+//! stack, so work on the path not taken costs an answer nobody reads
+//! rather than a failure.
 //!
-//! The gain is that an arm is no longer opaque — a rule reaches into one
-//! from outside, and a value reaches out. The price is the fork, which is a
-//! `copy` in everything but name and is a separate kind only so that
-//! `copy-elim` leaves it alone. Deleting it would cost the one fact nothing
-//! else records: which port is an arm's *own* view of a value. A rule that
-//! holds on one side of a branch and not the other — `specialize-equal`,
-//! where a value that tested `equal` to a literal is that literal in the
-//! then arm — has nowhere to write its answer once both arms read the same
-//! port.
-//!
-//! **Both ends read the condition, and both read it at port 0.** A fork
-//! does not compute with it; it reads it so that a rule anchored there can
-//! *name* it. That matters because a rule is a local window and the arms
-//! lie between the two ends, so no window holds both: `specialize-equal`
-//! has to be stated at the fork, and its left-hand side has to mention the
-//! `equal` that decides the branch. Reading the condition at the same port
-//! on both ends is what makes such a rule say the same thing whichever end
-//! it is written at. Two readers of one port is a `copy`, which
-//! [`build`] emits and `copy-elim` takes back out, so a built graph is
-//! still a wiring diagram and the rewritten one still has both ends on the
-//! one source.
+//! So an arm is not opaque: a rule reaches into one from outside, and a
+//! value reaches out. `copy-elim` deletes that copy like any other, after
+//! which both arms read the one port — which is what makes the branch
+//! layer short. A block that *is* the value the condition tested is that
+//! value, and a rule can say so by naming one source twice.
 //!
 //! ## The rules
 //!
@@ -77,11 +60,9 @@
 //!
 //! - `dedup` — δ-naturality. Two boxes of one kind reading one set of
 //!   sources are one box read twice, so `push 9 ; push 9` and `push 9 ;
-//!   copy(1)` settle in the same place. It refuses a `fork`, for the reason
-//!   the `fork` exists.
+//!   copy(1)` settle in the same place.
 //!
-//! What the rules leave is a DAG of `Op`s, `Call`s and `Fork`/`Select`
-//! pairs whose
+//! What the rules leave is a DAG of `Op`s, `Call`s and `Select`s whose
 //! ports fan out where a `copy` used to be — the same shape `diagram`
 //! arrives at by construction, reached instead by named rewrites over data
 //! that existed the whole way.
@@ -144,12 +125,10 @@
 //!   cannot judge and `vm` can; and the other three take a branch apart,
 //!   which is a strategy, and this module decides no strategy.
 //!
-//!   A rule that folds a branch carries its **arms as payload**, the way
-//!   the term version carried subterms, so the window holds the whole
-//!   branch: `select-literal` takes the fork, both arms and the select
-//!   together, and no rule leaves one end of a branch standing without the
-//!   other. `rules` says which laws hold one end, which hold a whole
-//!   branch, and what each can say as a result.
+//!   Every one of those rows is stated at the `select`, which is the whole
+//!   of a branch: `select-literal` reads a literal condition and answers
+//!   with the blocks it chooses, leaving the untaken arm to `dead-node`.
+//!   `rules` says what each row can say and why.
 //!
 //! [`read_back`] is the other half of the translation: a graph is scheduled
 //! onto a stack, and the routing between one step and the next is *layered*
@@ -229,41 +208,30 @@ fn emit(graph: &mut Graph, terms: &Context, term: TermIndex, inputs: Vec<Source>
             outputs
         }
         // A branch is not a node either, and this is the change from the
-        // arms-in-a-box it used to be: the condition is set aside, a `fork`
-        // hands each arm its own view of the stack, both arms are emitted
-        // into this same graph, and the `select` it is paired with keeps one
-        // of the two answers. What was a boundary is now two boxes with the
-        // arms between them, so every rule reaches through it — and the one
-        // fact the boundary carried, which arm a value belongs to, is still
-        // written down.
+        // arms-in-a-box it used to be: the condition is set aside, a `copy`
+        // hands each arm the stack, both arms are emitted into this same
+        // graph, and the `select` keeps one of the two answers. What was a
+        // boundary is a box with the arms in front of it, so every rule
+        // reaches through it.
         Term::Branch { if_true, if_false } => {
             let mut inputs = inputs;
             let cond = inputs.pop().expect("a branch reads its condition");
-            let branch = graph.next_branch();
             // Block-wise, exactly the `(pick (n-1))^n` the hoist rule spells
-            // out. Arms that take nothing have no views to tell apart, and
-            // then the `select` is the only end there is to read the
-            // condition.
-            let (if_true_in, if_false_in, chooses) = if inputs.is_empty() {
-                (Vec::new(), Vec::new(), cond)
+            // out. Arms that take nothing have nothing to be handed, and
+            // then there is no copy at all.
+            let (if_true_in, if_false_in) = if inputs.is_empty() {
+                (Vec::new(), Vec::new())
             } else {
-                // Both ends read the condition, and two readers of one port
-                // is a `copy` — said outright here rather than smuggled in,
-                // so a built graph is still monogamous and `copy-elim` is
-                // still the one thing that breaks it.
-                let views = graph.add(NodeKind::Copy(1), vec![cond]);
                 let arity = inputs.len();
-                let mut takes = vec![views[0]];
-                takes.extend(inputs);
-                let mut blocks = graph.add(NodeKind::Fork { arity, branch }, takes);
+                let mut blocks = graph.add(NodeKind::Copy(arity), inputs);
                 let above = blocks.split_off(arity);
-                (blocks, above, views[1])
+                (blocks, above)
             };
-            let mut ports = vec![chooses];
+            let mut ports = vec![cond];
             ports.extend(emit(graph, terms, *if_true, if_true_in));
             ports.extend(emit(graph, terms, *if_false, if_false_in));
             let arity = terms.arity(*if_true).outputs;
-            graph.add(NodeKind::Select { arity, branch }, ports)
+            graph.add(NodeKind::Select { arity }, ports)
         }
     }
 }
@@ -322,7 +290,6 @@ pub fn inline(
                 outputs: (0..graph.kind(id).arity().outputs)
                     .map(|port| graph.sinks(Source::Port { node: id, port }).to_vec())
                     .collect(),
-                branches: Vec::new(),
             };
             pair.apply(graph, Direction::Forward, &at)
                 .expect("a call is the window its own box fills");
@@ -520,21 +487,13 @@ fn box_term(terms: &mut Context, kind: &NodeKind) -> TermIndex {
         NodeKind::Drop(n) => terms.drop(*n),
         NodeKind::Op(prim) => terms.op(prim.clone()),
         NodeKind::Call { target, arity } => terms.call(*target, *arity),
-        // The two views of the stack are what a `copy` makes; the node is
-        // only distinct so that rewriting leaves it alone. Its condition
-        // computes nothing — it is read so that a rule can see it — so what
-        // it comes back as is the condition let go of.
-        NodeKind::Fork { arity, .. } => {
-            let (gone, both) = (terms.drop(1), terms.copy(*arity));
-            terms.par(gone, both)
-        }
         // Both blocks are already on the stack by the time this runs — the
         // arms were scheduled like any other work — so the branch left to
         // write is only the choice between them: keep one block, let the
         // other go. The condition has to come up from the bottom first,
         // which is what the node's port order costs and the only place it
         // costs anything.
-        NodeKind::Select { arity: n, .. } => {
+        NodeKind::Select { arity: n } => {
             let up = hoist(terms, 2 * n + 1);
             let (keep, lose) = (terms.id(*n), terms.drop(*n));
             let if_true = terms.par(keep, lose);
@@ -765,7 +724,7 @@ pub(crate) mod tests {
         // The arms are not inside anything: the four boxes of the `then`
         // arm and the one of the `else` arm sit in this graph beside the
         // `select` that picks between their answers. Both arms take
-        // nothing, so there is no `copy` to fork the stack either.
+        // nothing, so there is no `copy` handing out the stack either.
         let (_terms, graph) = built("branch { push 1 push 2 add } { push 2 }");
         assert_eq!(graph.live_count(), 6, "{}", graph);
 
@@ -774,8 +733,8 @@ pub(crate) mod tests {
             .find(|(_, kind)| matches!(kind, NodeKind::Select { arity: 1, .. }))
             .expect("the branch ends in a select");
         // Its three inputs: the condition, which is the sentence's own
-        // input and sits at port 0 the way it does on a fork, and then the
-        // `then` answer and the `else` answer.
+        // input and sits at port 0, and then the `then` answer and the
+        // `else` answer.
         let inputs = graph.sources(id).to_vec();
         assert_eq!(inputs.len(), 3);
         assert_eq!(inputs[0], Source::Input(0), "the condition is port 0");

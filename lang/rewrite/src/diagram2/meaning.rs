@@ -21,7 +21,7 @@ pub(super) struct SymId(u32);
 ///
 /// `add` on two wires is the node `add(x, y)` and never `7`: nothing is
 /// run, so this decides no more equalities than the wiring forces. A
-/// branch is a [`Sym::Choice`] **per output** rather than a fork in
+/// branch is a [`Sym::Choice`] **per output** rather than a split in
 /// control — which is the same claim the graph makes with `select`, and
 /// the reason there is no case tree here to explode.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -245,16 +245,7 @@ pub(super) fn eval_graph(m: &mut Meaning, graph: &Graph, inputs: &[SymId]) -> Ve
             NodeKind::Call { target, arity } => {
                 m.apply(format!("call {:?}", target), args, arity.outputs)
             }
-            // A fork means what a copy means; only rewriting tells them
-            // apart. Its condition is read and not used — a rule wants to
-            // see it, the value does not depend on it.
-            NodeKind::Fork { .. } => {
-                let views = &args[1..];
-                let mut out = views.to_vec();
-                out.extend(views);
-                out
-            }
-            NodeKind::Select { arity: n, .. } => {
+            NodeKind::Select { arity: n } => {
                 let cond = args[0];
                 let (taken, not) = (&args[1..=*n], &args[n + 1..=2 * n]);
                 m.choose(cond, taken, not)

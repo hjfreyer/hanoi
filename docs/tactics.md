@@ -29,7 +29,7 @@ steps are:
 | `try(t …)` | the sequence, or nothing — failure becomes no progress |
 
 A law is named as [docs/rules.md](rules.md) names it — `copy-elim`,
-`select-view`, `dead-node`; the spellings are `Law::name`'s, read both
+`select-same`, `dead-node`; the spellings are `Law::name`'s, read both
 ways, so a law added to the table is spellable the moment it is named.
 `structural` and `branching` name the two lists. This surface is
 deliberately smaller than the language underneath: queries and stated
@@ -70,15 +70,12 @@ ordering an engine hardcodes:
 - `saturate` — the structural laws to fixpoint. Terminates without fuel
   because every structural law strictly shrinks the live box count.
 - `branches` — the branch layer in the order `rules::branching`
-  documents (`select-view` first pulls blocks out from behind a fork;
-  until it has, most of the layer has nothing to match), with the
-  structural laws behind them to spend what a branch rewrite leaves.
-  The phases loop *together*: one law of the layer unlocks another, so
-  one `repeat` over the ordered list is the fixpoint said plainly.
-- `decide` — the whole table: the branch layer, the structural laws, the
-  value layer, and `view-value` behind everything, fired only when
-  nothing else fires — spending a fork's views takes the specializing
-  laws' anchor with them. The closest thing to a normalizer, and still a
+  documents, with the structural laws behind them to spend what a branch
+  rewrite leaves. The phases loop *together*: one law of the layer
+  unlocks another, so one `repeat` over the ordered list is the fixpoint
+  said plainly.
+- `decide` — the whole table: the branch layer, the structural laws and
+  the value layer. The closest thing to a normalizer, and still a
   strategy: those laws, in that order, replaceable by any proof that
   chooses differently.
 
@@ -119,7 +116,7 @@ pub enum KindPat {
     AnyPush,                      // any literal
     Push(Value),                  // this literal
     Call(Option<SentenceIndex>),
-    Fork, Select,
+    Select,
 }
 
 pub enum NodePred {
@@ -136,7 +133,6 @@ pub enum Atom {
     ReadsInput { node: Var, port: Option<usize>, input: Option<usize> },
     Exported { node: Var, port: Option<usize> },
     Unread { node: Var, port: usize },
-    Paired { fork: Var, select: Var },
     Ne(Var, Var),
 }
 
@@ -174,11 +170,7 @@ splices are **stated** rather than found:
   every rule's right-hand side;
 - a pattern that exports **one port twice** leaves the split of that
   port's readers a genuine, result-changing choice — it decides which
-  readers see which leg of a copy;
-- a pattern carrying an **unwitnessed branch id** — a `BranchId` no fork
-  or select of its own witnesses — leaves its image a choice too:
-  applying such a side backward *mints* the branch the other side's
-  select carries.
+  readers see which leg of a copy.
 
 A stated step separates what is read from what is chosen:
 
@@ -206,7 +198,6 @@ pub struct MatchSpec {
     pub nodes: Vec<Var>,             // image of the pattern's boxes
     pub inputs: Vec<SrcExpr>,        // one per pattern boundary input
     pub outputs: Vec<Vec<SinkSel>>,  // one list per pattern boundary output
-    pub branches: Vec<Var>,          // a bound Fork/Select per pattern branch id
 }
 
 /// Pure reading; the result goes through `apply`, so a wrong resolution
@@ -343,8 +334,10 @@ pub enum Region {
     /// The image of the immediately preceding step: the fresh boxes its
     /// recorded inverse names — data `apply` produced, not guessed.
     LastImage,
-    /// One side of a branch, computed fresh at every entry.
-    Arm { branch: BranchId, side: bool },
+    /// One side of a branch, computed fresh at every entry. The branch
+    /// is named by the wire it turns on, since a rewrite that narrows a
+    /// select puts down a new box with a new id.
+    Arm { cond: Source, side: bool },
 }
 ```
 
@@ -359,12 +352,14 @@ only live nodes).
 ([docs/proving.md](proving.md)). Its membership is the arm's **cone**:
 everything upstream of that side's blocks, minus everything upstream of
 the condition — the decided test's own making is exactly what an arm
-must not touch again — plus the branch's two ends, since the branch
-layer's laws are read off them. Shared context is deliberately *in*: a
-split duplicates only what lies downstream of its wire, so the tests a
-nested split must reach sit upstream, shared between the copies, and a
-region that evicted them would let an arm spend its hypothesis but never
-decompose it. The region scopes *anchors*, not windows — a law fired
+must not touch again — plus the `select` itself, since the branch
+layer's laws are read off it. Where more than one live select turns on
+the wire, the **outermost** is the branch meant: the one the others lie
+inside, which is the one a split introduced. Shared context is
+deliberately *in*: a split duplicates only what lies downstream of its
+wire, so the tests a nested split must reach sit upstream, shared
+between the copies, and a region that evicted them would let an arm
+spend its hypothesis but never decompose it. The region scopes *anchors*, not windows — a law fired
 from inside may still hold boxes outside in its match, and soundness is
 `apply`'s either way.
 
@@ -390,10 +385,9 @@ Tactic::Seq(vec![
 
 The query binds what is natural to *say* — the select — while `ReadOff`
 rides `propose`, which seeds what the matcher needs — the literal. Note
-the image is smaller than a first reading suggests: when the arms take
-nothing there is no fork, and the untaken arm's literal sits *outside*
-the window, dead but deliberately surviving the focused cleanup — a
-focus that collected it would not be a focus.
+the image is smaller than a first reading suggests: the untaken arm sits
+*outside* the window, dead but deliberately surviving the focused
+cleanup — a focus that collected it would not be a focus.
 
 **Backward, stated: introduce a `copy(1)` on the wire feeding a node.**
 
