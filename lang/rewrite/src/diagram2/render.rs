@@ -68,15 +68,33 @@
 //! parent's level and orders the units: a region is placed whole, and
 //! leaving one is not a move the schedule has.
 //!
-//! **A box that reads nothing sits just before the box that reads it — but
-//! outside any branch it is not part of.** A `push` is ready before
-//! everything, so left alone the whole constant pool lands in one slab at
-//! the top and an `equal`'s operand is forty lines from the `equal`. Every
-//! topological order may put such a box anywhere before its first reader,
-//! so it goes immediately before — backing out first past any branch that
-//! reader is in and it is not, since a literal several arms share belongs
-//! to none of them and dropping it inside one would break the run the
-//! schedule just made.
+//! **A box that reads nothing is written wherever it is read.** A `push`
+//! is ready before everything, so left alone the whole constant pool
+//! lands in one slab at the top and an `equal`'s operand is forty lines
+//! from the `equal`. Writing it once before its *first* reader is not
+//! enough either: the corpus's biggest goal has a `push false` read 23
+//! times by boxes at nine different depths, and no one line can sit
+//! beside all of them. So it gets a line in each arm that reads it, and
+//! each line names the readers there — a `→` column 23 wide is not one a
+//! reader reads.
+//!
+//! This is the one place the listing writes a box more than once, and it
+//! is the only place it can. A box that reads nothing has no `←` column,
+//! so a second line of it is the first line character for character: its
+//! content **is** its identity, and two lines reading `push true` are not
+//! two things a reader can confuse. A box that reads something has a
+//! history, and a second copy of a history invites the question "the same
+//! box?" — which is what a listing keyed by [`NodeId`] exists to answer.
+//! A value may be written wherever it is used; a computation is written
+//! once, and a **parenthesised id** is how a line says which it is.
+//!
+//! It is the trade this listing already makes for `copy`, run the other
+//! way. A `copy` is the graph's word for "read twice": eliding one
+//! deletes the box and keeps the sharing, and this deletes the sharing
+//! and keeps the value. The sharing is still on the page — the `→`
+//! columns of a box's lines partition its readers, so their union is what
+//! its one line used to say — and [`Listing::all_boxes`] still shows
+//! every box.
 //!
 //! **The arms come out in the order a reader reads them.** A branch's
 //! region splits in two — every box in it is upstream of one of the
@@ -430,10 +448,31 @@ fn schedule(
     graph: &Graph,
     inside: &HashMap<NodeId, BTreeSet<u32>>,
     arms: &HashMap<(NodeId, u32), bool>,
-) -> Vec<NodeId> {
+    elide: bool,
+) -> Vec<Printing> {
     let order = nested_order(graph, inside, arms).unwrap_or_else(|| wherever_ready(graph, inside));
     debug_assert_eq!(order.len(), graph.live_count(), "the graph is acyclic");
-    operands_last(graph, inside, order)
+    operands_at_each_use(graph, inside, arms, elide, order)
+}
+
+/// One line of the listing: a box, and where it is drawn.
+///
+/// Nearly every box has exactly one, drawn in its own place. A box that
+/// reads nothing has one per arm that reads it — see
+/// [`operands_at_each_use`] — so `id` is not a key here, and `repeat` is
+/// what the listing says out loud when it is not.
+struct Printing {
+    id: NodeId,
+    /// The arms this line is drawn inside: which branches hold it, and
+    /// which side of each. A box's own place, or — for a box written at
+    /// its uses — the place of the readers this line answers for.
+    place: BTreeMap<u32, bool>,
+    /// The readers this line answers for: all of the box's, unless the box
+    /// is written more than once, in which case the lines partition them.
+    read_by: Vec<Sink>,
+    /// Whether the box is written elsewhere too. A bare id says this line
+    /// is the only one for the box; a parenthesised one says it is not.
+    repeat: bool,
 }
 
 /// A topological order in which every branch's boxes are contiguous, or
@@ -633,28 +672,54 @@ fn wherever_ready(graph: &Graph, inside: &HashMap<NodeId, BTreeSet<u32>>) -> Vec
     order
 }
 
-/// Moves each box that reads nothing to just before the first box that
-/// reads it — but never **into** a branch it is not part of.
+/// How many boxes may sit between two uses of a value before the listing
+/// writes it again rather than making a reader look back for it.
 ///
-/// Such a box is ready before everything, so any schedule is free to emit
-/// the whole constant pool first — and then an `equal`'s operand is forty
-/// lines from the `equal`. It is equally free to emit it immediately before
-/// its first reader, which is where the term spells it (`push X ; equal`)
-/// and where a reader looks.
+/// A legibility number, like [`LABEL`], and the listing is the only thing
+/// that reads it: what it trades is a line against a glance.
+const REACH: usize = 6;
+
+/// The readers of one box that sit in one arm, and where the line
+/// answering for them lands: the index in the schedule of the box it
+/// comes before, or `None` for the end of the listing.
+struct Group {
+    place: BTreeMap<u32, bool>,
+    first: Option<usize>,
+    read_by: Vec<Sink>,
+}
+
+/// Writes each box that reads nothing where it is read — at **every** arm
+/// that reads it, not once for all of them. The module docs say why only
+/// these boxes may be written twice; this is how the lines are placed.
 ///
-/// The caveat is the whole difference between this and the obvious version.
-/// A literal several arms share belongs to no branch — [`nesting`] gives it
-/// the *intersection* of its readers', which is empty — so dropping it in
-/// front of a reader that is inside one puts a box of no branch inside a
-/// branch, and the run [`schedule`] worked to make contiguous is broken by
-/// the pass that runs after it. So the box backs out first: it lands just
-/// before the outermost branch its reader is in and it is not, which is
-/// where the term would spell it too.
-fn operands_last(
+/// A box's readers are grouped by the arm they sit in, and each group
+/// gets a line just before the first of them. That spot is always legal:
+/// the brackets open there are the reader's own, so a line drawn in the
+/// reader's place sits inside the reader's run and breaks nothing.
+///
+/// Two exceptions shape the rest of it.
+///
+/// A reader **outside** an arm the box is in cannot take the box along —
+/// the box is that arm's content, not the reader's operand. That is
+/// `branch { push 1 } { push 2 }`, where the pushes are the arms and the
+/// only reader is the `select` that ends the branch. [`nesting`] already
+/// put such a box in its arm and the schedule already placed it there, so
+/// that group keeps the place the schedule gave it.
+///
+/// And a value written a line or two up needs no second line, so two
+/// groups within [`REACH`] of each other become one — but only when one's
+/// place encloses the other's, so a reader finds the line by looking out
+/// through brackets that are closing rather than across into an arm it
+/// cannot see. The endif ladder a decision tree leaves is what the merge
+/// is for; two arms of one branch are what the enclosing test refuses,
+/// however close they sit.
+fn operands_at_each_use(
     graph: &Graph,
     inside: &HashMap<NodeId, BTreeSet<u32>>,
+    arms: &HashMap<(NodeId, u32), bool>,
+    elide: bool,
     order: Vec<NodeId>,
-) -> Vec<NodeId> {
+) -> Vec<Printing> {
     let floating: HashSet<NodeId> = order
         .iter()
         .copied()
@@ -667,64 +732,223 @@ fn operands_last(
         .collect();
     let at: HashMap<NodeId, usize> = solid.iter().enumerate().map(|(i, &id)| (id, i)).collect();
 
-    // Where each branch's run begins, the ends of the branch included: they
-    // are the bracket lines, and a box between them reads as inside.
-    let mut opens: HashMap<u32, usize> = HashMap::new();
-    for (i, &id) in solid.iter().enumerate() {
-        let mut branches: BTreeSet<u32> = inside.get(&id).cloned().unwrap_or_default();
-        if let NodeKind::Fork { branch, .. } | NodeKind::Select { branch, .. } = graph.kind(id) {
-            branches.insert(branch.index() as u32);
-        }
-        for branch in branches {
-            opens.entry(branch).or_insert(i);
+    // Where the schedule itself put each floating box: the box it came
+    // before. That is the answer for a literal that is an arm's whole
+    // content — `branch { push 1 } { push 2 }` — since the arm is where
+    // [`nesting`] put it and no reader of it is in the arm at all.
+    let mut scheduled: HashMap<NodeId, Option<usize>> = HashMap::new();
+    let mut next = 0;
+    let mut waiting: Vec<NodeId> = Vec::new();
+    for &id in &order {
+        match floating.contains(&id) {
+            true => waiting.push(id),
+            false => {
+                for id in waiting.drain(..) {
+                    scheduled.insert(id, Some(next));
+                }
+                next += 1;
+            }
         }
     }
+    for id in waiting {
+        scheduled.insert(id, None);
+    }
 
-    // One insertion point per floating box: before its first reader, backed
-    // out of every branch that reader is in and it is not.
-    let mut lands: HashMap<usize, Vec<NodeId>> = HashMap::new();
-    let mut tail: Vec<NodeId> = Vec::new();
+    // Placement goes by the links as the graph has them, so that a box is
+    // never written before one it reads. What a line *names* looks through
+    // the boxes elision drops, which is a different question and is asked
+    // of each link on its own.
+    let sinks = |id: NodeId| -> Vec<Sink> {
+        let mut found = Vec::new();
+        let mut seen = HashSet::new();
+        for port in 0..graph.kind(id).arity().outputs {
+            found.extend(
+                graph
+                    .sinks(Source::Port { node: id, port })
+                    .iter()
+                    .copied()
+                    .filter(|&sink| seen.insert(sink)),
+            );
+        }
+        found
+    };
+    let named = |sink: Sink| -> Vec<Sink> {
+        match sink {
+            Sink::Port { node, .. } if elide && structural(graph.kind(node)) => {
+                let mut found = Vec::new();
+                let mut seen = HashSet::new();
+                for port in 0..graph.kind(node).arity().outputs {
+                    readers(graph, Source::Port { node, port }, &mut found, &mut seen);
+                }
+                found
+            }
+            _ => vec![sink],
+        }
+    };
+    // Which arms a box is drawn inside, and which side of each.
+    let place = |id: NodeId| -> BTreeMap<u32, bool> {
+        inside
+            .get(&id)
+            .into_iter()
+            .flatten()
+            .map(|&branch| (branch, arms.get(&(id, branch)).copied().unwrap_or(true)))
+            .collect()
+    };
+
+    let mut lands: HashMap<usize, Vec<Printing>> = HashMap::new();
+    let mut last: Vec<Printing> = Vec::new();
     for &id in &order {
         if !floating.contains(&id) {
             continue;
         }
-        let mut first = None;
-        for port in 0..graph.kind(id).arity().outputs {
-            for &sink in graph.sinks(Source::Port { node: id, port }) {
-                if let Sink::Port { node, .. } = sink
-                    && let Some(&i) = at.get(&node)
+        let mine = place(id);
+        // A reader at least as deep as the box takes it along: the spot
+        // just before that reader has the reader's brackets open, so a
+        // line there is legal, and it is beside what reads it. A reader
+        // *outside* an arm the box is in cannot — the box is that arm's
+        // content, and the schedule already found it a place.
+        let mut groups: Vec<Group> = Vec::new();
+        for sink in sinks(id) {
+            let theirs = match sink {
+                Sink::Port { node, .. } => Some(place(node)),
+                Sink::Output(_) => None,
+            };
+            let (where_, first) = match theirs {
+                Some(theirs)
+                    if mine
+                        .iter()
+                        .all(|(branch, side)| theirs.get(branch) == Some(side)) =>
                 {
-                    first = Some(first.map_or(i, |was: usize| was.min(i)));
+                    let Sink::Port { node, .. } = sink else {
+                        unreachable!("a boundary read has no place")
+                    };
+                    (theirs, at.get(&node).copied())
                 }
+                _ => (mine.clone(), scheduled[&id]),
+            };
+            match groups.iter_mut().find(|group| group.place == where_) {
+                Some(group) => {
+                    group.first = match (group.first, first) {
+                        (Some(a), Some(b)) => Some(a.min(b)),
+                        (a, b) => a.or(b),
+                    };
+                    group.read_by.push(sink);
+                }
+                None => groups.push(Group {
+                    place: where_,
+                    first,
+                    read_by: vec![sink],
+                }),
             }
         }
-        // A constant the boundary reads, or one nothing reads at all, still
-        // has to appear: a listing that drops a live box is lying.
-        let Some(first) = first else {
-            tail.push(id);
-            continue;
+
+        // A value already written a line or two up needs no second line:
+        // the reader can see it. So two groups become one when they land
+        // within `REACH` of each other **and** one's place encloses the
+        // other's — the line keeps the earlier place, and a reader of the
+        // later group finds it by looking out through brackets that are
+        // closing, never across into an arm it cannot see. The endif
+        // ladder a decision tree leaves is what this is for: three
+        // `endif`s in six lines all answering `true` want one `push true`
+        // above them, not one apiece. Two arms of one branch are the case
+        // it must refuse, however close they sit: the `else` between them
+        // is exactly the line that says the first is out of view.
+        let nested = |a: &BTreeMap<u32, bool>, b: &BTreeMap<u32, bool>| {
+            let (inner, outer) = match a.len() <= b.len() {
+                true => (a, b),
+                false => (b, a),
+            };
+            inner
+                .iter()
+                .all(|(branch, side)| outer.get(branch) == Some(side))
         };
-        let mine = inside.get(&id).cloned().unwrap_or_default();
-        let landing = inside
-            .get(&solid[first])
-            .into_iter()
-            .flatten()
-            .filter(|branch| !mine.contains(branch))
-            .filter_map(|branch| opens.get(branch).copied())
-            .min()
-            .unwrap_or(first)
-            .min(first);
-        lands.entry(landing).or_default().push(id);
+        groups.sort_by_key(|group| group.first.unwrap_or(usize::MAX));
+        let mut merged: Vec<Group> = Vec::new();
+        for group in groups {
+            match merged.last_mut() {
+                Some(last)
+                    if matches!((last.first, group.first), (Some(a), Some(b)) if b - a <= REACH)
+                        && nested(&last.place, &group.place) =>
+                {
+                    last.read_by.extend(group.read_by);
+                }
+                _ => merged.push(group),
+            }
+        }
+
+        // A box nothing reads still has to appear: a listing that drops a
+        // live box is lying.
+        if merged.is_empty() {
+            merged.push(Group {
+                place: mine,
+                first: scheduled[&id],
+                read_by: Vec::new(),
+            });
+        }
+        let repeat = merged.len() > 1;
+        for group in merged {
+            let mut read_by: Vec<Sink> = Vec::new();
+            let mut seen = HashSet::new();
+            for sink in group.read_by {
+                read_by.extend(named(sink).into_iter().filter(|&sink| seen.insert(sink)));
+            }
+            let printing = Printing {
+                id,
+                place: group.place,
+                read_by,
+                repeat,
+            };
+            match group.first {
+                Some(i) => lands.entry(i).or_default().push(printing),
+                None => last.push(printing),
+            }
+        }
     }
 
-    let mut moved = Vec::with_capacity(order.len());
+    let mut written = Vec::with_capacity(order.len());
     for (i, &id) in solid.iter().enumerate() {
-        moved.extend(lands.get(&i).map(Vec::as_slice).unwrap_or_default());
-        moved.push(id);
+        written.extend(lands.remove(&i).unwrap_or_default());
+        let mut read_by: Vec<Sink> = Vec::new();
+        let mut seen = HashSet::new();
+        for sink in sinks(id) {
+            read_by.extend(named(sink).into_iter().filter(|&sink| seen.insert(sink)));
+        }
+        written.push(Printing {
+            id,
+            place: place(id),
+            read_by,
+            repeat: false,
+        });
     }
-    moved.extend(tail);
-    debug_assert_eq!(moved.len(), order.len(), "every box is still listed");
-    moved
+    written.extend(last);
+
+    debug_assert!(lands.is_empty(), "every landing is before a box");
+    #[cfg(debug_assertions)]
+    {
+        // Every live box is written, and what the lines of one say between
+        // them is what its single line used to say.
+        let mut said: HashMap<NodeId, HashSet<Sink>> = HashMap::new();
+        for printing in &written {
+            said.entry(printing.id)
+                .or_default()
+                .extend(printing.read_by.iter().copied());
+        }
+        for &id in &order {
+            let Some(theirs) = said.get(&id) else {
+                panic!("{} is live and went unwritten", id);
+            };
+            let mut all: HashSet<Sink> = HashSet::new();
+            for sink in sinks(id) {
+                all.extend(named(sink));
+            }
+            assert_eq!(
+                *theirs, all,
+                "{}'s lines do not name all of its readers",
+                id
+            );
+        }
+    }
+    written
 }
 
 /// The first source at or above `source` that survives elision.
@@ -795,7 +1019,7 @@ impl fmt::Display for Listing<'_> {
         let graph = self.graph;
         let mut inside = nesting(graph);
         let arms = arms(graph, &mut inside);
-        let order = schedule(graph, &inside, &arms);
+        let written = schedule(graph, &inside, &arms, self.elide);
         let shown = |id: NodeId| !self.elide || !structural(graph.kind(id));
 
         // A box's branches, outermost first: the chain it is nested in, and
@@ -806,13 +1030,8 @@ impl fmt::Display for Listing<'_> {
                 *held.entry(branch).or_default() += 1;
             }
         }
-        let chain = |id: NodeId| -> Vec<u32> {
-            let mut mine: Vec<u32> = inside
-                .get(&id)
-                .cloned()
-                .unwrap_or_default()
-                .into_iter()
-                .collect();
+        let chain = |place: &BTreeMap<u32, bool>| -> Vec<u32> {
+            let mut mine: Vec<u32> = place.keys().copied().collect();
             mine.sort_by_key(|branch| (std::cmp::Reverse(held.get(branch).copied()), *branch));
             mine
         };
@@ -868,7 +1087,7 @@ impl fmt::Display for Listing<'_> {
             .live()
             .filter(|(_, kind)| matches!(kind, NodeKind::Select { .. }))
             .count();
-        let boxes = order.iter().filter(|&&id| shown(id)).count();
+        let boxes = graph.live().filter(|&(id, _)| shown(id)).count();
         let arity = graph.arity();
         writeln!(
             f,
@@ -890,12 +1109,13 @@ impl fmt::Display for Listing<'_> {
         }
         writeln!(f)?;
 
-        for &id in &order {
+        for printing in &written {
+            let id = printing.id;
             if !shown(id) {
                 continue;
             }
             let kind = graph.kind(id);
-            let mine = chain(id);
+            let mine = chain(&printing.place);
             // The lines a reader needs before this one. A branch opens at
             // its `fork` where it has one, so what is left to draw here is
             // the opening of a forkless branch and every `else` — neither
@@ -915,7 +1135,7 @@ impl fmt::Display for Listing<'_> {
                 if !opened.contains(&branch) {
                     ahead.push(("if", branch, depth));
                 }
-                let then = arms.get(&(id, branch)).copied().unwrap_or(true);
+                let then = printing.place.get(&branch).copied().unwrap_or(true);
                 if !then && parts.contains(&branch) && !parted.contains(&branch) {
                     ahead.push(("else", branch, depth));
                 }
@@ -933,7 +1153,7 @@ impl fmt::Display for Listing<'_> {
             for (word, branch, depth) in ahead {
                 writeln!(
                     f,
-                    "  {:<5} {}{} {}",
+                    "  {:<6} {}{} {}",
                     "",
                     gutter(depth),
                     word,
@@ -1007,17 +1227,8 @@ impl fmt::Display for Listing<'_> {
                 _ => format!("← {}", sources.join(" ")),
             };
 
-            let mut sinks = Vec::new();
-            let mut seen = HashSet::new();
-            for port in 0..kind.arity().outputs {
-                let source = Source::Port { node: id, port };
-                if self.elide {
-                    readers(graph, source, &mut sinks, &mut seen);
-                } else {
-                    sinks.extend(graph.sinks(source).iter().copied());
-                }
-            }
-            let mut read_by: Vec<String> = sinks
+            let mut read_by: Vec<String> = printing
+                .read_by
                 .iter()
                 .map(|sink| match sink {
                     Sink::Output(i) => format!("out{}", i),
@@ -1032,8 +1243,11 @@ impl fmt::Display for Listing<'_> {
 
             writeln!(
                 f,
-                "  {:<5} {:<width$}{:<24}{}",
-                id.to_string(),
+                "  {:<6} {:<width$}{:<24}{}",
+                match printing.repeat {
+                    true => format!("({})", id),
+                    false => id.to_string(),
+                },
                 label,
                 reads,
                 read_by,
@@ -1065,6 +1279,40 @@ mod tests {
     use super::*;
     use crate::diagram2::{build, tests::term_of};
     use crate::term::Context;
+
+    /// A branch grown **forwards** over the work after it, and the operand
+    /// that work read from outside — now read by a copy in each arm.
+    ///
+    /// `select-hoist` is the only row that makes this shape, and it is the
+    /// shape both the arm reading and the writing-at-each-use rest on.
+    fn grown() -> (Graph, NodeId) {
+        use crate::diagram2::rules::{Law, apply, propose};
+        use crate::term::Prim;
+
+        let mut graph = built("branch { push 1 } { push 2 } push 10 add");
+        let select = graph
+            .live()
+            .find_map(|(id, kind)| matches!(kind, NodeKind::Select { .. }).then_some(id))
+            .expect("the body branches");
+        let step = propose(&graph, &[Law::SelectHoist], select)
+            .pop()
+            .expect("the work after the branch is a body to grow over");
+        apply(&mut graph, &step).expect("the branch grows forwards");
+        graph.check().unwrap_or_else(|e| panic!("{}", e));
+
+        let shared = graph
+            .live()
+            .filter(|(_, kind)| matches!(kind, NodeKind::Op(Prim::Push(_))))
+            .map(|(id, _)| id)
+            .find(|&id| graph.sinks(Source::Port { node: id, port: 0 }).len() == 2)
+            .unwrap_or_else(|| {
+                panic!(
+                    "the hoist left no operand read twice:\n{}",
+                    listing(&graph, "left").all_boxes()
+                )
+            });
+        (graph, shared)
+    }
 
     /// The graph a body builds, and the arena its term lives in.
     pub(super) fn built(body: &str) -> Graph {
@@ -1112,8 +1360,12 @@ mod tests {
     fn nothing_live_goes_unlisted() {
         let graph = built("push 1 pick 0 swap drop 0");
         let text = listing(&graph, "left").all_boxes().to_string();
-        let listed = text.lines().filter(|line| line.starts_with("  #")).count();
-        assert_eq!(listed, graph.live_count());
+        let listed: HashSet<&str> = text
+            .lines()
+            .filter_map(|line| line.split_whitespace().next())
+            .filter(|word| word.starts_with('#') || word.starts_with("(#"))
+            .collect();
+        assert_eq!(listed.len(), graph.live_count());
     }
 
     /// An arm indents under the branch it belongs to, and the two ends draw
@@ -1180,15 +1432,20 @@ mod tests {
         let graph = built("push 1 pick 0 add branch { push 3 } { push 4 }");
         let mut inside = nesting(&graph);
         let arms = arms(&graph, &mut inside);
-        let order = schedule(&graph, &inside, &arms);
+        let written = schedule(&graph, &inside, &arms, true);
         let mut placed: HashSet<NodeId> = HashSet::new();
-        for id in order {
-            for &source in graph.sources(id) {
+        for printing in &written {
+            for &source in graph.sources(printing.id) {
                 if let Source::Port { node, .. } = source {
-                    assert!(placed.contains(&node), "{} is listed before {}", id, node);
+                    assert!(
+                        placed.contains(&node),
+                        "{} is listed before {}",
+                        printing.id,
+                        node
+                    );
                 }
             }
-            placed.insert(id);
+            placed.insert(printing.id);
         }
     }
 
@@ -1204,33 +1461,7 @@ mod tests {
     /// what it reads, so [`arms`] hands it back to the enclosing level.
     #[test]
     fn an_operand_both_arms_read_is_in_neither() {
-        use crate::diagram2::rules::{Law, apply, propose};
-        use crate::term::Prim;
-
-        let mut graph = built("branch { push 1 } { push 2 } push 10 add");
-        let select = graph
-            .live()
-            .find_map(|(id, kind)| matches!(kind, NodeKind::Select { .. }).then_some(id))
-            .expect("the body branches");
-        let step = propose(&graph, &[Law::SelectHoist], select)
-            .pop()
-            .expect("the work after the branch is a body to grow over");
-        apply(&mut graph, &step).expect("the branch grows forwards");
-        graph.check().unwrap_or_else(|e| panic!("{}", e));
-
-        // The `push 10` both copies of the `add` now read.
-        let shared = graph
-            .live()
-            .filter(|(_, kind)| matches!(kind, NodeKind::Op(Prim::Push(_))))
-            .map(|(id, _)| id)
-            .find(|&id| graph.sinks(Source::Port { node: id, port: 0 }).len() == 2)
-            .unwrap_or_else(|| {
-                panic!(
-                    "the hoist left no operand read twice:\n{}",
-                    listing(&graph, "left").all_boxes()
-                )
-            });
-
+        let (graph, shared) = grown();
         let mut inside = nesting(&graph);
         let arms = arms(&graph, &mut inside);
         assert!(
@@ -1247,22 +1478,109 @@ mod tests {
 
         // Which is what keeps the schedule topological: the other arm's
         // reader would otherwise be listed before the box it reads.
-        let order = schedule(&graph, &inside, &arms);
+        let written = schedule(&graph, &inside, &arms, true);
         let mut placed: HashSet<NodeId> = HashSet::new();
-        for &id in &order {
-            for &source in graph.sources(id) {
+        for printing in &written {
+            for &source in graph.sources(printing.id) {
                 if let Source::Port { node, .. } = source {
                     assert!(
                         placed.contains(&node),
                         "{} is listed before {}:\n{}",
-                        id,
+                        printing.id,
                         node,
                         listing(&graph, "left").all_boxes()
                     );
                 }
             }
-            placed.insert(id);
+            placed.insert(printing.id);
         }
+
+        // And the shared operand is written in each arm that reads it,
+        // rather than once above the branch.
+        let written_at: Vec<usize> = written
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| p.id == shared)
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(
+            written_at.len(),
+            2,
+            "the operand both arms read is written {} time(s):\n{}",
+            written_at.len(),
+            listing(&graph, "left").all_boxes()
+        );
+    }
+
+    /// A value read from two arms is written in both, and each line names
+    /// the readers there and no others.
+    ///
+    /// This is the one box the listing writes twice, and the two things a
+    /// reader needs of it are that the operand is beside the `add` that
+    /// takes it — in *each* arm, since neither can see into the other —
+    /// and that the parenthesised id says the lines are one box. What the
+    /// single line used to say is still said: the `→` columns partition
+    /// its readers rather than dropping any.
+    #[test]
+    fn a_value_read_from_two_arms_is_written_in_both() {
+        let (graph, shared) = grown();
+        let text = listing(&graph, "left").all_boxes().to_string();
+        let mine: Vec<&str> = text
+            .lines()
+            .filter(|line| line.contains(&format!("({})", shared)))
+            .collect();
+        assert_eq!(
+            mine.len(),
+            2,
+            "{} is not written in both arms:\n{}",
+            shared,
+            text
+        );
+
+        // Each line sits in an arm, and names only what reads it there.
+        let readers: Vec<Vec<&str>> = mine
+            .iter()
+            .map(|line| {
+                line.split('→')
+                    .nth(1)
+                    .expect("a line names its readers")
+                    .split_whitespace()
+                    .collect()
+            })
+            .collect();
+        assert!(
+            readers.iter().all(|named| named.len() == 1),
+            "a line names a reader in the other arm:\n{}",
+            text
+        );
+        assert_ne!(
+            readers[0], readers[1],
+            "both lines name one reader:\n{}",
+            text
+        );
+
+        // Together they say what one line would have: every reader, once.
+        let all: HashSet<String> = graph
+            .sinks(Source::Port {
+                node: shared,
+                port: 0,
+            })
+            .iter()
+            .map(|sink| match sink {
+                Sink::Output(i) => format!("out{}", i),
+                Sink::Port { node, .. } => node.to_string(),
+            })
+            .collect();
+        let said: HashSet<String> = readers
+            .iter()
+            .flatten()
+            .map(|name| name.to_string())
+            .collect();
+        assert_eq!(
+            said, all,
+            "the two lines do not name every reader:\n{}",
+            text
+        );
     }
 
     /// The invariant the whole listing rests on: a branch's boxes are one
@@ -1285,42 +1603,54 @@ mod tests {
             let graph = built(body);
             let mut inside = nesting(&graph);
             let arms = arms(&graph, &mut inside);
-            let order = schedule(&graph, &inside, &arms);
+            let written = schedule(&graph, &inside, &arms, false);
             ever_nested |= inside.values().any(|mine| mine.len() > 1);
 
-            assert_eq!(order.len(), graph.live_count(), "{}: every box once", body);
+            let once: HashSet<NodeId> = written.iter().map(|p| p.id).collect();
+            assert_eq!(
+                once.len(),
+                graph.live_count(),
+                "{}: every box at least once",
+                body
+            );
             let mut placed: HashSet<NodeId> = HashSet::new();
-            for &id in &order {
-                for &source in graph.sources(id) {
+            for printing in &written {
+                for &source in graph.sources(printing.id) {
                     if let Source::Port { node, .. } = source {
-                        assert!(placed.contains(&node), "{}: {} before {}", body, id, node);
+                        assert!(
+                            placed.contains(&node),
+                            "{}: {} before {}",
+                            body,
+                            printing.id,
+                            node
+                        );
                     }
                 }
-                placed.insert(id);
+                placed.insert(printing.id);
             }
 
-            // Contiguous: between a region's first and last box sits
-            // nothing that is not the region's, its own ends aside.
-            let mut region: HashMap<u32, HashSet<NodeId>> = HashMap::new();
-            for (&id, branches) in &inside {
-                for &branch in branches {
-                    region.entry(branch).or_default().insert(id);
+            // Contiguous: between a region's first and last line sits
+            // nothing that is not the region's, its own ends aside. Asked
+            // of the lines rather than the boxes, since a box written at
+            // its uses is in whichever region each of its lines is drawn.
+            let mut region: HashMap<u32, Vec<usize>> = HashMap::new();
+            for (i, printing) in written.iter().enumerate() {
+                for &branch in printing.place.keys() {
+                    region.entry(branch).or_default().push(i);
                 }
             }
-            let at: HashMap<NodeId, usize> =
-                order.iter().enumerate().map(|(i, &id)| (id, i)).collect();
             for (branch, held) in &region {
-                let lo = held.iter().map(|id| at[id]).min().expect("a box");
-                let hi = held.iter().map(|id| at[id]).max().expect("a box");
-                for &id in &order[lo..=hi] {
-                    let ends = matches!(graph.kind(id),
+                let lo = *held.first().expect("a line");
+                let hi = *held.last().expect("a line");
+                for (i, printing) in written.iter().enumerate().take(hi + 1).skip(lo) {
+                    let ends = matches!(graph.kind(printing.id),
                         NodeKind::Fork { branch: b, .. } | NodeKind::Select { branch: b, .. }
                             if b.index() as u32 == *branch);
                     assert!(
-                        held.contains(&id) || ends,
+                        held.contains(&i) || ends,
                         "{}: {} sits inside branch #{}, which is not its own:\n{}",
                         body,
-                        id,
+                        printing.id,
                         branch,
                         listing(&graph, "left").all_boxes()
                     );
@@ -1335,7 +1665,7 @@ mod tests {
             let mut blocks = 0;
             for line in text.lines() {
                 // Past the id column is the gutter, and past that the word.
-                let Some(rest) = line.get(8..) else { continue };
+                let Some(rest) = line.get(9..) else { continue };
                 let depth = rest.matches("| ").count();
                 let word = rest.trim_start_matches("| ");
                 let condition = |word: &str| {
