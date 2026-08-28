@@ -80,12 +80,16 @@
 //!
 //! **The arms come out in the order a reader reads them.** A branch's
 //! region splits in two — every box in it is upstream of one of the
-//! select's two block lists and never of both — so the schedule emits the
-//! then side, then the else side, and [`arms`] is the reading that says
-//! which is which. An `else` is drawn where the second begins, and left
-//! out where the else arm owns no boxes at all: the `endif` names both
-//! blocks, and a separator with nothing after it says only that the
-//! listing draws separators.
+//! select's two block lists — so the schedule emits the then side, then
+//! the else side, and [`arms`] is the reading that says which is which.
+//! A box upstream of *both* lists is upstream of neither arm, the way a
+//! box two regions share is inside neither, and [`arms`] hands it back to
+//! the enclosing level as it reads: a branch grown forwards over the work
+//! after it reads that work's outside operands from both of its arms. An
+//! `else` is drawn where the second begins, and left out where the else
+//! arm owns no boxes at all: the `endif` names both blocks, and a
+//! separator with nothing after it says only that the listing draws
+//! separators.
 //!
 //! **A branch that owns no boxes still gets its block.** Its arms are
 //! wholly boxes a branch around it also holds, so `nesting` gives them to
@@ -326,22 +330,41 @@ fn armless(graph: &Graph, select: NodeId) -> HashSet<NodeId> {
     }
 }
 
-/// Which arm of each branch a box belongs to — `true` for the then side.
+/// Which arm of each branch a box belongs to — `true` for the then side —
+/// and, as it reads that, which boxes belong to **neither** arm.
 ///
-/// A branch's region splits cleanly in two. Every box in it is upstream of
-/// one of the `select`'s two block lists, and never of both: the sides are
-/// backward reaches from disjoint sets of blocks, so a box the then side
-/// reads is a then-side box by that very fact. That is what lets the
-/// listing draw an `else`, and it is why the split is a **reading** rather
-/// than a choice.
-fn arms(graph: &Graph, inside: &HashMap<NodeId, BTreeSet<u32>>) -> HashMap<(NodeId, u32), bool> {
+/// A branch's region wants to split cleanly in two: the sides are backward
+/// reaches from disjoint sets of blocks, so a box the then side reads is a
+/// then-side box by that very fact. That is what lets the listing draw an
+/// `else`, and it is why the split is a **reading** rather than a choice.
+///
+/// It does not split cleanly on its own, because a box can be read from
+/// both sides. [`Law::SelectHoist`](crate::diagram2::rules::Law) grows a
+/// branch *forwards* over the work after it, and the two copies it leaves
+/// read whatever that work read from outside — one wire, a reader in each
+/// arm. Such a box is upstream of both block lists, and if it reads
+/// nothing itself then [`nesting`]'s intersection puts it inside the
+/// branch, since every reader agrees on the branch and the intersection
+/// cannot see that they disagree on the arm.
+///
+/// A box two arms share belongs to neither, exactly as a box two regions
+/// share does, so this drops it from the branch — leaving it to
+/// [`operands_last`], which lands a box of no branch outside the branch
+/// its reader is in. Sharing runs backwards: the reach that finds a box
+/// from both sides finds everything it reads from both sides too, so one
+/// pass settles it and what is left is the clean split the listing draws.
+fn arms(
+    graph: &Graph,
+    inside: &mut HashMap<NodeId, BTreeSet<u32>>,
+) -> HashMap<(NodeId, u32), bool> {
     let mut region: HashMap<u32, HashSet<NodeId>> = HashMap::new();
-    for (&id, branches) in inside {
+    for (&id, branches) in inside.iter() {
         for &branch in branches {
             region.entry(branch).or_default().insert(id);
         }
     }
     let mut out: HashMap<(NodeId, u32), bool> = HashMap::new();
+    let mut shared: Vec<(NodeId, u32)> = Vec::new();
     for (select, kind) in graph.live() {
         let NodeKind::Select { arity, branch } = kind else {
             continue;
@@ -361,15 +384,20 @@ fn arms(graph: &Graph, inside: &HashMap<NodeId, BTreeSet<u32>>) -> HashMap<(Node
                 if !mine.contains(&node) || !seen.insert(node) {
                     continue;
                 }
-                let was = out.insert((node, branch), side);
-                debug_assert!(
-                    was.is_none_or(|was| was == side),
-                    "{} is on both sides of branch {}",
-                    node,
-                    branch
-                );
+                if out
+                    .insert((node, branch), side)
+                    .is_some_and(|was| was != side)
+                {
+                    shared.push((node, branch));
+                }
                 todo.extend(graph.sources(node).iter().copied());
             }
+        }
+    }
+    for (node, branch) in shared {
+        out.remove(&(node, branch));
+        if let Some(mine) = inside.get_mut(&node) {
+            mine.remove(&branch);
         }
     }
     out
@@ -765,8 +793,8 @@ const LABEL: usize = 44;
 impl fmt::Display for Listing<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let graph = self.graph;
-        let inside = nesting(graph);
-        let arms = arms(graph, &inside);
+        let mut inside = nesting(graph);
+        let arms = arms(graph, &mut inside);
         let order = schedule(graph, &inside, &arms);
         let shown = |id: NodeId| !self.elide || !structural(graph.kind(id));
 
@@ -1150,13 +1178,87 @@ mod tests {
     #[test]
     fn a_box_is_listed_after_what_it_reads() {
         let graph = built("push 1 pick 0 add branch { push 3 } { push 4 }");
-        let inside = nesting(&graph);
-        let order = schedule(&graph, &inside, &arms(&graph, &inside));
+        let mut inside = nesting(&graph);
+        let arms = arms(&graph, &mut inside);
+        let order = schedule(&graph, &inside, &arms);
         let mut placed: HashSet<NodeId> = HashSet::new();
         for id in order {
             for &source in graph.sources(id) {
                 if let Source::Port { node, .. } = source {
                     assert!(placed.contains(&node), "{} is listed before {}", id, node);
+                }
+            }
+            placed.insert(id);
+        }
+    }
+
+    /// A branch grown **forwards** leaves an operand its two arms share,
+    /// and a box two arms share is a box of neither.
+    ///
+    /// `select-hoist` copies the work after a branch into both of its
+    /// arms, so what that work read from outside is now read from both. A
+    /// `push` like that has every reader inside the branch and none
+    /// outside, which is exactly what [`nesting`]'s intersection reads as
+    /// "inside" — it cannot see that the readers disagree on the *arm*.
+    /// Drawing it inside one arm would put the other arm's reader before
+    /// what it reads, so [`arms`] hands it back to the enclosing level.
+    #[test]
+    fn an_operand_both_arms_read_is_in_neither() {
+        use crate::diagram2::rules::{Law, apply, propose};
+        use crate::term::Prim;
+
+        let mut graph = built("branch { push 1 } { push 2 } push 10 add");
+        let select = graph
+            .live()
+            .find_map(|(id, kind)| matches!(kind, NodeKind::Select { .. }).then_some(id))
+            .expect("the body branches");
+        let step = propose(&graph, &[Law::SelectHoist], select)
+            .pop()
+            .expect("the work after the branch is a body to grow over");
+        apply(&mut graph, &step).expect("the branch grows forwards");
+        graph.check().unwrap_or_else(|e| panic!("{}", e));
+
+        // The `push 10` both copies of the `add` now read.
+        let shared = graph
+            .live()
+            .filter(|(_, kind)| matches!(kind, NodeKind::Op(Prim::Push(_))))
+            .map(|(id, _)| id)
+            .find(|&id| graph.sinks(Source::Port { node: id, port: 0 }).len() == 2)
+            .unwrap_or_else(|| {
+                panic!(
+                    "the hoist left no operand read twice:\n{}",
+                    listing(&graph, "left").all_boxes()
+                )
+            });
+
+        let mut inside = nesting(&graph);
+        let arms = arms(&graph, &mut inside);
+        assert!(
+            inside.get(&shared).is_none_or(|mine| mine.is_empty()),
+            "{} is drawn inside a branch its two arms share it:\n{}",
+            shared,
+            listing(&graph, "left").all_boxes()
+        );
+        assert!(
+            !arms.keys().any(|&(id, _)| id == shared),
+            "{} was given an arm to belong to",
+            shared
+        );
+
+        // Which is what keeps the schedule topological: the other arm's
+        // reader would otherwise be listed before the box it reads.
+        let order = schedule(&graph, &inside, &arms);
+        let mut placed: HashSet<NodeId> = HashSet::new();
+        for &id in &order {
+            for &source in graph.sources(id) {
+                if let Source::Port { node, .. } = source {
+                    assert!(
+                        placed.contains(&node),
+                        "{} is listed before {}:\n{}",
+                        id,
+                        node,
+                        listing(&graph, "left").all_boxes()
+                    );
                 }
             }
             placed.insert(id);
@@ -1181,8 +1283,9 @@ mod tests {
         let mut ever_nested = false;
         for body in bodies {
             let graph = built(body);
-            let inside = nesting(&graph);
-            let order = schedule(&graph, &inside, &arms(&graph, &inside));
+            let mut inside = nesting(&graph);
+            let arms = arms(&graph, &mut inside);
+            let order = schedule(&graph, &inside, &arms);
             ever_nested |= inside.values().any(|mine| mine.len() > 1);
 
             assert_eq!(order.len(), graph.live_count(), "{}: every box once", body);
