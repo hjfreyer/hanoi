@@ -53,9 +53,10 @@
 //!
 //! - [`Law::Dedup`] — δ-naturality, which `super` used to list among the
 //!   things it had not bought. Two boxes of one kind reading one set of
-//!   sources are one box read twice. It refuses [`NodeKind::Fork`] and
-//!   [`NodeKind::Select`]: a fork *is* a copy, and merging two of them would
-//!   destroy the one fact it exists to record.
+//!   sources are one box read twice. It is also the whole of "the same
+//!   operation done in both arms is one operation": both arms read the
+//!   one port once `copy-elim` has run, so the two boxes are two boxes on
+//!   one set of sources like any other pair.
 //! - [`Law::NotNot`] — `not ; not = as_bool`, a layer-3 law carried as the
 //!   template for the rest. It is in the table and **not** in
 //!   [`structural`], because the opaque-operation oracle the tests judge by
@@ -110,13 +111,13 @@
 //! commuting conversion, what runs *after* a branch runs inside whichever
 //! arm the branch takes. Said as a composition on purpose: `select(…) ; A`
 //! is the side condition as well as the shape, since a composition is
-//! exactly the claim that the answers go into `A` and nowhere else. The
-//! gap it fills is visible from the two hoists. [`Law::ForkHoist`] lets work migrate
-//! across the **fork**, in either direction, so a branch could always grow
-//! backwards over what fed it. Nothing said the same at the **select**, so
-//! a branch could never grow forwards: everything downstream of one was
-//! out of the whole layer's reach, and a select could be deleted but never
-//! moved.
+//! exactly the claim that the answers go into `A` and nowhere else.
+//!
+//! A branch grows *backwards* for free: work in front of one is shared by
+//! both arms as a matter of wiring, and two boxes doing it twice are one
+//! box by [`Law::Dedup`]. This is the same freedom at the other end —
+//! without it everything downstream of a select is out of the branch
+//! layer's reach, and a select can be deleted but never moved.
 //!
 //! It is worth holding it against [`Law::Shannon`], since both put two
 //! copies of a region under one branch and they are not the same row.
@@ -130,69 +131,47 @@
 //! So it holds of **any** branch, whatever computed the condition, and
 //! it holds of conditions no case split can reach.
 //!
-//! ## The branch layer, and the one place it stops
+//! ## The branch layer, and where it reaches
 //!
-//! [`branching`] is the branch layer: [`Law::ForkHoist`],
-//! [`Law::ForkDedup`], [`Law::SelectView`], [`Law::SelectSame`],
-//! [`Law::SelectLiteral`], [`Law::SpecializeEqual`] and
-//! [`Law::SpecializeBool`]. Between them they fold a literal condition into
-//! its arm, delete a branch whose arms answer alike, lift work both arms do
-//! out in front, and write what a test decided into the block that tested
-//! it.
+//! [`branching`] is the branch layer: [`Law::SelectSame`],
+//! [`Law::SelectLiteral`], [`Law::SpecializeEqual`],
+//! [`Law::SpecializeBool`] and [`Law::SpecializeChoice`]. Between them they
+//! fold a literal condition into the blocks it chooses, delete a branch
+//! whose arms answer alike, and write what a test decided into the block
+//! that tested it.
 //!
-//! The two hoists are one equation stated twice, and the difference is the
-//! whole reason both are here. [`Law::ForkDedup`] reads the hoisted answer
-//! from *outside* the fork, which is a [`Law::ViewValue`] spent in the same
-//! breath — and once every arm reads around a fork, the fork is dead and
-//! the specializing laws have nothing to anchor on. [`Law::ForkHoist`] hands
-//! the answer back to the fork as a stack slot of its own, so the value
-//! stays inside the branch and can still be named there. A driver that
-//! holds `view-value` back until nothing else fires should prefer the
-//! hoist for the same reason. `branch { A } { A } = drop-top ; A` is not
-//! among them and does not need to be: it is `fork-dedup`, then
-//! `select-same`, then `dead-node`.
+//! Every one of them is stated at the `select`, because a `select` is the
+//! whole of what a branch is. Lifting work both arms do out in front is
+//! not among them: both arms read the one port once `copy-elim` has run,
+//! so two boxes doing the same work are two boxes on one set of sources,
+//! which is [`Law::Dedup`]. `branch { A } { A } = drop-top ; A` is
+//! `dedup`, then `select-same`, then `dead-node`.
 //!
-//! ### One end, or the whole branch
+//! ### What a block is, and what a window may say about one
 //!
-//! A rule is a local window, and a branch's arms lie *between* its two ends.
-//! So a window holds one end — or it holds **everything**, arms included.
-//! Both shapes are here, and the difference is what each can say.
+//! A block is a wire like any other, and nothing stands between an arm and
+//! what it reads. So a block that is the very value the condition tested
+//! *is* that value, and [`Law::SpecializeEqual`] says so by naming one
+//! source twice in its pattern — which is why these rules are as short as
+//! they are.
 //!
-//! Four of the laws hold one end. That is enough to talk about the
-//! condition, which is why it sits at port 0 of both ends, and it is what
-//! [`Law::SelectView`] keeps from being inert: everything an arm passes
-//! through arrives at a select from behind the fork, so a block is a *view*
-//! and not a value until that rule pulls it out.
+//! What licenses them is the **discard** — the fact that the select throws
+//! the untaken block away — and the discard is at the select, which is
+//! where they are stated. So what they reach is a block, and not the inside
+//! of an arm: `x` tested `equal` to `7` becomes `7` where the select reads
+//! it, while the boxes of the then arm go on reading `x`. A rule that
+//! reached inside would have to say which boxes are the arm's own, and
+//! nothing in the graph records that — a branch's arms are the boxes only
+//! that side's blocks read, which is a fact about the whole graph rather
+//! than about a window.
 //!
-//! But one end cannot see the **discard** — the fact that the select throws
-//! the untaken block away. So a one-ended rule may not reason from "the
-//! condition holds": a fork's views are plain copies, and a then-view *is*
-//! `x` whatever the condition says. That is why [`Law::SpecializeEqual`] and
-//! [`Law::SpecializeBool`] are stated at the select, and why they reach a
-//! block and not the inside of an arm.
-//!
-//! [`Law::SpecializeBool`] holds one box more than the branch: the `as_bool`
-//! that made the condition, sitting in front of the fork. A bool is the one
-//! kind of condition whose truthiness *is* its value, and having the
-//! coercion in the window is how the rule says the condition is one.
-//! [`Law::PromisedBool`] is what puts it there, which is the whole use of
-//! writing an instruction set's promise down as a box.
-//!
-//! [`Law::SelectLiteral`] holds the whole branch, and it does so by carrying
-//! the arms as **payload** — the way the term version carried subterms. That
-//! costs the table nothing, since [`sides`] implants them, and it buys two
-//! things. The two ends always go together, so no rule leaves a fork holding
-//! views that no select pairs with. And the discard is *inside the window*,
-//! which is exactly what a rule reasoning from the condition needs.
-//!
-//! So the boundary is not where a first reading suggests. Arm-local
-//! specialization is not beyond this representation; it is beyond a
-//! **one-ended** rule. Stated whole — the fork, the arms, the select, with
-//! the arms carried — `x` tested `equal` to `7` could become `7` inside the
-//! then arm, and the pair would be an honest equality: the two sides differ
-//! only where the select discards the difference. The specializing rules
-//! have not been rewritten that way yet, and that is the next thing to do,
-//! not a thing that cannot be done.
+//! [`Law::SpecializeBool`] holds one box more than the branch: the
+//! `as_bool` that made the condition. A bool is the one kind of condition
+//! whose truthiness *is* its value, and having the coercion in the window
+//! is how the rule says the condition is one — without it a condition of
+//! `5` is truthy and its then block reads `5`, not `true`.
+//! [`Law::PromisedBool`] is what puts the coercion there, which is the
+//! whole use of writing an instruction set's promise down as a box.
 //!
 //! ## Where the trust sits
 //!
@@ -217,8 +196,8 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 
 use crate::graph::{
-    BranchId, Direction, Embedding, Graph, Match, Mismatch, NodeId, NodeKind, Pair, Sink, Source,
-    Unpaired, check_match, find_at,
+    Direction, Embedding, Graph, Match, Mismatch, NodeId, NodeKind, Pair, Sink, Source, Unpaired,
+    check_match, find_at,
 };
 use bytecode::{Instruction, Library, Value};
 
@@ -239,19 +218,14 @@ pub enum Law {
     TupleCancel,
     AsTupleBuilt,
     EqualRefl,
-    // The branch layer. Every one of these is stated at an end of a branch
-    // that has the condition in its own window — see the module docs for why
-    // that is the only place some of them can be stated soundly at all.
-    ForkHoist,
-    ForkDedup,
-    SelectView,
+    // The branch layer. Every one of these is stated at the `select`, with
+    // the condition in its own window — see the module docs for why that is
+    // the only place some of them can be stated soundly at all.
     SelectSame,
     SelectLiteral,
-    SelectConst,
     SpecializeEqual,
     SpecializeBool,
     SpecializeChoice,
-    ViewValue,
     Shannon,
     SelectHoist,
     // The value layer: what an operation computes, measured on the machine.
@@ -287,16 +261,11 @@ impl Law {
             Law::TupleCancel => "tuple-cancel",
             Law::AsTupleBuilt => "as-tuple-built",
             Law::EqualRefl => "equal-refl",
-            Law::ForkHoist => "fork-hoist",
-            Law::ForkDedup => "fork-dedup",
-            Law::SelectView => "select-view",
             Law::SelectSame => "select-same",
             Law::SelectLiteral => "select-literal",
-            Law::SelectConst => "select-const",
             Law::SpecializeEqual => "specialize-equal",
             Law::SpecializeBool => "specialize-bool",
             Law::SpecializeChoice => "specialize-choice",
-            Law::ViewValue => "view-value",
             Law::Shannon => "shannon",
             Law::SelectHoist => "select-hoist",
             Law::PromisedBool => "promised-bool",
@@ -313,9 +282,9 @@ impl Law {
     /// Every law there is, in the order the enum declares them.
     ///
     /// Not a list to *drive* — [`structural`], [`branching`] and
-    /// [`folding`] are the lists a strategy spends, and `view-value` is
-    /// held out of all three on purpose. This is the vocabulary: what a
-    /// name can resolve to, and what a table of names is checked against.
+    /// [`folding`] are the lists a strategy spends. This is the
+    /// vocabulary: what a name can resolve to, and what a table of names is
+    /// checked against.
     pub fn every() -> Vec<Law> {
         vec![
             Law::IdElim,
@@ -328,16 +297,11 @@ impl Law {
             Law::TupleCancel,
             Law::AsTupleBuilt,
             Law::EqualRefl,
-            Law::ForkHoist,
-            Law::ForkDedup,
-            Law::SelectView,
             Law::SelectSame,
             Law::SelectLiteral,
-            Law::SelectConst,
             Law::SpecializeEqual,
             Law::SpecializeBool,
             Law::SpecializeChoice,
-            Law::ViewValue,
             Law::Shannon,
             Law::SelectHoist,
             Law::PromisedBool,
@@ -436,109 +400,26 @@ pub enum Rule {
     EqualRefl,
 
     // ---- the branch layer ----
-    /// The same operation done in both arms is one operation, done before
-    /// the fork — and its answer **still handed to the fork**, which is the
-    /// whole of the difference from [`Rule::ForkDedup`]. δ-naturality seen
-    /// through a `fork`: the views are copies, so `f` of a view is a view of
-    /// `f`, and the two boxes were always computing the one thing.
-    ///
-    /// The fork grows by the box's outputs: they become stack slots of its
-    /// own, and what read the arms' boxes reads the views of those slots.
-    /// So the value stays *inside* the branch, and a rule anchored at the
-    /// fork can still name it — which is the point. [`Rule::ForkDedup`] is
-    /// this law and [`Rule::ViewValue`] spent together, and spending them
-    /// together is what leaves the specializing rules nothing to hold: it
-    /// routes the answer around the fork, and once every arm reads around
-    /// it the fork is dead. The two are separated here so a strategy can
-    /// take the hoist without the bypass, the same way it holds
-    /// `view-value` back until nothing else fires.
-    ///
-    /// `ports[i]` is the fork input whose view the box's input `i` reads.
-    ForkHoist {
-        arity: usize,
-        kind: NodeKind,
-        ports: Vec<usize>,
-    },
-    /// The same operation done in both arms is one operation, done before
-    /// the fork. δ-naturality again, this time seeing through a `fork`: the
-    /// views are copies, so the two boxes were always computing the one
-    /// thing.
-    ///
-    /// The answer is read from **outside** the fork, so this is
-    /// [`Rule::ForkHoist`] with a [`Rule::ViewValue`] already spent on it.
-    /// It is the shorter road and it costs the fork: a branch whose arms
-    /// all read around it has nothing left reading its views.
-    ///
-    /// `ports[i]` is the fork input whose view the box's input `i` reads.
-    ForkDedup {
-        arity: usize,
-        kind: NodeKind,
-        ports: Vec<usize>,
-    },
-    /// A `select` block that is one of the views a `fork` handed out is the
-    /// value the fork was handed. The views are copies, so this is the
-    /// plainest wiring fact there is.
-    ///
-    /// It is also what makes the rest of this layer reach anything.
-    /// Everything an arm passes through arrives at the select **from behind
-    /// the fork**, so a rule that wants to say something about a block —
-    /// [`Rule::SelectSame`], and both of the specializing rules — finds a
-    /// view sitting there rather than the value. This pulls the value out.
-    ///
-    /// Every block that comes from the fork moves at once, and it has to:
-    /// a window holding the fork cannot leave a *second* block reading it
-    /// from outside, or what the match points at is the pattern plus a
-    /// link. The symmetric case — one wire through both arms — is the
-    /// common one, so this takes a list.
-    ///
-    /// `views[i]` is `(block, port)`: the select's block, counted over the
-    /// whole `2n` with the then side first, and the fork's output port,
-    /// counted over the whole `2f` the same way.
-    SelectView {
-        fork: usize,
-        arity: usize,
-        views: Vec<(usize, usize)>,
-    },
     /// A block a `select` answers with either way is what it answers: `if c
     /// then x else x = x`. The select keeps its other blocks and narrows by
     /// one.
+    ///
+    /// The row that `branch { A } { A } = drop-top ; A` comes to, once
+    /// `dedup` has made the two arms' boxes one and `dead-node` has taken
+    /// the condition away.
     SelectSame { arity: usize, at: usize },
-    /// β: a literal condition keeps its arm, and the whole branch goes with
-    /// it — fork, both arms, select. Sound on **every** value and not only
-    /// on booleans, because `truthy` is total: `false` is the one falsy
-    /// value and everything else takes the then block.
+    /// β: a literal condition is the blocks it chooses. Sound on **every**
+    /// value and not only on booleans, because `truthy` is total: `false`
+    /// is the one falsy value and everything else takes the then block.
     ///
-    /// The arms are **payload**, the way the term version carried subterms,
-    /// and that is what makes the window whole. A rule holding only the
-    /// select could fold the condition but not take the fork with it, and
-    /// would leave one end of a branch standing without the other. Carrying
-    /// the arms costs the table nothing — [`sides`] implants them — and buys
-    /// the two ends always going together.
-    ///
-    /// It also puts the **discard inside the window**, which is what a rule
-    /// reasoning from "the condition holds" needs and cannot get at either
-    /// end alone.
-    ///
-    /// Each arm takes its side's views first, then whatever it reads from
-    /// outside the branch, and leaves the blocks the select chooses between.
-    /// `fork` is `None` when the arms take nothing and there is no fork.
-    SelectLiteral {
-        value: Value,
-        fork: Option<usize>,
-        then_arm: Graph,
-        else_arm: Graph,
-    },
-    /// A literal condition on a select **no fork pairs with**: the select is
-    /// the blocks the literal chooses. [`Rule::SelectLiteral`] holds a whole
-    /// branch because a window must never leave one end standing without
-    /// the other; a select whose branch has no fork end has nothing to
-    /// strand, and needs no arms carried — its blocks come from outside.
+    /// The untaken arm is outside the window: its boxes lose their one
+    /// reader when the select goes, and `dead-node` collects them.
     ///
     /// `lit_blocks` names the block positions (over `2n`) that read the
     /// **literal itself** — the shape a `dedup` makes when the condition
     /// and an answer are one pushed value — because a boundary input may
     /// not stand for a port inside the window.
-    SelectConst {
+    SelectLiteral {
         value: Value,
         arity: usize,
         lit_blocks: Vec<usize>,
@@ -546,6 +427,12 @@ pub enum Rule {
     /// A value that tested `equal` to a literal **is** that literal, in the
     /// block the test chose. `equal` answers `Bool(a == b)`, so a truthy
     /// answer is `a == b` and nothing weaker.
+    ///
+    /// Stated at the select, and it has to be: one end of a branch cannot
+    /// see the **discard** — the fact that the select throws the untaken
+    /// block away — and reasoning from "the condition holds" is exactly
+    /// what the discard licenses. What it reaches is a block, not the
+    /// inside of an arm.
     SpecializeEqual {
         arity: usize,
         at: usize,
@@ -557,72 +444,39 @@ pub enum Rule {
     /// A truthy bool is `true` and a falsy one is `false` — there is
     /// nothing else for it to be — so both halves are exact.
     ///
-    /// The **fork is in the window**, and it has to be. An arm never sees
-    /// the condition directly — it sees whatever the fork handed it — so
-    /// the rule can only say "this is the condition" by holding the fork
-    /// and pointing at a stack slot the condition was copied into. That is
-    /// what `view` names, and requiring it to be the condition's own source
-    /// is half of the side condition.
+    /// The **`as_bool` is in the window**, and that is the side condition:
+    /// it sits where the condition is made, and its being there is what
+    /// says the condition is a bool. Without it the rule would be false — a
+    /// condition of `5` is truthy, and the then block would read `5` rather
+    /// than `true`. [`Law::PromisedBool`] is the row that puts one there,
+    /// which is the whole use of writing an instruction set's promise down
+    /// as a box.
     ///
-    /// The **`as_bool` is in the window too**, and it is the other half: it
-    /// sits where the condition is *made*, in front of the fork, and its
-    /// being there is what says the condition is a bool. Without that the
-    /// rule would be false — a condition of `5` is truthy, and the then
-    /// block would read `5` rather than `true`.
-    ///
-    /// It used to sit between the fork's view and the block instead, doing
-    /// the coercion on the way past. That reads the same on a value that is
-    /// not a bool and is unreachable on one that is: a condition already a
-    /// bool carries no coercion, and nothing puts one on a fork's view,
-    /// since [`Law::PromisedBool`] writes the promise on the *op* that made
-    /// the answer. Moved to the front, the rule fires on exactly what that
-    /// law leaves — which is the point of writing the promise down.
-    ///
-    /// `view` is the fork output the block reads and `at` the select's
-    /// block, each counted over the whole of `2f` and `2n`; `at < arity` is
-    /// the then side, and so decides which literal this folds to.
-    SpecializeBool {
-        fork: usize,
-        arity: usize,
-        view: usize,
-        at: usize,
-    },
-    /// A branch **inside an arm** whose condition is a view of the very
-    /// value the outer branch tested is already decided: its then blocks in
-    /// the outer then arm, its else blocks in the outer else arm — the same
-    /// value tested twice answers the same, and `false` is the one falsy
-    /// value.
+    /// `at` is the select's block, counted over the whole `2n`; `at <
+    /// arity` is the then side, and so decides which literal this folds to.
+    SpecializeBool { arity: usize, at: usize },
+    /// A branch **inside an arm** whose condition is the very value the
+    /// outer branch tested is already decided: its then blocks in the outer
+    /// then arm, its else blocks in the outer else arm — the same value
+    /// tested twice answers the same, and `false` is the one falsy value.
     ///
     /// [`Rule::SpecializeBool`] with the inner `select` where the `as_bool`
-    /// was, and the same window for the same reason: the outer fork names
-    /// the condition, the outer select holds the discard that makes
-    /// reasoning from "the condition held" sound, and the inner select
-    /// stays — only the outer blocks that read its answers come to read the
-    /// blocks it would choose.
+    /// was, and stated at the outer select for the same reason: that is
+    /// where the discard is, and the discard is what makes reasoning from
+    /// "the condition held" sound. The inner select stays — only the outer
+    /// blocks that read its answers come to read the blocks it would
+    /// choose.
     ///
-    /// `view` is the outer fork output the inner select's condition reads
-    /// (over `2f`); `inner` the inner select's arity; `moves` pairs an
-    /// inner output with the outer block that reads it (over `m` and `2n`),
-    /// every pair on the side `view` says.
+    /// `inner` is the inner select's arity; `side` says which arm of the
+    /// outer branch this is about; `moves` pairs an inner output with the
+    /// outer block that reads it (over `m` and `2n`), every pair on the
+    /// side `side` says.
     SpecializeChoice {
-        fork: usize,
         arity: usize,
         inner: usize,
-        view: usize,
+        side: bool,
         moves: Vec<(usize, usize)>,
     },
-    /// A fork's view of a value **is** the value: a view is a copy, so
-    /// everything that reads view `view` may read what the fork was handed
-    /// at that slot instead. Plain wiring — the mirror of `copy-elim`,
-    /// through the one copy `copy-elim` leaves alone.
-    ///
-    /// What it spends is not soundness but *information*: which port is an
-    /// arm's own view of a value is the fact the fork exists to record,
-    /// and the specializing laws anchor on it. Fired early it takes their
-    /// anchor with it, so a driver holds it back until nothing else fires
-    /// — a strategy's last resort, and stated as a law precisely so a
-    /// strategy can hold it.
-    ViewValue { fork: usize, view: usize },
     /// Case analysis, as an equation: a wire the instruction set promises
     /// is a bool is `true` or it is `false` — there is no third case — so
     /// everything downstream of it equals a branch holding one copy per
@@ -660,10 +514,9 @@ pub enum Rule {
     /// answers, so in full it is `(select(C, T, E) * id(k)) ; A`, and `k`
     /// is what `body` carries past the answers.
     ///
-    /// This is [`Rule::ForkHoist`] read at the other end of a branch, and
-    /// the reason both are needed. A fork's end lets work migrate across
-    /// it — out in front, or back into both arms — so a branch can always
-    /// grow *backwards*. Nothing said the same at the select's end, so a
+    /// A branch grows *backwards* for free: work in front of one is shared
+    /// by both arms as a matter of wiring, and two boxes doing it twice are
+    /// one box by `dedup`. Nothing said the same at the select's end, so a
     /// branch could never grow **forwards**: everything downstream of a
     /// select was beyond the reach of the whole branch layer, and a select
     /// could only ever be got rid of, never moved. This is that row.
@@ -708,9 +561,8 @@ pub enum Rule {
     /// could lie about.
     ///
     /// `operands` are the distinct literals in the window and `reads[i]`
-    /// names the one the operation's input `i` reads — said the way
-    /// [`Rule::ForkDedup`] says its ports, so one literal read twice
-    /// (`equal` after a `dedup`) is one box in the pattern.
+    /// names the one the operation's input `i` reads, so one literal read
+    /// twice (`equal` after a `dedup`) is one box in the pattern.
     Fold {
         prim: Prim,
         operands: Vec<Value>,
@@ -727,11 +579,11 @@ pub enum Rule {
     /// standing where any rule can see it.
     ///
     /// [`Rule::SpecializeBool`] is the rule that needs it. It says what a
-    /// branch decided about the value it tested, and it says it of an
-    /// `as_bool` reading a fork's view — the coercion being how an
-    /// arbitrary truthy value becomes the bool the branch settled. A
-    /// condition that is *already* a bool carries no coercion, so the rule
-    /// cannot see it. Spending this law first puts one there.
+    /// branch decided about the value it tested, and it says it of a
+    /// condition an `as_bool` made — the coercion being how an arbitrary
+    /// truthy value becomes the bool the branch settled. A condition that
+    /// is *already* a bool carries no coercion, so the rule cannot see it.
+    /// Spending this law first puts one there.
     ///
     /// Nothing about the equation needs a side condition: it is true of a
     /// promised bool however many `as_bool`s already stand on it. Not
@@ -799,7 +651,7 @@ pub enum Rule {
     /// `select` keeps the block `truthy` says — so the two are the same
     /// program by construction, with the arms answering the two values
     /// `truthy` can report. Nothing is read inside either arm, so the
-    /// branch needs no [`fork`](NodeKind::Fork) at all.
+    /// branch is the `select` and the two literals, and nothing else.
     ///
     /// This is the unpacking that puts a *decision* where a coercion
     /// stood, which is what a proof about the two cases of a truthiness
@@ -858,16 +710,11 @@ impl Rule {
             Rule::TupleCancel { .. } => Law::TupleCancel,
             Rule::AsTupleBuilt { .. } => Law::AsTupleBuilt,
             Rule::EqualRefl => Law::EqualRefl,
-            Rule::ForkHoist { .. } => Law::ForkHoist,
-            Rule::ForkDedup { .. } => Law::ForkDedup,
-            Rule::SelectView { .. } => Law::SelectView,
             Rule::SelectSame { .. } => Law::SelectSame,
             Rule::SelectLiteral { .. } => Law::SelectLiteral,
-            Rule::SelectConst { .. } => Law::SelectConst,
             Rule::SpecializeEqual { .. } => Law::SpecializeEqual,
             Rule::SpecializeBool { .. } => Law::SpecializeBool,
             Rule::SpecializeChoice { .. } => Law::SpecializeChoice,
-            Rule::ViewValue { .. } => Law::ViewValue,
             Rule::Shannon { .. } => Law::Shannon,
             Rule::SelectHoist { .. } => Law::SelectHoist,
             Rule::Fold { .. } => Law::Fold,
@@ -908,15 +755,10 @@ pub fn structural() -> Vec<Law> {
 /// so it cannot tell a graph that spent one of them from a graph that means
 /// something else. `vm` is the judge for those, and the tests call it.
 ///
-/// The other three are pure wiring and the oracle can judge them; they are
-/// here rather than in [`structural`] because they take a branch apart, and
-/// a rewriter that dissolves every branch it can is a strategy, which this
+/// The rest are pure wiring and the oracle can judge them; they are here
+/// rather than in [`structural`] because they take a branch apart, and a
+/// rewriter that dissolves every branch it can is a strategy, which this
 /// module does not decide.
-///
-/// The order matters for what a run finds: [`Law::SelectView`] is what pulls
-/// a block out from behind a fork, and until it has, none of the others has
-/// anything to match. That is a fact about the laws, and it is the sort of
-/// thing whatever drives them has to know.
 ///
 /// [`Law::SelectHoist`] is a branch law and is **not** here, for the reason
 /// the unpackings are not in [`folding`]: it grows a graph. A driver run to
@@ -926,11 +768,7 @@ pub fn structural() -> Vec<Law> {
 pub fn branching() -> Vec<Law> {
     vec![
         Law::SelectLiteral,
-        Law::SelectConst,
-        Law::SelectView,
         Law::SelectSame,
-        Law::ForkHoist,
-        Law::ForkDedup,
         Law::SpecializeEqual,
         Law::SpecializeBool,
         Law::SpecializeChoice,
@@ -982,7 +820,6 @@ pub fn is_wiring(law: Law) -> bool {
             | Law::EqualRefl
             | Law::PromisedBool
             | Law::SelectLiteral
-            | Law::SelectConst
             | Law::SpecializeEqual
             | Law::SpecializeBool
             | Law::SpecializeChoice
@@ -1091,10 +928,6 @@ impl std::error::Error for Error {}
 /// It reads no graph it was not handed, tests nothing, and decides nothing:
 /// a payload that states no equation comes back as [`Error::Ill`] rather
 /// than as a silently wrong pair.
-///
-/// The two sides share a branch-id namespace — a [`BranchId`] means the same
-/// branch on both — which is what lets a rule keep a branch across a
-/// rewrite rather than only make or delete one.
 pub fn sides(rule: &Rule) -> Result<Pair, Error> {
     let law = rule.law();
     let ill = |why| Error::Ill { law, why };
@@ -1123,13 +956,9 @@ pub fn sides(rule: &Rule) -> Result<Pair, Error> {
             (dead_box(kind.clone()), wires(inputs, Vec::new()))
         }
         Rule::Dedup { kind } => {
-            // A fork is a copy in everything but name, and the name is the
-            // point: merging two of them loses which port is an arm's own
-            // view of a value. A select carries the other end of the same
-            // fact.
-            if matches!(kind, NodeKind::Fork { .. } | NodeKind::Select { .. }) {
-                return Err(ill(Ill::Refused));
-            }
+            // Every kind is fair game, `select` included: two selects on one
+            // condition and one pair of blocks answer alike, which is the
+            // whole of what this row says of any box.
             let arity = kind.arity();
             let ins: Vec<Source> = (0..arity.inputs).map(Source::Input).collect();
 
@@ -1235,141 +1064,6 @@ pub fn sides(rule: &Rule) -> Result<Pair, Error> {
         }
 
         // ---- the branch layer ----
-        Rule::ForkHoist { arity, kind, ports } => {
-            let n = *arity;
-            // Refused for the reasons `fork-dedup` refuses: a fork or a
-            // select is the copy this is stated about, and a box reading
-            // none of the views is not about this fork at all.
-            if matches!(kind, NodeKind::Fork { .. } | NodeKind::Select { .. })
-                || ports.is_empty()
-                || ports.len() != kind.arity().inputs
-                || ports.iter().any(|&p| p >= n)
-            {
-                return Err(ill(Ill::Refused));
-            }
-            let handed: Vec<Source> = (0..=n).map(Source::Input).collect();
-
-            let mut apart = Graph::empty(n + 1);
-            let branch = apart.next_branch();
-            let views = apart.add(NodeKind::Fork { arity: n, branch }, handed.clone());
-            let this: Vec<Source> = ports.iter().map(|&p| views[p]).collect();
-            let that: Vec<Source> = ports.iter().map(|&p| views[n + p]).collect();
-            let mut out = views.clone();
-            out.extend(apart.add(kind.clone(), this));
-            out.extend(apart.add(kind.clone(), that));
-            apart.close(out);
-
-            // The box moves in front, and its answers become stack slots of
-            // the fork's own: arity `n` becomes `n + b`. What read the arms'
-            // boxes now reads the views of those slots, so the answer is
-            // still something the fork handed out.
-            let b = kind.arity().outputs;
-            let m = n + b;
-            let mut through = Graph::empty(n + 1);
-            let ahead: Vec<Source> = ports.iter().map(|&p| Source::Input(1 + p)).collect();
-            let shared = through.add(kind.clone(), ahead);
-            let branch = through.next_branch();
-            let mut carried = handed;
-            carried.extend(shared);
-            let views = through.add(NodeKind::Fork { arity: m, branch }, carried);
-            // The boundary `apart` states: the fork's `2n` views of the old
-            // slots, then the then answer, then the else answer.
-            let mut out: Vec<Source> = views[..n].to_vec();
-            out.extend(&views[m..m + n]);
-            out.extend(&views[n..m]);
-            out.extend(&views[m + n..2 * m]);
-            through.close(out);
-
-            (apart, through)
-        }
-        Rule::ForkDedup { arity, kind, ports } => {
-            let n = *arity;
-            // A fork is a copy of the two kinds this refuses, and merging two
-            // of *those* is what `dedup` refuses, for the same reason. A box
-            // that reads none of the views is not about this fork at all, and
-            // merging it is plain `dedup`.
-            if matches!(kind, NodeKind::Fork { .. } | NodeKind::Select { .. })
-                || ports.is_empty()
-                || ports.len() != kind.arity().inputs
-                || ports.iter().any(|&p| p >= n)
-            {
-                return Err(ill(Ill::Refused));
-            }
-            let handed: Vec<Source> = (0..=n).map(Source::Input).collect();
-
-            let mut apart = Graph::empty(n + 1);
-            let branch = apart.next_branch();
-            let views = apart.add(NodeKind::Fork { arity: n, branch }, handed.clone());
-            let this: Vec<Source> = ports.iter().map(|&p| views[p]).collect();
-            let that: Vec<Source> = ports.iter().map(|&p| views[n + p]).collect();
-            let mut out = views.clone();
-            out.extend(apart.add(kind.clone(), this));
-            out.extend(apart.add(kind.clone(), that));
-            apart.close(out);
-
-            let mut once = Graph::empty(n + 1);
-            let branch = once.next_branch();
-            let views = once.add(NodeKind::Fork { arity: n, branch }, handed);
-            let ahead: Vec<Source> = ports.iter().map(|&p| Source::Input(1 + p)).collect();
-            let shared = once.add(kind.clone(), ahead);
-            let mut out = views;
-            out.extend(shared.iter().copied());
-            out.extend(shared);
-            once.close(out);
-
-            (apart, once)
-        }
-        Rule::SelectView { fork, arity, views } => {
-            let (f, n) = (*fork, *arity);
-            let mut named: Vec<usize> = views.iter().map(|&(at, _)| at).collect();
-            named.sort_unstable();
-            named.dedup();
-            if f == 0
-                || views.is_empty()
-                || named.len() != views.len()
-                || views.iter().any(|&(at, v)| at >= 2 * n || v >= 2 * f)
-            {
-                return Err(ill(Ill::Refused));
-            }
-            // The condition, the fork's stack, and every block the fork does
-            // *not* supply.
-            let width = 1 + f + 2 * n - views.len();
-            let from_boundary: Vec<usize> = (0..2 * n).filter(|b| !named.contains(b)).collect();
-            let supplied = |b: usize| {
-                views
-                    .iter()
-                    .find(|&&(at, _)| at == b)
-                    .map(|&(_, v)| v)
-                    // The fork input the view stands for: output `i` and
-                    // output `f + i` are both the value handed in at `1 + i`.
-                    .ok_or_else(|| {
-                        let slot = from_boundary
-                            .iter()
-                            .position(|&o| o == b)
-                            .expect("one or other");
-                        Source::Input(1 + f + slot)
-                    })
-            };
-
-            let build = |through: bool| {
-                let mut g = Graph::empty(width);
-                let branch = g.next_branch();
-                let handed: Vec<Source> = (0..=f).map(Source::Input).collect();
-                let ports = g.add(NodeKind::Fork { arity: f, branch }, handed);
-                let mut takes = vec![Source::Input(0)];
-                takes.extend((0..2 * n).map(|b| match supplied(b) {
-                    Err(outside) => outside,
-                    Ok(v) if through => Source::Input(1 + v % f),
-                    Ok(v) => ports[v],
-                }));
-                let answers = g.add(NodeKind::Select { arity: n, branch }, takes);
-                let mut out = ports;
-                out.extend(answers);
-                g.close(out);
-                g
-            };
-            (build(false), build(true))
-        }
         Rule::SelectSame { arity, at } => {
             let (n, j) = (*arity, *at);
             if j >= n {
@@ -1391,25 +1085,17 @@ pub fn sides(rule: &Rule) -> Result<Pair, Error> {
             };
 
             let mut both = Graph::empty(2 * n);
-            let branch = both.next_branch();
             let mut takes = vec![Source::Input(0)];
             takes.extend((0..n).map(then));
             takes.extend((0..n).map(els));
-            let answers = both.add(NodeKind::Select { arity: n, branch }, takes);
+            let answers = both.add(NodeKind::Select { arity: n }, takes);
             both.close(answers);
 
             let mut fewer = Graph::empty(2 * n);
-            let branch = fewer.next_branch();
             let mut takes = vec![Source::Input(0)];
             takes.extend((0..n).filter(|&i| i != j).map(then));
             takes.extend((0..n).filter(|&i| i != j).map(els));
-            let kept = fewer.add(
-                NodeKind::Select {
-                    arity: n - 1,
-                    branch,
-                },
-                takes,
-            );
+            let kept = fewer.add(NodeKind::Select { arity: n - 1 }, takes);
             let mut answers = Vec::with_capacity(n);
             let mut next = 0;
             for i in 0..n {
@@ -1425,88 +1111,6 @@ pub fn sides(rule: &Rule) -> Result<Pair, Error> {
             (both, fewer)
         }
         Rule::SelectLiteral {
-            value,
-            fork,
-            then_arm,
-            else_arm,
-        } => {
-            let f = fork.unwrap_or(0);
-            let n = then_arm.arity().outputs;
-            if else_arm.arity().outputs != n
-                || then_arm.arity().inputs < f
-                || else_arm.arity().inputs < f
-            {
-                return Err(ill(Ill::Refused));
-            }
-            for side in [then_arm, else_arm] {
-                side.check().map_err(|e| ill(Ill::Broken(e)))?;
-            }
-            // What each arm reads from outside the branch, beyond its views.
-            let (t_extra, e_extra) = (then_arm.arity().inputs - f, else_arm.arity().inputs - f);
-            let width = f + t_extra + e_extra;
-            let outside = |at: usize, count: usize| (0..count).map(move |i| Source::Input(at + i));
-
-            let mut whole = Graph::empty(width);
-            let lit = whole.add(NodeKind::Op(Prim::Push(value.clone())), Vec::new());
-            let branch = whole.next_branch();
-            let views = match fork {
-                Some(wide) => {
-                    let mut handed = vec![lit[0]];
-                    handed.extend(outside(0, *wide));
-                    whole.add(
-                        NodeKind::Fork {
-                            arity: *wide,
-                            branch,
-                        },
-                        handed,
-                    )
-                }
-                None => Vec::new(),
-            };
-            let mut takes = views[..f].to_vec();
-            takes.extend(outside(f, t_extra));
-            let this = whole.implant(then_arm, &takes);
-            let mut takes = views[f..].to_vec();
-            takes.extend(outside(f + t_extra, e_extra));
-            let that = whole.implant(else_arm, &takes);
-            let mut chooses = vec![lit[0]];
-            chooses.extend(this);
-            chooses.extend(that);
-            let mut answers = whole.add(NodeKind::Select { arity: n, branch }, chooses);
-            // The literal is exported, so the rule does not also demand that
-            // nothing else reads it.
-            answers.push(lit[0]);
-            whole.close(answers);
-
-            // The arm the literal keeps, on the values the fork was handed —
-            // the views were copies of those, so it reads them straight.
-            let taken = value.truthy();
-            let (arm, at) = if taken {
-                (then_arm, f)
-            } else {
-                (else_arm, f + t_extra)
-            };
-            let mut kept = Graph::empty(width);
-            let lit = kept.add(NodeKind::Op(Prim::Push(value.clone())), Vec::new());
-            // A branch id means the same branch on both sides, so the ids
-            // this side does not use are skipped over rather than reused.
-            let skip = if taken {
-                1
-            } else {
-                1 + then_arm.branch_count()
-            };
-            for _ in 0..skip {
-                kept.next_branch();
-            }
-            let mut takes: Vec<Source> = outside(0, f).collect();
-            takes.extend(outside(at, arm.arity().inputs - f));
-            let mut answers = kept.implant(arm, &takes);
-            answers.push(lit[0]);
-            kept.close(answers);
-
-            (whole, kept)
-        }
-        Rule::SelectConst {
             value,
             arity,
             lit_blocks,
@@ -1531,19 +1135,17 @@ pub fn sides(rule: &Rule) -> Result<Pair, Error> {
 
             let mut both = Graph::empty(width);
             let lit = both.add(NodeKind::Op(Prim::Push(value.clone())), Vec::new())[0];
-            let branch = both.next_branch();
             let mut takes = vec![lit];
             takes.extend((0..2 * n).map(|b| source(lit, b)));
-            let mut out = both.add(NodeKind::Select { arity: n, branch }, takes);
+            let mut out = both.add(NodeKind::Select { arity: n }, takes);
+            // The literal is exported, so the rule does not also demand that
+            // nothing else reads it.
             out.push(lit);
             both.close(out);
 
             let taken = value.truthy();
             let mut chosen = Graph::empty(width);
             let lit = chosen.add(NodeKind::Op(Prim::Push(value.clone())), Vec::new())[0];
-            // The branch id is skipped, not reused: the equation's two
-            // sides share a namespace, and this side has no select.
-            chosen.next_branch();
             let mut out: Vec<Source> = (0..n)
                 .map(|j| source(lit, if taken { j } else { n + j }))
                 .collect();
@@ -1583,11 +1185,10 @@ pub fn sides(rule: &Rule) -> Result<Pair, Error> {
                 let mut g = Graph::empty(2 * n);
                 let lit = g.add(NodeKind::Op(Prim::Push(value.clone())), Vec::new());
                 let test = g.add(NodeKind::Op(Prim::Equal), operands(lit[0]));
-                let branch = g.next_branch();
                 let mut takes = vec![test[0]];
                 takes.extend((0..n).map(|i| if folded && i == j { lit[0] } else { then(i) }));
                 takes.extend((0..n).map(els));
-                let mut answers = g.add(NodeKind::Select { arity: n, branch }, takes);
+                let mut answers = g.add(NodeKind::Select { arity: n }, takes);
                 // Both the test and the literal stay readable from outside.
                 answers.push(test[0]);
                 answers.push(lit[0]);
@@ -1596,48 +1197,33 @@ pub fn sides(rule: &Rule) -> Result<Pair, Error> {
             };
             (build(false), build(true))
         }
-        Rule::SpecializeBool {
-            fork,
-            arity,
-            view,
-            at,
-        } => {
-            let (f, n, v, b) = (*fork, *arity, *view, *at);
-            if f == 0 || v >= 2 * f || b >= 2 * n {
+        Rule::SpecializeBool { arity, at } => {
+            let (n, b) = (*arity, *at);
+            if b >= 2 * n {
                 return Err(ill(Ill::Refused));
             }
             // The block is on the then side exactly when it is in the first
             // half, and that is what the branch decided about the condition.
             let decided = Value::Bool(b < n);
-            // The coercion's answer is the condition, and it is *also* the
-            // fork's stack slot `v % f`. Both are said in the pattern rather
-            // than tested — and the coercion being in the window is what says
-            // the condition is a bool, which is the whole of why a truthy
-            // condition may be read as `true`.
-            let slot = v % f;
-            let stack =
-                |i: usize| (i != slot).then(|| Source::Input(1 + if i < slot { i } else { i - 1 }));
-            let block = |other: usize| Source::Input(f + if other < b { other } else { other - 1 });
-            let width = f + 2 * n - 1;
+            // The block at `b` is the coercion's own answer — the condition
+            // itself — said once in the pattern rather than tested. That it
+            // is a *coerced* answer is the whole of the side condition: a
+            // truthy bool is `true`, where a truthy `5` is `5`.
+            let block = |other: usize| Source::Input(1 + if other < b { other } else { other - 1 });
 
             let build = |folded: bool| {
-                let mut g = Graph::empty(width);
+                let mut g = Graph::empty(2 * n);
                 let coerced = g.add(NodeKind::Op(Prim::AsBool), vec![Source::Input(0)])[0];
-                let branch = g.next_branch();
-                let mut handed = vec![coerced];
-                handed.extend((0..f).map(|i| stack(i).unwrap_or(coerced)));
-                let ports = g.add(NodeKind::Fork { arity: f, branch }, handed);
                 let known = if folded {
                     g.add(NodeKind::Op(Prim::Push(decided.clone())), Vec::new())[0]
                 } else {
-                    ports[v]
+                    coerced
                 };
                 let mut takes = vec![coerced];
                 takes.extend((0..2 * n).map(|other| if other == b { known } else { block(other) }));
-                let answers = g.add(NodeKind::Select { arity: n, branch }, takes);
-                let mut out = ports;
+                let answers = g.add(NodeKind::Select { arity: n }, takes);
                 // The coercion stays readable from outside.
-                out.push(coerced);
+                let mut out = vec![coerced];
                 out.extend(answers);
                 g.close(out);
                 g
@@ -1645,60 +1231,37 @@ pub fn sides(rule: &Rule) -> Result<Pair, Error> {
             (build(false), build(true))
         }
         Rule::SpecializeChoice {
-            fork,
             arity,
             inner,
-            view,
+            side,
             moves,
         } => {
-            let (f, n, m, v) = (*fork, *arity, *inner, *view);
-            let then = v < f;
+            let (n, m, then) = (*arity, *inner, *side);
             let mut taken: Vec<usize> = moves.iter().map(|&(_, b)| b).collect();
             taken.sort_unstable();
             taken.dedup();
-            if f == 0
-                || m == 0
+            if m == 0
                 || moves.is_empty()
                 || taken.len() != moves.len()
-                || v >= 2 * f
                 || moves
                     .iter()
                     .any(|&(j, b)| j >= m || b >= 2 * n || (b < n) != then)
             {
                 return Err(ill(Ill::Refused));
             }
-            // Boundary input 0 is the condition, and it is *also* the
-            // fork's stack slot `v % f` — the same side condition, said the
-            // same way. Then the inner select's blocks, then the outer
+            // Boundary input 0 is the condition, and **both** selects read
+            // it: that is the side condition, said in the pattern rather
+            // than tested. Then the inner select's blocks, then the outer
             // blocks no move covers.
-            let slot = v % f;
-            let stack = |i: usize| {
-                if i == slot {
-                    Source::Input(0)
-                } else {
-                    Source::Input(1 + if i < slot { i } else { i - 1 })
-                }
-            };
-            let iblock = |k: usize| Source::Input(f + k);
+            let iblock = |k: usize| Source::Input(1 + k);
             let outside: Vec<usize> = (0..2 * n).filter(|b| !taken.contains(b)).collect();
-            let width = f + 2 * m + 2 * n - moves.len();
+            let width = 1 + 2 * m + 2 * n - moves.len();
 
             let build = |folded: bool| {
                 let mut g = Graph::empty(width);
-                let branch = g.next_branch();
-                let mut handed = vec![Source::Input(0)];
-                handed.extend((0..f).map(stack));
-                let ports = g.add(NodeKind::Fork { arity: f, branch }, handed);
-                let within = g.next_branch();
-                let mut takes = vec![ports[v]];
+                let mut takes = vec![Source::Input(0)];
                 takes.extend((0..2 * m).map(iblock));
-                let chosen = g.add(
-                    NodeKind::Select {
-                        arity: m,
-                        branch: within,
-                    },
-                    takes,
-                );
+                let chosen = g.add(NodeKind::Select { arity: m }, takes);
                 let mut takes = vec![Source::Input(0)];
                 takes.extend((0..2 * n).map(|b| {
                     match moves.iter().find(|&&(_, at)| at == b) {
@@ -1709,35 +1272,15 @@ pub fn sides(rule: &Rule) -> Result<Pair, Error> {
                         Some(&(j, _)) => chosen[j],
                         None => {
                             let idx = outside.iter().position(|&o| o == b).expect("one or other");
-                            Source::Input(f + 2 * m + idx)
+                            Source::Input(1 + 2 * m + idx)
                         }
                     }
                 }));
-                let answers = g.add(NodeKind::Select { arity: n, branch }, takes);
-                let mut out = ports;
+                let answers = g.add(NodeKind::Select { arity: n }, takes);
                 // The inner select stays, and stays readable from outside.
-                out.extend(chosen);
+                let mut out = chosen;
                 out.extend(answers);
                 g.close(out);
-                g
-            };
-            (build(false), build(true))
-        }
-        Rule::ViewValue { fork, view } => {
-            let (f, v) = (*fork, *view);
-            if f == 0 || v >= 2 * f {
-                return Err(ill(Ill::Refused));
-            }
-            let build = |through: bool| {
-                let mut g = Graph::empty(f + 1);
-                let branch = g.next_branch();
-                let handed: Vec<Source> = (0..=f).map(Source::Input).collect();
-                let mut ports = g.add(NodeKind::Fork { arity: f, branch }, handed);
-                if through {
-                    // The view's readers read the slot the fork was handed.
-                    ports[v] = Source::Input(1 + v % f);
-                }
-                g.close(ports);
                 g
             };
             (build(false), build(true))
@@ -1780,11 +1323,10 @@ pub fn sides(rule: &Rule) -> Result<Pair, Error> {
             };
             let sure = copy(&mut split, true);
             let doubted = copy(&mut split, false);
-            let branch = split.next_branch();
             let mut chooses = vec![answer[0]];
             chooses.extend(sure);
             chooses.extend(doubted);
-            let mut out = split.add(NodeKind::Select { arity: m, branch }, chooses);
+            let mut out = split.add(NodeKind::Select { arity: m }, chooses);
             out.push(answer[0]);
             split.close(out);
 
@@ -1811,27 +1353,20 @@ pub fn sides(rule: &Rule) -> Result<Pair, Error> {
             };
 
             let mut chosen = Graph::empty(width);
-            // The branch is minted first on both sides, so index 0 names
-            // *this* branch on either — which is what carries the host's
-            // own branch across the rewrite rather than stranding its fork
-            // and minting a new one. A select is where a branch ends, and
-            // this row moves that end without ending a different branch.
-            let branch = chosen.next_branch();
             let mut takes = vec![Source::Input(0)];
             takes.extend((0..n).map(block(true)));
             takes.extend((0..n).map(block(false)));
-            let answers = chosen.add(NodeKind::Select { arity: n, branch }, takes);
+            let answers = chosen.add(NodeKind::Select { arity: n }, takes);
             let out = chosen.implant(body, &feeds(answers));
             chosen.close(out);
 
             let mut hoisted = Graph::empty(width);
-            let branch = hoisted.next_branch();
             let sure = hoisted.implant(body, &feeds((0..n).map(block(true)).collect()));
             let doubted = hoisted.implant(body, &feeds((0..n).map(block(false)).collect()));
             let mut chooses = vec![Source::Input(0)];
             chooses.extend(sure);
             chooses.extend(doubted);
-            let out = hoisted.add(NodeKind::Select { arity: m, branch }, chooses);
+            let out = hoisted.add(NodeKind::Select { arity: m }, chooses);
             hoisted.close(out);
 
             (chosen, hoisted)
@@ -2009,15 +1544,14 @@ pub fn sides(rule: &Rule) -> Result<Pair, Error> {
             let out = forced.add(NodeKind::Op(Prim::AsBool), vec![Source::Input(0)]);
             forced.close(out);
 
-            // Neither arm reads anything, so the branch has no fork: the
-            // two blocks are the two answers `truthy` can give, and the
-            // value itself is spent as the condition.
+            // Neither arm reads anything, so the branch is the select
+            // alone: the two blocks are the two answers `truthy` can give,
+            // and the value itself is spent as the condition.
             let mut asked = Graph::empty(1);
             let yes = asked.add(NodeKind::Op(Prim::Push(Value::Bool(true))), Vec::new());
             let no = asked.add(NodeKind::Op(Prim::Push(Value::Bool(false))), Vec::new());
-            let branch = asked.next_branch();
             let kept = asked.add(
-                NodeKind::Select { arity: 1, branch },
+                NodeKind::Select { arity: 1 },
                 vec![Source::Input(0), yes[0], no[0]],
             );
             asked.close(kept);
@@ -2045,12 +1579,10 @@ pub fn sides(rule: &Rule) -> Result<Pair, Error> {
             let mut guarded = Graph::empty(1);
             let holds = guarded.add(NodeKind::Op(test), vec![Source::Input(0)])[0];
             // The then block is the value itself — the identity half — and
-            // the else block the default. Neither arm computes anything,
-            // so again there is no fork to hand out views.
+            // the else block the default. Neither arm computes anything.
             let junk = guarded.add(NodeKind::Op(Prim::Push(junk)), Vec::new());
-            let branch = guarded.next_branch();
             let kept = guarded.add(
-                NodeKind::Select { arity: 1, branch },
+                NodeKind::Select { arity: 1 },
                 vec![holds, Source::Input(0), junk[0]],
             );
             guarded.close(kept);
@@ -2066,7 +1598,6 @@ pub fn sides(rule: &Rule) -> Result<Pair, Error> {
 fn dead_box(kind: NodeKind) -> Graph {
     let arity = kind.arity();
     let mut g = Graph::empty(arity.inputs);
-    let kind = g.refresh(kind);
     g.add(kind, (0..arity.inputs).map(Source::Input).collect());
     g.close(Vec::new());
     g
@@ -2308,40 +1839,6 @@ pub fn transplant(
 /// a payload is read off the box a rule would be anchored at — its kind and
 /// its widths, and nothing deeper. Every proposal goes through [`apply`],
 /// so one that is wrong costs a refusal.
-/// The boxes in a fork's *then* arm that could have an opposite number in
-/// the else arm, with the fork inputs their own inputs read views of.
-///
-/// Both hoisting laws are anchored here and take the same payload; the
-/// matcher is what finds the opposite number and refuses if there is none.
-/// A box reading anything but this fork's then views is not a candidate —
-/// it is not one operation done in both arms.
-fn arms_agree(graph: &Graph, fork: NodeId, arity: usize) -> Vec<(NodeKind, Vec<usize>)> {
-    let mut readers: Vec<NodeId> = Vec::new();
-    for port in 0..arity {
-        for &sink in graph.sinks(Source::Port { node: fork, port }) {
-            if let Sink::Port { node, .. } = sink
-                && !readers.contains(&node)
-            {
-                readers.push(node);
-            }
-        }
-    }
-    readers
-        .into_iter()
-        .filter_map(|reader| {
-            let ports: Option<Vec<usize>> = graph
-                .sources(reader)
-                .iter()
-                .map(|src| match src {
-                    Source::Port { node, port } if *node == fork && *port < arity => Some(*port),
-                    _ => None,
-                })
-                .collect();
-            Some((graph.kind(reader).clone(), ports?))
-        })
-        .collect()
-}
-
 pub fn propose(graph: &Graph, laws: &[Law], id: NodeId) -> Vec<Step> {
     if !graph.is_live(id) {
         return Vec::new();
@@ -2388,154 +1885,6 @@ pub fn instances(graph: &Graph, law: Law) -> Vec<Rule> {
         }
     }
     out
-}
-
-/// The boxes between a fork and one side of its select, lifted out as a
-/// graph of their own — the payload a whole-branch rule carries.
-///
-/// The region is what lies **downstream of that side's views and upstream
-/// of that side's blocks**. A box the arm merely reads and does not own — a
-/// literal shared with the world outside, say — is downstream of no view,
-/// so it stays outside and becomes one of the arm's own inputs.
-///
-/// `None` when the region is not self-contained: one of its boxes is read
-/// from outside the branch, so lifting it out would strand a reader. The
-/// rule then declines, which is the honest answer — a whole-branch window
-/// cannot hold a branch whose insides are not wholly its own.
-fn arm(
-    graph: &Graph,
-    select: NodeId,
-    blocks: &[Source],
-    side: std::ops::Range<usize>,
-    views: &[Source],
-) -> Option<Graph> {
-    // Downstream of the views, stopping at the select.
-    let mut ahead: HashSet<NodeId> = HashSet::new();
-    let mut todo: Vec<Source> = views.to_vec();
-    while let Some(src) = todo.pop() {
-        for &sink in graph.sinks(src) {
-            let Sink::Port { node, .. } = sink else {
-                continue;
-            };
-            if node == select || !ahead.insert(node) {
-                continue;
-            }
-            for port in 0..graph.kind(node).arity().outputs {
-                todo.push(Source::Port { node, port });
-            }
-        }
-    }
-    // ...and upstream of the blocks, which is where it stops being an arm.
-    let mut region: Vec<NodeId> = Vec::new();
-    let mut todo: Vec<Source> = blocks.to_vec();
-    while let Some(Source::Port { node, .. }) = todo.pop() {
-        if !ahead.contains(&node) || region.contains(&node) {
-            continue;
-        }
-        region.push(node);
-        todo.extend(graph.sources(node).iter().copied());
-    }
-    region.sort_unstable();
-    let mine: HashSet<NodeId> = region.iter().copied().collect();
-
-    // An order the arm can be rebuilt in. Ids will not do: a rewrite that
-    // re-points an old reader at a new box — `fork-dedup` does — leaves a
-    // low id reading a high one, so the region is sorted by its own edges.
-    let mut order: Vec<NodeId> = Vec::with_capacity(region.len());
-    while order.len() < region.len() {
-        let stuck = order.len();
-        for &node in &region {
-            if order.contains(&node) {
-                continue;
-            }
-            let ready = graph.sources(node).iter().all(|src| match src {
-                Source::Port { node: made, .. } => !mine.contains(made) || order.contains(made),
-                Source::Input(_) => true,
-            });
-            if ready {
-                order.push(node);
-            }
-        }
-        if order.len() == stuck {
-            return None;
-        }
-    }
-    let region = order;
-
-    // Self-contained, or nothing doing.
-    for &node in &region {
-        for port in 0..graph.kind(node).arity().outputs {
-            for &sink in graph.sinks(Source::Port { node, port }) {
-                let held = match sink {
-                    Sink::Output(_) => false,
-                    Sink::Port { node: reader, port } => {
-                        mine.contains(&reader) || (reader == select && side.contains(&port))
-                    }
-                };
-                if !held {
-                    return None;
-                }
-            }
-        }
-    }
-
-    // What it reads that it does not own: the views first, then the rest.
-    let held = |src: Source| matches!(src, Source::Port { node, .. } if mine.contains(&node));
-    let mut extra: Vec<Source> = Vec::new();
-    let sources = region
-        .iter()
-        .flat_map(|&node| graph.sources(node).iter().copied())
-        .chain(blocks.iter().copied());
-    for src in sources {
-        if !held(src) && !views.contains(&src) && !extra.contains(&src) {
-            extra.push(src);
-        }
-    }
-
-    let place: HashMap<NodeId, usize> = region.iter().enumerate().map(|(i, &n)| (n, i)).collect();
-    let mut branches: Vec<BranchId> = Vec::new();
-    for &node in &region {
-        if let NodeKind::Fork { branch, .. } | NodeKind::Select { branch, .. } = graph.kind(node)
-            && !branches.contains(branch)
-        {
-            branches.push(*branch);
-        }
-    }
-    let renumber = |kind: &NodeKind| {
-        let of = |b: &BranchId| BranchId::at(branches.iter().position(|h| h == b).expect("noted"));
-        match kind {
-            NodeKind::Fork { arity, branch } => NodeKind::Fork {
-                arity: *arity,
-                branch: of(branch),
-            },
-            NodeKind::Select { arity, branch } => NodeKind::Select {
-                arity: *arity,
-                branch: of(branch),
-            },
-            other => other.clone(),
-        }
-    };
-    let inside = |src: Source| match src {
-        Source::Port { node, port } if mine.contains(&node) => Source::Port {
-            node: NodeId::at(place[&node]),
-            port,
-        },
-        other => match views.iter().position(|&v| v == other) {
-            Some(i) => Source::Input(i),
-            None => {
-                Source::Input(views.len() + extra.iter().position(|&e| e == other).expect("noted"))
-            }
-        },
-    };
-
-    let mut lifted = Graph::empty(views.len() + extra.len());
-    for &node in &region {
-        let takes = graph.sources(node).iter().map(|&s| inside(s)).collect();
-        lifted.add(renumber(graph.kind(node)), takes);
-    }
-    lifted.close(blocks.iter().map(|&s| inside(s)).collect());
-    lifted.check().ok()?;
-    Some(lifted)
 }
 
 /// Everything downstream of one box's single answer, lifted out as a graph
@@ -2622,28 +1971,6 @@ fn downstream_of(graph: &Graph, answers: &[Source], spare: bool) -> Option<Graph
     }
 
     let place: HashMap<NodeId, usize> = region.iter().enumerate().map(|(i, &n)| (n, i)).collect();
-    let mut branches: Vec<BranchId> = Vec::new();
-    for &node in &region {
-        if let NodeKind::Fork { branch, .. } | NodeKind::Select { branch, .. } = graph.kind(node)
-            && !branches.contains(branch)
-        {
-            branches.push(*branch);
-        }
-    }
-    let renumber = |kind: &NodeKind| {
-        let of = |b: &BranchId| BranchId::at(branches.iter().position(|h| h == b).expect("noted"));
-        match kind {
-            NodeKind::Fork { arity, branch } => NodeKind::Fork {
-                arity: *arity,
-                branch: of(branch),
-            },
-            NodeKind::Select { arity, branch } => NodeKind::Select {
-                arity: *arity,
-                branch: of(branch),
-            },
-            other => other.clone(),
-        }
-    };
     let inside = |src: Source| match src {
         Source::Port { node, port } if mine.contains(&node) => Source::Port {
             node: NodeId::at(place[&node]),
@@ -2660,7 +1987,7 @@ fn downstream_of(graph: &Graph, answers: &[Source], spare: bool) -> Option<Graph
     let mut lifted = Graph::empty(answers.len() + extra.len());
     for &node in &region {
         let takes = graph.sources(node).iter().map(|&s| inside(s)).collect();
-        lifted.add(renumber(graph.kind(node)), takes);
+        lifted.add(graph.kind(node).clone(), takes);
     }
     lifted.close(
         graph
@@ -2696,7 +2023,6 @@ fn read_off(graph: &Graph, law: Law, id: NodeId) -> Vec<(Rule, NodeId)> {
         (Law::SwapElim, NodeKind::Op(Prim::Swap)) => one(Rule::SwapElim),
         (Law::CopyElim, NodeKind::Copy(n)) => one(Rule::CopyElim { n: *n }),
         (Law::DeadNode, _) => one(Rule::DeadNode { kind }),
-        (Law::Dedup, NodeKind::Fork { .. } | NodeKind::Select { .. }) => Vec::new(),
         (Law::Dedup, _) => one(Rule::Dedup { kind }),
         (Law::NotNot, NodeKind::Op(Prim::Not)) => one(Rule::NotNot),
 
@@ -2756,121 +2082,22 @@ fn read_off(graph: &Graph, law: Law, id: NodeId) -> Vec<(Rule, NodeId)> {
             }
         }
 
-        // A block that is really a value from before the fork.
-        (
-            Law::SelectView,
-            NodeKind::Select {
-                arity: n,
-                branch: mine,
-            },
-        ) => {
-            let n = *n;
-            // Every block this branch's fork supplies, together: a window
-            // holding the fork has to account for all of them at once.
-            let mut from: Option<(NodeId, usize)> = None;
-            let mut views: Vec<(usize, usize)> = Vec::new();
-            for b in 0..2 * n {
-                let Source::Port { node: fork, port } = takes[1 + b] else {
-                    continue;
-                };
-                let NodeKind::Fork { arity: f, branch } = graph.kind(fork) else {
-                    continue;
-                };
-                // The two ends of *one* branch: the same id, and the one
-                // condition, which is what port 0 on both ends is for.
-                if branch != mine || graph.sources(fork)[0] != takes[0] {
-                    continue;
-                }
-                if from.is_none() {
-                    from = Some((fork, *f));
-                }
-                if from == Some((fork, *f)) {
-                    views.push((b, port));
-                }
-            }
-            match from {
-                Some((fork, f)) => vec![(
-                    Rule::SelectView {
-                        fork: f,
-                        arity: n,
-                        views,
-                    },
-                    fork,
-                )],
-                None => Vec::new(),
-            }
-        }
-
         // A block the select answers with either way.
-        (Law::SelectSame, NodeKind::Select { arity: n, .. }) => (0..*n)
+        (Law::SelectSame, NodeKind::Select { arity: n }) => (0..*n)
             .filter(|j| takes[1 + j] == takes[1 + n + j])
             .map(|j| (Rule::SelectSame { arity: *n, at: j }, id))
             .collect(),
 
-        // A condition that is already a value — and, with it, the whole
-        // branch it decides.
-        (
-            Law::SelectLiteral,
-            NodeKind::Select {
-                arity: n,
-                branch: mine,
-            },
-        ) => {
+        // A condition that is already a value: the select is the blocks it
+        // chooses.
+        (Law::SelectLiteral, NodeKind::Select { arity: n }) => {
             let n = *n;
             let Some((lit, NodeKind::Op(Prim::Push(value)))) = made_by(takes[0]) else {
                 return Vec::new();
             };
-            let value = value.clone();
-            // The fork this select is paired with, if the arms take
-            // anything at all.
-            let paired = graph.live().find_map(|(node, kind)| match kind {
-                NodeKind::Fork { arity, branch } if branch == mine => Some((node, *arity)),
-                _ => None,
-            });
-            let f = paired.map_or(0, |(_, f)| f);
-            let views: Vec<Source> = paired
-                .into_iter()
-                .flat_map(|(node, f)| (0..2 * f).map(move |port| Source::Port { node, port }))
-                .collect();
-            let blocks = &takes[1..1 + 2 * n];
-            let Some(then_arm) = arm(graph, id, &blocks[..n], 1..1 + n, &views[..f]) else {
-                return Vec::new();
-            };
-            let Some(else_arm) = arm(graph, id, &blocks[n..], 1 + n..1 + 2 * n, &views[f..]) else {
-                return Vec::new();
-            };
-            vec![(
-                Rule::SelectLiteral {
-                    value,
-                    fork: paired.map(|(_, f)| f),
-                    then_arm,
-                    else_arm,
-                },
-                lit,
-            )]
-        }
-
-        // A literal condition on a select no fork pairs with.
-        (
-            Law::SelectConst,
-            NodeKind::Select {
-                arity: n,
-                branch: mine,
-            },
-        ) => {
-            let n = *n;
-            let Some((lit, NodeKind::Op(Prim::Push(value)))) = made_by(takes[0]) else {
-                return Vec::new();
-            };
-            let paired = graph
-                .live()
-                .any(|(_, kind)| matches!(kind, NodeKind::Fork { branch, .. } if branch == mine));
-            if paired {
-                return Vec::new();
-            }
             let lit_blocks: Vec<usize> = (0..2 * n).filter(|&b| takes[1 + b] == takes[0]).collect();
             vec![(
-                Rule::SelectConst {
+                Rule::SelectLiteral {
                     value: value.clone(),
                     arity: n,
                     lit_blocks,
@@ -2881,7 +2108,7 @@ fn read_off(graph: &Graph, law: Law, id: NodeId) -> Vec<(Rule, NodeId)> {
 
         // A condition that is a test against a literal, and a block that
         // answers with the very value tested.
-        (Law::SpecializeEqual, NodeKind::Select { arity: n, .. }) => {
+        (Law::SpecializeEqual, NodeKind::Select { arity: n }) => {
             let Some((test, NodeKind::Op(Prim::Equal))) = made_by(takes[0]) else {
                 return Vec::new();
             };
@@ -2910,16 +2137,10 @@ fn read_off(graph: &Graph, law: Law, id: NodeId) -> Vec<(Rule, NodeId)> {
                 .collect()
         }
 
-        // A block that answers with a view of the very condition, that
-        // condition being manifestly a bool — which is the only way an arm
-        // gets to see what the branch decided.
-        (
-            Law::SpecializeBool,
-            NodeKind::Select {
-                arity: n,
-                branch: mine,
-            },
-        ) => {
+        // A block that answers with the very value the condition was made
+        // of, that condition being manifestly a bool — which is the only
+        // way a block gets to say what the branch decided.
+        (Law::SpecializeBool, NodeKind::Select { arity: n }) => {
             let (n, cond) = (*n, takes[0]);
             // The `as_bool` that made the condition is the pattern's first
             // box, so it is what the search is anchored at.
@@ -2927,82 +2148,36 @@ fn read_off(graph: &Graph, law: Law, id: NodeId) -> Vec<(Rule, NodeId)> {
                 return Vec::new();
             };
             (0..2 * n)
-                .filter_map(|b| {
-                    let Source::Port { node: fork, port } = takes[1 + b] else {
-                        return None;
-                    };
-                    let NodeKind::Fork { arity: f, branch } = graph.kind(fork) else {
-                        return None;
-                    };
-                    let handed = graph.sources(fork);
-                    // One branch, and a stack slot the condition was copied
-                    // into — without which the view says nothing.
-                    (branch == mine && handed[0] == cond && handed[1 + port % f] == cond).then_some(
-                        (
-                            Rule::SpecializeBool {
-                                fork: *f,
-                                arity: n,
-                                view: port,
-                                at: b,
-                            },
-                            coercion,
-                        ),
-                    )
-                })
+                .filter(|&b| takes[1 + b] == cond)
+                .map(|b| (Rule::SpecializeBool { arity: n, at: b }, coercion))
                 .collect()
         }
 
         // A branch inside an arm, retesting the value the outer branch
         // tested — read off the outer select, one rule per inner select
         // among its blocks.
-        (
-            Law::SpecializeChoice,
-            NodeKind::Select {
-                arity: n,
-                branch: mine,
-            },
-        ) => {
+        (Law::SpecializeChoice, NodeKind::Select { arity: n }) => {
             let (n, cond) = (*n, takes[0]);
             let mut rules: Vec<(Rule, NodeId)> = Vec::new();
             let mut inners: Vec<NodeId> = Vec::new();
             for b in 0..2 * n {
-                let Source::Port {
-                    node: within,
-                    port: _,
-                } = takes[1 + b]
-                else {
+                let Source::Port { node: within, .. } = takes[1 + b] else {
                     continue;
                 };
-                let NodeKind::Select {
-                    arity: m,
-                    branch: nested,
-                } = graph.kind(within)
-                else {
+                let NodeKind::Select { arity: m } = graph.kind(within) else {
                     continue;
                 };
-                if nested == mine || inners.contains(&within) {
-                    continue;
-                }
-                let Source::Port {
-                    node: fork,
-                    port: v,
-                } = graph.sources(within)[0]
-                else {
-                    continue;
-                };
-                let NodeKind::Fork { arity: f, branch } = graph.kind(fork) else {
-                    continue;
-                };
-                let handed = graph.sources(fork);
-                if branch != mine || handed[0] != cond || handed[1 + v % f] != cond {
+                if inners.contains(&within) || graph.sources(within)[0] != cond {
                     continue;
                 }
                 // Every outer block this inner select answers, at once —
-                // and only on the side the view says.
-                let then = v < *f;
+                // and only on the side the first of them says, since a
+                // block on the other side is decided the other way and is
+                // a rule of its own.
+                let side = b < n;
                 let moves: Vec<(usize, usize)> = (0..2 * n)
                     .filter_map(|at| match takes[1 + at] {
-                        Source::Port { node, port } if node == within && (at < n) == then => {
+                        Source::Port { node, port } if node == within && (at < n) == side => {
                             Some((port, at))
                         }
                         _ => None,
@@ -3014,23 +2189,16 @@ fn read_off(graph: &Graph, law: Law, id: NodeId) -> Vec<(Rule, NodeId)> {
                 inners.push(within);
                 rules.push((
                     Rule::SpecializeChoice {
-                        fork: *f,
                         arity: n,
                         inner: *m,
-                        view: v,
+                        side,
                         moves,
                     },
-                    fork,
+                    within,
                 ));
             }
             rules
         }
-
-        // A view somebody reads, read as the value it is a view of.
-        (Law::ViewValue, NodeKind::Fork { arity: f, .. }) => (0..2 * f)
-            .filter(|&v| !graph.sinks(Source::Port { node: id, port: v }).is_empty())
-            .map(|v| (Rule::ViewValue { fork: *f, view: v }, id))
-            .collect(),
 
         // The instruction set's promise, written down as a box. Proposed
         // only where one is not already standing: the equation holds
@@ -3178,38 +2346,6 @@ fn read_off(graph: &Graph, law: Law, id: NodeId) -> Vec<(Rule, NodeId)> {
             one(Rule::CoercionGuard { prim: prim.clone() })
         }
 
-        // One operation done in both arms, hoisted in front. The two laws
-        // sit at the same site and take the same payload — they differ only
-        // in whether the answer comes back through the fork.
-        (Law::ForkHoist, NodeKind::Fork { arity: n, .. }) => arms_agree(graph, id, *n)
-            .into_iter()
-            .map(|(kind, ports)| {
-                (
-                    Rule::ForkHoist {
-                        arity: *n,
-                        kind,
-                        ports,
-                    },
-                    id,
-                )
-            })
-            .collect(),
-
-        // One operation done in both arms. Read off a box in the *then* arm;
-        // the matcher is what finds its opposite number.
-        (Law::ForkDedup, NodeKind::Fork { arity: n, .. }) => arms_agree(graph, id, *n)
-            .into_iter()
-            .map(|(kind, ports)| {
-                (
-                    Rule::ForkDedup {
-                        arity: *n,
-                        kind,
-                        ports,
-                    },
-                    id,
-                )
-            })
-            .collect(),
         _ => Vec::new(),
     }
 }
@@ -3219,7 +2355,7 @@ mod tests {
     use super::*;
     use crate::diagram2::build;
     use crate::diagram2::meaning::{Meaning, boundary, eval_graph};
-    use crate::graph::{find, find_pinned, isomorphic, kinds_fit, pins_itself};
+    use crate::graph::{find, find_pinned, isomorphic, pins_itself};
     use crate::term::Context;
     use bytecode::{Value, assemble};
 
@@ -3313,7 +2449,6 @@ mod tests {
             outputs: (0..g.arity().outputs)
                 .map(|j| vec![Sink::Output(j)])
                 .collect(),
-            branches: (0..g.branch_count()).map(BranchId::at).collect(),
         }
     }
 
@@ -3335,7 +2470,7 @@ mod tests {
     }
 
     fn only(kind: &NodeKind, graph: &Graph) -> NodeId {
-        let mut found = graph.live().filter(|(_, k)| kinds_fit(kind, k));
+        let mut found = graph.live().filter(|(_, k)| *k == kind);
         let (id, _) = found
             .next()
             .unwrap_or_else(|| panic!("no {} in\n{}", kind, graph));
@@ -3377,10 +2512,7 @@ mod tests {
             NodeKind::Op(Prim::Add),
             NodeKind::Op(Prim::Push(Value::Int(9))),
             NodeKind::Copy(2),
-            NodeKind::Select {
-                arity: 2,
-                branch: BranchId::at(7),
-            },
+            NodeKind::Select { arity: 2 },
         ] {
             holds(Law::DeadNode, Rule::DeadNode { kind });
         }
@@ -3418,28 +2550,17 @@ mod tests {
         );
     }
 
-    /// A fork is a copy in everything but the one fact it records, and the
-    /// rule that would delete that fact is refused before it is built.
+    /// A select is a box like any other here: two of them on one condition
+    /// and one pair of blocks answer alike, so the row states an equation
+    /// rather than a refusal.
     #[test]
-    fn dedup_refuses_the_two_ends_of_a_branch() {
-        for kind in [
-            NodeKind::Fork {
-                arity: 2,
-                branch: BranchId::at(0),
+    fn dedup_holds_of_a_branch_too() {
+        holds(
+            Law::Dedup,
+            Rule::Dedup {
+                kind: NodeKind::Select { arity: 2 },
             },
-            NodeKind::Select {
-                arity: 2,
-                branch: BranchId::at(0),
-            },
-        ] {
-            assert_eq!(
-                sides(&Rule::Dedup { kind }).unwrap_err(),
-                Error::Ill {
-                    law: Law::Dedup,
-                    why: Ill::Refused
-                }
-            );
-        }
+        );
     }
 
     // ---- the branch layer ----
@@ -3479,8 +2600,8 @@ mod tests {
 
     /// A graph with a literal on every one of its inputs, as a term.
     /// A closed graph, run: every operation on the machine itself
-    /// ([`run_window`], so there is no second semantics), a fork handing
-    /// out its copies, a select keeping the block `truthy` says.
+    /// ([`run_window`], so there is no second semantics), and a select
+    /// keeping the block `truthy` says.
     fn eval_on(graph: &Graph, inputs: &[Value]) -> Vec<Value> {
         assert_eq!(inputs.len(), graph.arity().inputs, "one value per input");
         let mut held: HashMap<Source, Value> = inputs
@@ -3500,8 +2621,7 @@ mod tests {
                 NodeKind::Id(_) => took,
                 NodeKind::Copy(_) => [took.clone(), took].concat(),
                 NodeKind::Drop(_) => Vec::new(),
-                NodeKind::Fork { .. } => [took[1..].to_vec(), took[1..].to_vec()].concat(),
-                NodeKind::Select { arity, .. } => {
+                NodeKind::Select { arity } => {
                     let n = *arity;
                     if took[0].truthy() {
                         took[1..=n].to_vec()
@@ -3610,101 +2730,11 @@ mod tests {
         );
     }
 
-    /// One operation done in both arms is one operation. The fork's views
-    /// are copies, so the two boxes were always computing the one thing —
-    /// which makes this pure wiring, and the opaque oracle can judge it.
-    #[test]
-    fn one_operation_in_both_arms_is_one_operation() {
-        holds(
-            Law::ForkDedup,
-            Rule::ForkDedup {
-                arity: 1,
-                kind: NodeKind::Op(Prim::Not),
-                ports: vec![0],
-            },
-        );
-        // The same equation, with the answer handed back to the fork rather
-        // than read around it. What it keeps is the anchor, not the meaning.
-        holds(
-            Law::ForkHoist,
-            Rule::ForkHoist {
-                arity: 1,
-                kind: NodeKind::Op(Prim::Not),
-                ports: vec![0],
-            },
-        );
-        holds(
-            Law::ForkHoist,
-            Rule::ForkHoist {
-                arity: 3,
-                kind: NodeKind::Op(Prim::Add),
-                ports: vec![2, 0],
-            },
-        );
-        holds(
-            Law::ForkDedup,
-            Rule::ForkDedup {
-                arity: 3,
-                kind: NodeKind::Op(Prim::Add),
-                ports: vec![2, 0],
-            },
-        );
-        // The two ends of a branch are what a fork is for, so merging two of
-        // *them* is refused for the reason `dedup` refuses it.
-        for kind in [
-            NodeKind::Fork {
-                arity: 1,
-                branch: BranchId::at(0),
-            },
-            NodeKind::Select {
-                arity: 1,
-                branch: BranchId::at(0),
-            },
-        ] {
-            assert!(matches!(
-                sides(&Rule::ForkDedup {
-                    arity: 3,
-                    kind,
-                    ports: vec![0],
-                }),
-                Err(Error::Ill {
-                    why: Ill::Refused,
-                    ..
-                })
-            ));
-        }
-        // A box that reads none of the views is not about this fork, and
-        // merging it is plain `dedup`.
-        assert!(matches!(
-            sides(&Rule::ForkDedup {
-                arity: 1,
-                kind: NodeKind::Op(Prim::Push(Value::Int(1))),
-                ports: Vec::new(),
-            }),
-            Err(Error::Ill {
-                why: Ill::Refused,
-                ..
-            })
-        ));
-    }
-
-    /// A choice between one value is that value — and the rule that pulls a
-    /// block out from behind a fork, which is what gives it anything to fire
-    /// on.
+    /// A choice between one value is that value.
     #[test]
     fn a_block_answered_either_way_is_the_answer() {
         holds(Law::SelectSame, Rule::SelectSame { arity: 1, at: 0 });
         holds(Law::SelectSame, Rule::SelectSame { arity: 3, at: 1 });
-        for (fork, arity, views) in [
-            (1, 1, vec![(0, 0)]),
-            // The symmetric case: one wire through both arms, which is what
-            // a window holding the fork has to take in one bite.
-            (1, 1, vec![(0, 0), (1, 1)]),
-            (2, 3, vec![(5, 3)]),
-            (2, 2, vec![(1, 0), (3, 2), (2, 1)]),
-        ] {
-            holds(Law::SelectView, Rule::SelectView { fork, arity, views });
-        }
     }
 
     /// An arm of one box on the view it was handed.
@@ -3726,89 +2756,57 @@ mod tests {
         g
     }
 
-    /// An arm that hands its view straight on.
-    fn passes() -> Graph {
-        let mut g = Graph::empty(1);
-        g.close(vec![Source::Input(0)]);
-        g
-    }
-
-    /// An arm that reads nothing and answers with a literal. It still takes
-    /// `f` inputs — an arm is handed every view whether it looks at them or
-    /// not.
-    fn yields(f: usize, v: Value) -> Graph {
-        let mut g = Graph::empty(f);
-        let out = g.add(NodeKind::Op(Prim::Push(v)), Vec::new());
-        g.close(out);
-        g
-    }
-
     /// β. Sound on **every** value and not only on booleans, because
     /// `truthy` is total: `false` is the one falsy value, so zero and junk
     /// and the empty tuple all take the then block.
     ///
-    /// The arms come along as payload, so the pair the law states is the
-    /// **whole branch** against one arm — which is why the fork goes with
-    /// the select rather than being left behind.
+    /// The window is the literal and the select, and nothing else: the
+    /// untaken arm's boxes are left to `dead-node`.
     #[test]
-    fn a_literal_condition_keeps_its_arm() {
+    fn a_literal_condition_keeps_its_blocks() {
         for value in [
             Value::Bool(true),
             Value::Bool(false),
             Value::Int(0),
             Value::unit(),
         ] {
-            // Arms that take nothing, so there is no fork to pair with.
-            the_machine_agrees(
-                Law::SelectLiteral,
-                Rule::SelectLiteral {
-                    value: value.clone(),
-                    fork: None,
-                    then_arm: yields(0, Value::Int(1)),
-                    else_arm: yields(0, Value::Int(2)),
-                },
-            );
-            // Arms that each do a box's worth of work on their own view.
-            the_machine_agrees(
-                Law::SelectLiteral,
-                Rule::SelectLiteral {
-                    value: value.clone(),
-                    fork: Some(1),
-                    then_arm: one_step(NodeKind::Op(Prim::Not)),
-                    else_arm: one_step(NodeKind::Op(Prim::Negate)),
-                },
-            );
-            // One arm passing its view through, the other ignoring it.
-            the_machine_agrees(
-                Law::SelectLiteral,
-                Rule::SelectLiteral {
-                    value: value.clone(),
-                    fork: Some(1),
-                    then_arm: passes(),
-                    else_arm: yields(1, Value::Int(5)),
-                },
-            );
+            for (arity, lit_blocks) in [
+                (1, Vec::new()),
+                (2, Vec::new()),
+                // The condition read as an answer too — the shape a `dedup`
+                // makes of one pushed value.
+                (1, vec![0]),
+                (2, vec![1, 2]),
+            ] {
+                the_machine_agrees(
+                    Law::SelectLiteral,
+                    Rule::SelectLiteral {
+                        value: value.clone(),
+                        arity,
+                        lit_blocks,
+                    },
+                );
+            }
         }
     }
 
     /// The same value tested twice answers the same: a branch inside an
-    /// arm, retesting a view of the outer condition, is decided by which
-    /// arm it sits in.
+    /// arm, retesting the outer condition, is decided by which arm it sits
+    /// in.
     #[test]
     fn a_value_retested_in_an_arm_is_decided() {
-        for (view, moves) in [
+        for (side, moves) in [
             // In the then arm the value was truthy; in the else arm it was
             // `false`, the one falsy value.
-            (0, vec![(0, 0)]),
-            (1, vec![(0, 1)]),
+            (true, vec![(0, 0)]),
+            (false, vec![(0, 1)]),
         ] {
             the_machine_agrees(
                 Law::SpecializeChoice,
                 Rule::SpecializeChoice {
-                    fork: 1,
                     arity: 1,
                     inner: 1,
-                    view,
+                    side,
                     moves,
                 },
             );
@@ -3817,10 +2815,9 @@ mod tests {
         the_machine_agrees(
             Law::SpecializeChoice,
             Rule::SpecializeChoice {
-                fork: 1,
                 arity: 2,
                 inner: 2,
-                view: 0,
+                side: true,
                 moves: vec![(0, 0), (1, 1)],
             },
         );
@@ -3828,10 +2825,9 @@ mod tests {
         // from "the condition held" does not reach the other arm.
         assert!(matches!(
             sides(&Rule::SpecializeChoice {
-                fork: 1,
                 arity: 1,
                 inner: 1,
-                view: 0,
+                side: true,
                 moves: vec![(0, 1)],
             }),
             Err(Error::Ill {
@@ -3839,15 +2835,6 @@ mod tests {
                 ..
             })
         ));
-    }
-
-    /// A view is a copy, so reading through it and reading past it are one
-    /// wiring — judged by the opaque oracle, like every wiring law.
-    #[test]
-    fn a_view_is_its_value() {
-        holds(Law::ViewValue, Rule::ViewValue { fork: 1, view: 0 });
-        holds(Law::ViewValue, Rule::ViewValue { fork: 1, view: 1 });
-        holds(Law::ViewValue, Rule::ViewValue { fork: 2, view: 3 });
     }
 
     /// η, as an equation: everything downstream of a promised bool is a
@@ -3967,9 +2954,8 @@ mod tests {
         // `select(2)` on five wires: one answer feeds a `negate`, the other
         // leaves by the boundary.
         let mut graph = Graph::empty(5);
-        let branch = graph.next_branch();
         let answers = graph.add(
-            NodeKind::Select { arity: 2, branch },
+            NodeKind::Select { arity: 2 },
             (0..5).map(Source::Input).collect(),
         );
         let negated = graph.add(NodeKind::Op(Prim::Negate), vec![answers[0]]);
@@ -3977,7 +2963,7 @@ mod tests {
         graph.check().unwrap();
         let before = graph.clone();
 
-        let select = only(&NodeKind::Select { arity: 2, branch }, &graph);
+        let select = only(&NodeKind::Select { arity: 2 }, &graph);
         let steps = propose(&graph, &[Law::SelectHoist], select);
         let [step] = &steps[..] else {
             panic!("one branch to move, and {} proposals", steps.len());
@@ -3996,7 +2982,7 @@ mod tests {
             "the body did not go into both arms:\n{}",
             graph
         );
-        let moved = only(&NodeKind::Select { arity: 2, branch }, &graph);
+        let moved = only(&NodeKind::Select { arity: 2 }, &graph);
         assert_ne!(moved, select, "the select was not rebuilt:\n{}", graph);
         assert_eq!(
             graph.sources(moved)[0],
@@ -4146,31 +3132,6 @@ mod tests {
             the_machine_agrees(Law::AsTupleBuilt, Rule::AsTupleBuilt { n });
         }
         the_machine_agrees(Law::EqualRefl, Rule::EqualRefl);
-    }
-
-    /// A literal condition on a select no fork pairs with — including the
-    /// shape a `dedup` makes, where the condition and a block are one
-    /// pushed value.
-    #[test]
-    fn a_forkless_select_on_a_literal_is_its_blocks() {
-        for value in [Value::Bool(true), Value::Bool(false), Value::Int(0)] {
-            the_machine_agrees(
-                Law::SelectConst,
-                Rule::SelectConst {
-                    value: value.clone(),
-                    arity: 1,
-                    lit_blocks: Vec::new(),
-                },
-            );
-            the_machine_agrees(
-                Law::SelectConst,
-                Rule::SelectConst {
-                    value,
-                    arity: 2,
-                    lit_blocks: vec![1, 2],
-                },
-            );
-        }
     }
 
     /// Rebuilding what `untuple n` took apart is the coercion.
@@ -4402,43 +3363,23 @@ mod tests {
         );
     }
 
-    /// An arm that reads something from outside the branch is still an arm;
-    /// what it reads becomes one of its own inputs, and the pattern's
-    /// boundary carries it.
+    /// A payload naming a block the select does not have states no
+    /// equation, and is refused before anything is compared.
     #[test]
-    fn an_arm_may_read_from_outside_the_branch() {
-        let mut adds = Graph::empty(2);
-        let out = adds.add(
-            NodeKind::Op(Prim::Add),
-            vec![Source::Input(0), Source::Input(1)],
-        );
-        adds.close(out);
-        let rule = Rule::SelectLiteral {
-            value: Value::Bool(true),
-            fork: Some(1),
-            then_arm: adds,
-            else_arm: yields(1, Value::Int(5)),
-        };
-        let pair = sides(&rule).unwrap();
-        let lhs = pair.lhs();
-        // One view, plus the outside value the then arm reads.
-        assert_eq!(lhs.arity().inputs, 2);
-        the_machine_agrees(Law::SelectLiteral, rule);
-    }
-
-    /// A payload whose arms disagree about how much they answer with states
-    /// no equation, and is refused before anything is compared.
-    #[test]
-    fn arms_that_answer_differently_are_refused() {
-        let mut two = Graph::empty(1);
-        two.close(vec![Source::Input(0), Source::Input(0)]);
+    fn a_block_the_select_lacks_is_refused() {
         assert!(matches!(
             sides(&Rule::SelectLiteral {
                 value: Value::Bool(true),
-                fork: Some(1),
-                then_arm: passes(),
-                else_arm: two,
+                arity: 1,
+                lit_blocks: vec![2],
             }),
+            Err(Error::Ill {
+                why: Ill::Refused,
+                ..
+            })
+        ));
+        assert!(matches!(
+            sides(&Rule::SelectSame { arity: 1, at: 1 }),
             Err(Error::Ill {
                 why: Ill::Refused,
                 ..
@@ -4472,17 +3413,9 @@ mod tests {
     /// instruction, and the else block is reached only by `false`.
     #[test]
     fn as_bool_of_a_condition_is_what_the_branch_decided() {
-        // `at < arity` is the then side; both halves, and both views.
-        for (fork, arity, view, at) in [(1, 1, 0, 0), (1, 1, 1, 1)] {
-            the_machine_agrees(
-                Law::SpecializeBool,
-                Rule::SpecializeBool {
-                    fork,
-                    arity,
-                    view,
-                    at,
-                },
-            );
+        // `at < arity` is the then side; both halves, at two widths.
+        for (arity, at) in [(1, 0), (1, 1), (2, 1), (2, 3)] {
+            the_machine_agrees(Law::SpecializeBool, Rule::SpecializeBool { arity, at });
         }
     }
 
@@ -4513,7 +3446,6 @@ mod tests {
                     port: 0,
                 }],
                 outputs: vec![vec![Sink::Output(0)]],
-                branches: Vec::new(),
             },
         };
         assert_eq!(refuse(&mut graph, &step), Mismatch::Kind(not));
@@ -4528,7 +3460,6 @@ mod tests {
                 nodes: vec![not],
                 inputs: vec![Source::Input(0)],
                 outputs: Vec::new(),
-                branches: Vec::new(),
             },
         };
         assert_eq!(
@@ -4551,7 +3482,6 @@ mod tests {
                     port: 0,
                 }],
                 outputs: Vec::new(),
-                branches: Vec::new(),
             },
         };
         assert_eq!(
@@ -4570,7 +3500,6 @@ mod tests {
                 nodes: vec![not, not],
                 inputs: vec![Source::Port { node: not, port: 0 }],
                 outputs: vec![vec![], vec![]],
-                branches: Vec::new(),
             },
         };
         assert_eq!(refuse(&mut graph, &step), Mismatch::Shape);
@@ -4661,7 +3590,6 @@ mod tests {
                 nodes: Vec::new(),
                 inputs: vec![Source::Port { node: not, port: 0 }],
                 outputs: vec![vec![Sink::Output(0)], vec![]],
-                branches: Vec::new(),
             },
         };
         let back = apply(&mut graph, &step).unwrap();
@@ -4705,29 +3633,8 @@ mod tests {
             Rule::TupleCancel { n: 2 },
             Rule::AsTupleBuilt { n: 2 },
             Rule::EqualRefl,
-            Rule::ForkHoist {
-                arity: 1,
-                kind: NodeKind::Op(Prim::Not),
-                ports: vec![0],
-            },
-            Rule::ForkDedup {
-                arity: 1,
-                kind: NodeKind::Op(Prim::Not),
-                ports: vec![0],
-            },
-            Rule::SelectView {
-                fork: 1,
-                arity: 1,
-                views: vec![(0, 0)],
-            },
             Rule::SelectSame { arity: 1, at: 0 },
             Rule::SelectLiteral {
-                value: Value::Bool(true),
-                fork: Some(1),
-                then_arm: one_step(NodeKind::Op(Prim::Not)),
-                else_arm: one_step(NodeKind::Op(Prim::Negate)),
-            },
-            Rule::SelectConst {
                 value: Value::Bool(false),
                 arity: 1,
                 lit_blocks: vec![1],
@@ -4738,20 +3645,13 @@ mod tests {
                 value: Value::Int(7),
                 literal: Side::Top,
             },
-            Rule::SpecializeBool {
-                fork: 1,
-                arity: 1,
-                view: 0,
-                at: 0,
-            },
+            Rule::SpecializeBool { arity: 1, at: 0 },
             Rule::SpecializeChoice {
-                fork: 1,
                 arity: 1,
                 inner: 1,
-                view: 0,
+                side: true,
                 moves: vec![(0, 0)],
             },
-            Rule::ViewValue { fork: 2, view: 3 },
             Rule::Shannon {
                 kind: NodeKind::Op(Prim::IsBool),
                 body: one_step(NodeKind::Op(Prim::Not)),
@@ -4785,8 +3685,8 @@ mod tests {
     }
 
     /// Every law there is, the lists included and the several they leave
-    /// out — a driver holds `view-value` back on purpose, and the two
-    /// unpackings grow a graph, so no list hands any of them out. Taken
+    /// out — `shannon`, `select-hoist` and the two unpackings grow a
+    /// graph, so no list hands any of them out. Taken
     /// from the enum rather than rebuilt here, so a law added to the table
     /// is a law this file's round trips cover.
     fn every_law() -> Vec<Law> {
@@ -4822,9 +3722,9 @@ mod tests {
     /// table's own shapes, and says so here.
     ///
     /// The corpus cannot ask this. A graph fresh out of [`build`] has no
-    /// shape that a rewrite made, so four of the branch laws — everything
-    /// downstream of `select-view` — never match one at all, however many
-    /// sentences are walked.
+    /// shape that a rewrite made, so the specializing rows — which want a
+    /// block that a rewrite has identified with the condition — never
+    /// match one at all, however many sentences are walked.
     #[test]
     fn a_law_is_read_back_off_the_shape_it_states() {
         // A law added to the table and not to the list above would be a row
@@ -4911,10 +3811,10 @@ mod tests {
     /// how many times a sentence pushes it.
     #[test]
     fn every_proposal_on_a_program_is_accepted() {
-        // Between them, every law a built graph can offer. The four the
-        // list cannot reach — `select-view` and everything downstream of it
-        // — want a shape a rewrite makes, and are covered above against the
-        // shapes the table itself states.
+        // Between them, every law a built graph can offer. The ones the
+        // list cannot reach — the specializing rows — want a shape a
+        // rewrite makes, and are covered above against the shapes the
+        // table itself states.
         // A fresh graph pads its literals behind `id` boxes, so the fold
         // has nothing to read until `id-elim` has fired — the value layer
         // only reaches a graph the structural layer has cleaned.
@@ -4944,43 +3844,20 @@ mod tests {
                 Law::CopyElim,
                 Law::DeadNode,
                 Law::PromisedBool,
-                Law::ViewValue,
                 Law::Shannon,
             ],
         );
         offers(
             "pick 0 push 1 equal branch { not } { negate }",
-            &[
-                Law::IdElim,
-                Law::CopyElim,
-                Law::PromisedBool,
-                Law::ViewValue,
-                Law::Shannon,
-            ],
+            &[Law::IdElim, Law::CopyElim, Law::PromisedBool, Law::Shannon],
         );
-        // One operation in both arms, on views the fork hands out in more
-        // than one port — which is where the hoisting payloads say something
-        // a one-port arm cannot check. Both readings offer: `fork-hoist`
-        // hands the answer back to the fork, `fork-dedup` reads it around.
-        offers(
-            "branch { add } { add }",
-            &[
-                Law::CopyElim,
-                Law::ForkHoist,
-                Law::ForkDedup,
-                Law::ViewValue,
-            ],
-        );
+        // One operation in both arms is two boxes on one copy's ports,
+        // and once `copy-elim` has run it is two boxes on one set of
+        // sources — which is `dedup`.
+        offers("branch { add } { add }", &[Law::CopyElim]);
         offers(
             "push 1 pick 1 branch { add } { add }",
-            &[
-                Law::IdElim,
-                Law::SwapElim,
-                Law::CopyElim,
-                Law::ForkHoist,
-                Law::ForkDedup,
-                Law::ViewValue,
-            ],
+            &[Law::IdElim, Law::SwapElim, Law::CopyElim],
         );
         // Work after a branch, which is what `select-hoist` reads: the
         // region downstream of the select's answers, lifted out as the
@@ -4989,21 +3866,13 @@ mod tests {
         // whatever made the wire it turns on.
         offers(
             "branch { negate } { negate } negate",
-            &[
-                Law::CopyElim,
-                Law::ForkHoist,
-                Law::ForkDedup,
-                Law::ViewValue,
-                Law::SelectHoist,
-            ],
+            &[Law::CopyElim, Law::SelectHoist],
         );
 
-        // Arms that take nothing leave no fork, so both readings of a
-        // literal condition offer: the whole-branch fold, and the
-        // fork-less one.
+        // A literal condition: the select is the blocks it chooses.
         offers(
             "push true branch { push 1 } { push 2 }",
-            &[Law::SelectLiteral, Law::SelectConst],
+            &[Law::SelectLiteral],
         );
     }
 
@@ -5041,7 +3910,7 @@ mod tests {
         let all = Law::every();
         assert_eq!(
             all.len(),
-            30,
+            25,
             "a law joined the table: name it, and list it in `Law::every`"
         );
         let mut names: Vec<&str> = all.iter().map(|law| law.name()).collect();
@@ -5049,7 +3918,7 @@ mod tests {
         let spelled = names.len();
         names.dedup();
         assert_eq!(names.len(), spelled, "two laws share a spelling");
-        for law in [structural(), branching(), folding(), vec![Law::ViewValue]].concat() {
+        for law in [structural(), branching(), folding()].concat() {
             assert!(all.contains(&law), "{:?} is on no vocabulary", law);
         }
     }
@@ -5071,12 +3940,7 @@ mod tests {
             })
             .collect();
         for (_, kind) in graph.live() {
-            assert!(
-                matches!(kind, NodeKind::Fork { .. } | NodeKind::Select { .. })
-                    || deduped.contains(kind),
-                "no `dedup` payload for {:?}",
-                kind
-            );
+            assert!(deduped.contains(kind), "no `dedup` payload for {:?}", kind);
         }
         for kind in &deduped {
             assert!(
@@ -5125,8 +3989,7 @@ mod tests {
     ///
     /// Two steps, and the second names a box the *first one made* — which is
     /// the whole difficulty in carrying a run somewhere else, since that box
-    /// has a different id wherever it is put down. The second also brings a
-    /// branch, so the branch ids travel too.
+    /// has a different id wherever it is put down.
     fn open_a_double_negative() -> (Graph, Vec<Step>) {
         let lemma = sides(&Rule::NotNot).unwrap().lhs().clone();
         let mut alone = lemma.clone();
@@ -5143,7 +4006,6 @@ mod tests {
                 nodes: vec![made],
                 inputs: vec![Source::Input(0)],
                 outputs: vec![vec![Sink::Output(0)]],
-                branches: Vec::new(),
             },
         };
         apply(&mut alone, &second).unwrap();
@@ -5223,7 +4085,6 @@ mod tests {
             nodes: vec![boxes[1], boxes[0]],
             inputs: vec![Source::Input(0)],
             outputs: vec![vec![Sink::Output(0)]],
-            branches: Vec::new(),
         };
         let mut there = host.clone();
         assert!(matches!(

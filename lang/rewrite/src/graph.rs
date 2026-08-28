@@ -48,8 +48,7 @@
 //!
 //! ## Embeddings compose
 //!
-//! A match is a map: this graph's boxes, boundary and branches, read as
-//! another's. [`Embedding`] is that map kept in a form that outlives a
+//! A match is a map: this graph's boxes and boundary, read as another's. [`Embedding`] is that map kept in a form that outlives a
 //! rewrite, and [`Embedding::carry`] composes two of them — a match against
 //! an inner graph, said against the outer one.
 //!
@@ -90,36 +89,6 @@ impl NodeId {
     }
 }
 
-/// Which branch a [`NodeKind::Fork`] and a [`NodeKind::Select`] are the two
-/// ends of.
-///
-/// The pairing is recorded rather than inferred, for the same reason a link
-/// is written at both ends: a rule that wants the arm a value belongs to
-/// should read the fact, not reconstruct it by walking the graph and hoping
-/// the walk agrees with what the builder meant.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct BranchId(u32);
-
-impl BranchId {
-    /// Where this branch sits in the order its graph handed them out, which
-    /// is what [`rules`](crate::diagram2::rules) keys a renaming by.
-    pub fn index(self) -> usize {
-        self.0 as usize
-    }
-
-    /// The id at a position — what a caller naming a branch of a graph it is
-    /// building needs, the same way [`NodeId::at`] names a box.
-    pub fn at(index: usize) -> BranchId {
-        BranchId(u32::try_from(index).expect("a graph fits in u32"))
-    }
-}
-
-impl fmt::Display for BranchId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "#{}", self.0)
-    }
-}
-
 /// Where an input port reads from — one producer, always.
 ///
 /// [`Source::Input`] is the graph's own boundary, which is the price of
@@ -153,10 +122,9 @@ pub enum Sink {
 /// [`Op`][NodeKind::Op]: it is a prim like any other, and the rewriter is
 /// where the fact that it is *structural* gets used, not the type.
 ///
-/// `PartialEq` compares a [`BranchId`] as the number it is, which is right
-/// for two boxes of one graph and wrong for two graphs — a branch id is
-/// graph-local. [`rules::same_kind`](crate::diagram2::rules) is what a match needs, and it
-/// carries the renaming.
+/// `PartialEq` is the whole of what a match needs of two boxes: a kind is
+/// its own description, and holds nothing that means one thing in one
+/// graph and another in the next.
 #[derive(Debug, Clone, PartialEq)]
 pub enum NodeKind {
     /// `id(n)`: `n` in, the same `n` out.
@@ -171,48 +139,31 @@ pub enum NodeKind {
     /// A sentence called by name, left unopened; the arity is carried for
     /// the same reason [`Term::Call`](crate::term::Term::Call) carries it.
     Call { target: SentenceIndex, arity: Arity },
-    /// `fork(n)`: the two views of the stack a branch's arms get.
-    ///
-    /// **Input 0 is the condition**, inputs `1..=n` the stack; `2n` out,
-    /// the `then` view at `0..n` and the `else` view at `n..2n`, block-wise
-    /// exactly as `copy(n)` is. The condition is not used to compute
-    /// anything here — a fork hands out both views whatever it says — and
-    /// that is the point: it is read so that a **rule anchored at a fork
-    /// can see what governs the arms it is splitting**. `specialize-equal`,
-    /// where a value that tested `equal` to a literal is that literal in
-    /// the then arm, is stated at the fork and needs the `equal` in its
-    /// left-hand side; without the condition here the rule could not name
-    /// it, because the arms lie between the fork and the `select` and no
-    /// local window holds both ends.
-    ///
-    /// It *is* a copy otherwise, and the only reason it is not one is that
-    /// `copy-elim` would delete it. Deleting it costs the one fact no other
-    /// part of the graph records: which port is an arm's own view of a
-    /// value — the answer `specialize-equal` writes.
-    Fork { arity: usize, branch: BranchId },
     /// `select(n)`: the two blocks of an answer, and the condition that
-    /// keeps one of them.
+    /// keeps one of them. A branch is this box and nothing else.
     ///
     /// **Input 0 is the condition**, inputs `1..=n` the `then` block and
     /// `n+1..=2n` the `else` block. Output `i` is input `1 + i` when the
-    /// condition holds and input `1 + n + i` otherwise: this is the `fork`
-    /// it is paired with, read backwards.
+    /// condition holds and input `1 + n + i` otherwise.
     ///
     /// The condition sits at the *bottom* rather than on top, where the
-    /// term puts it, so that both ends of a branch read it in the same
-    /// place. A rule that wants the condition then finds it at port 0
-    /// whichever end it is anchored at, and [`read_back`](crate::diagram2::read_back) pays for it by
-    /// hoisting the wire before it writes the `branch`.
+    /// term puts it, so a rule that wants it finds it at port 0, and
+    /// [`read_back`](crate::diagram2::read_back) pays for it by hoisting
+    /// the wire before it writes the `branch`.
     ///
-    /// A branch's arms are not in here. They are ordinary boxes in the one
-    /// graph between the two ends, so a rule reaches into an arm from
-    /// outside and a value reaches out of one. Both arms are computed, which
-    /// is the single-arm hoist of
+    /// The arms are not in here. They are ordinary boxes upstream of the
+    /// blocks, fed by a plain `copy(n)` that `copy-elim` deletes like any
+    /// other, so a rule reaches into an arm from outside and a value
+    /// reaches out of one. What makes a box an arm's own is that nothing
+    /// but that side's blocks reads it — a fact about the whole graph, not
+    /// something any box records.
+    ///
+    /// Both arms are computed, which is the single-arm hoist of
     /// [docs/totality.md](../../../docs/totality.md) — sound because every
     /// [`Prim`] is total, has no effect but the stack, and, unlike the
     /// term-level rule, states its arity locally even when it is a
     /// [`NodeKind::Call`].
-    Select { arity: usize, branch: BranchId },
+    Select { arity: usize },
 }
 
 impl NodeKind {
@@ -225,7 +176,6 @@ impl NodeKind {
             NodeKind::Drop(n) => Arity::new(*n, 0),
             NodeKind::Op(prim) => prim.arity(),
             NodeKind::Call { arity, .. } => *arity,
-            NodeKind::Fork { arity, .. } => Arity::new(arity + 1, 2 * arity),
             NodeKind::Select { arity, .. } => Arity::new(2 * arity + 1, *arity),
         }
     }
@@ -233,13 +183,9 @@ impl NodeKind {
     /// Whether this is one of the boxes rewriting is here to delete.
     ///
     /// `drop` is not on the list: it goes by `dead-node`, which is about
-    /// having no readers rather than about being structural.
-    /// Whether a rule deletes this.
-    ///
-    /// A `fork` is structure by any other reading — it is a `copy` — but it
-    /// is not *rewritable* structure, and this predicate is what the rules
-    /// and [`no_structure`](../../../hana) are asking about. The branch layer
-    /// survives on purpose.
+    /// having no readers rather than about being structural. Nor is
+    /// `select`: it is the one box a branch is, and taking a branch apart
+    /// is the branch layer's work, not structure's.
     pub fn is_structural(&self) -> bool {
         matches!(
             self,
@@ -268,9 +214,6 @@ pub struct Graph {
     inputs: Vec<Vec<Sink>>,
     /// What each boundary output reads, deepest first.
     outputs: Vec<Source>,
-    /// Branch ids handed out so far. Never reused, so a `fork` and the
-    /// `select` it was built with name each other for the life of the graph.
-    branches: u32,
 }
 
 impl Graph {
@@ -279,7 +222,6 @@ impl Graph {
             nodes: Vec::new(),
             inputs: vec![Vec::new(); inputs],
             outputs: Vec::new(),
-            branches: 0,
         }
     }
 
@@ -291,35 +233,9 @@ impl Graph {
     pub(crate) fn of_box(kind: NodeKind) -> Graph {
         let arity = kind.arity();
         let mut graph = Graph::empty(arity.inputs);
-        let kind = graph.refresh(kind);
         let ports = graph.add(kind, (0..arity.inputs).map(Source::Input).collect());
         graph.close(ports);
         graph
-    }
-
-    /// The same box with a branch id of this graph's own — a branch id off
-    /// another graph names nothing here, which is why a pattern built out of
-    /// a host's boxes mints its own and lets [`Match::branches`] carry the
-    /// correspondence back.
-    pub(crate) fn refresh(&mut self, kind: NodeKind) -> NodeKind {
-        match kind {
-            NodeKind::Fork { arity, .. } => NodeKind::Fork {
-                arity,
-                branch: self.next_branch(),
-            },
-            NodeKind::Select { arity, .. } => NodeKind::Select {
-                arity,
-                branch: self.next_branch(),
-            },
-            other => other,
-        }
-    }
-
-    /// A branch id no other pair in this graph holds.
-    pub(crate) fn next_branch(&mut self) -> BranchId {
-        let id = BranchId(self.branches);
-        self.branches += 1;
-        id
     }
 
     /// What the whole graph takes and leaves.
@@ -343,15 +259,6 @@ impl Graph {
     /// How many boxes are left.
     pub fn live_count(&self) -> usize {
         self.nodes.iter().filter(|n| n.is_some()).count()
-    }
-
-    /// How many branch ids this graph has handed out.
-    ///
-    /// What a caller building a graph that must agree with another on which
-    /// branch is which needs: ids are never reused, so a count is a name for
-    /// the next one.
-    pub fn branch_count(&self) -> usize {
-        self.branches as usize
     }
 
     pub fn kind(&self, id: NodeId) -> &NodeKind {
@@ -419,14 +326,6 @@ impl Graph {
         let arity = kind.arity();
         debug_assert_eq!(inputs.len(), arity.inputs, "the caller cuts by arity");
         let id = NodeId(u32::try_from(self.nodes.len()).expect("a graph fits in u32"));
-        // A box put down carrying a branch id this graph has not handed out
-        // is a graph built by *renumbering* another's boxes — a region
-        // lifted out, a graph implanted. Counting it here is what keeps
-        // `next_branch` clear of the ids the graph already holds, wherever
-        // they came from.
-        if let NodeKind::Fork { branch, .. } | NodeKind::Select { branch, .. } = &kind {
-            self.branches = self.branches.max(branch.0 + 1);
-        }
         self.nodes.push(Some(Node {
             kind,
             inputs: inputs.clone(),
@@ -514,9 +413,8 @@ pub fn under(graph: &Graph, k: usize) -> Graph {
 // ---- whether two graphs are one diagram ------------------------------------------
 
 /// Whether the two graphs are the same diagram: a bijection of live boxes
-/// preserving every kind (modulo a bijection of branch ids) and every link,
-/// with both boundaries pinned — input `i` to input `i`, output `j` to
-/// output `j`.
+/// preserving every kind and every link, with both boundaries pinned —
+/// input `i` to input `i`, output `j` to output `j`.
 ///
 /// Whole-graph equality, not [`find`]'s embedding: no window, no
 /// reader-split, nothing left to a choice. Dead slots and the numbers ids
@@ -533,7 +431,7 @@ pub fn isomorphic(a: &Graph, b: &Graph) -> bool {
     // The multiset of box shapes must agree before any search is worth
     // running — and this is what keeps the common "no" cheap.
     let census = |g: &Graph| {
-        let mut kinds: Vec<String> = g.live().map(|(_, kind)| erased(kind)).collect();
+        let mut kinds: Vec<String> = g.live().map(|(_, kind)| format!("{:?}", kind)).collect();
         kinds.sort_unstable();
         kinds
     };
@@ -545,20 +443,8 @@ pub fn isomorphic(a: &Graph, b: &Graph) -> bool {
         b,
         map: vec![None; a.nodes.len()],
         used: HashSet::new(),
-        branches: HashMap::new(),
-        branch_used: HashSet::new(),
     };
     iso.walk()
-}
-
-/// A box's shape with its branch id erased — what a bijection may compare
-/// directly, the pairing being its own business.
-fn erased(kind: &NodeKind) -> String {
-    match kind {
-        NodeKind::Fork { arity, .. } => format!("fork({})", arity),
-        NodeKind::Select { arity, .. } => format!("select({})", arity),
-        other => format!("{:?}", other),
-    }
 }
 
 struct Iso<'g> {
@@ -567,8 +453,6 @@ struct Iso<'g> {
     /// Image of `a`'s boxes in `b`, by `a`'s own index.
     map: Vec<Option<NodeId>>,
     used: HashSet<NodeId>,
-    branches: HashMap<BranchId, BranchId>,
-    branch_used: HashSet<BranchId>,
 }
 
 impl Iso<'_> {
@@ -577,11 +461,11 @@ impl Iso<'_> {
             return self.verify();
         };
         for y in self.candidates(x) {
-            if let Some(bound) = self.assign(x, y) {
+            if self.assign(x, y) {
                 if self.walk() {
                     return true;
                 }
-                self.unassign(x, y, bound);
+                self.unassign(x, y);
             }
         }
         false
@@ -656,49 +540,12 @@ impl Iso<'_> {
         self.b.live().map(|(id, _)| id).collect()
     }
 
-    /// Pins `x` to `y`, answering the branch pairing it bound — the undo
-    /// log — or `None` if they cannot correspond. Edges whose other end is
-    /// not yet placed defer to [`Iso::verify`].
-    fn assign(&mut self, x: NodeId, y: NodeId) -> Option<Option<BranchId>> {
-        if self.used.contains(&y) {
-            return None;
+    /// Pins `x` to `y`, or says they cannot correspond. Edges whose other
+    /// end is not yet placed defer to [`Iso::verify`].
+    fn assign(&mut self, x: NodeId, y: NodeId) -> bool {
+        if self.used.contains(&y) || self.a.kind(x) != self.b.kind(y) {
+            return false;
         }
-        let bound = match (self.a.kind(x), self.b.kind(y)) {
-            (
-                NodeKind::Fork { arity, branch },
-                NodeKind::Fork {
-                    arity: n,
-                    branch: to,
-                },
-            )
-            | (
-                NodeKind::Select { arity, branch },
-                NodeKind::Select {
-                    arity: n,
-                    branch: to,
-                },
-            ) => {
-                if arity != n {
-                    return None;
-                }
-                match self.branches.get(branch) {
-                    Some(held) if held != to => return None,
-                    Some(_) => None,
-                    None => {
-                        if self.branch_used.contains(to) {
-                            return None;
-                        }
-                        self.branches.insert(*branch, *to);
-                        self.branch_used.insert(*to);
-                        Some(*branch)
-                    }
-                }
-            }
-            (NodeKind::Fork { .. } | NodeKind::Select { .. }, _)
-            | (_, NodeKind::Fork { .. } | NodeKind::Select { .. }) => return None,
-            (p, q) if p == q => None,
-            _ => return None,
-        };
         for (src, dst) in self.a.sources(x).iter().zip(self.b.sources(y)) {
             let fits = match (*src, *dst) {
                 (Source::Input(i), Source::Input(j)) => i == j,
@@ -708,26 +555,17 @@ impl Iso<'_> {
                 _ => false,
             };
             if !fits {
-                self.rollback(bound);
-                return None;
+                return false;
             }
         }
         self.map[x.index()] = Some(y);
         self.used.insert(y);
-        Some(bound)
+        true
     }
 
-    fn rollback(&mut self, bound: Option<BranchId>) {
-        if let Some(branch) = bound {
-            let to = self.branches.remove(&branch).expect("bound above");
-            self.branch_used.remove(&to);
-        }
-    }
-
-    fn unassign(&mut self, x: NodeId, y: NodeId, bound: Option<BranchId>) {
+    fn unassign(&mut self, x: NodeId, y: NodeId) {
         self.map[x.index()] = None;
         self.used.remove(&y);
-        self.rollback(bound);
     }
 
     /// Every box placed; hold the whole claim to agreeing — the deferred
@@ -785,27 +623,6 @@ impl Graph {
                     outputs: node.outputs.len(),
                 });
             }
-        }
-        // A branch is two boxes that name each other, so a graph holding
-        // two forks — or two selects — for one branch is a builder bug, and
-        // this is where it surfaces rather than in whatever rule later reads
-        // the pairing and gets the wrong end.
-        let mut ends: HashMap<(BranchId, bool), NodeId> = HashMap::new();
-        for (id, kind) in self.live() {
-            let end = match kind {
-                NodeKind::Fork { branch, .. } => (*branch, true),
-                NodeKind::Select { branch, .. } => (*branch, false),
-                _ => continue,
-            };
-            if let Some(&first) = ends.get(&end) {
-                return Err(Error::BranchTwice {
-                    branch: end.0,
-                    fork: end.1,
-                    first,
-                    second: id,
-                });
-            }
-            ends.insert(end, id);
         }
         // Every reader names a source that lists it back...
         for (id, _) in self.live() {
@@ -921,13 +738,6 @@ pub enum Error {
     Torn { source: Source, sink: Sink },
     /// A node that reaches itself.
     Cyclic(NodeId),
-    /// Two nodes claiming to be the same end of one branch.
-    BranchTwice {
-        branch: BranchId,
-        fork: bool,
-        first: NodeId,
-        second: NodeId,
-    },
 }
 
 impl fmt::Display for Error {
@@ -952,19 +762,6 @@ impl fmt::Display for Error {
                 source, sink
             ),
             Error::Cyclic(node) => write!(f, "node {} reaches itself", node),
-            Error::BranchTwice {
-                branch,
-                fork,
-                first,
-                second,
-            } => write!(
-                f,
-                "nodes {} and {} are both the {} of branch {}",
-                first,
-                second,
-                if *fork { "fork" } else { "select" },
-                branch
-            ),
         }
     }
 }
@@ -1029,9 +826,7 @@ impl std::error::Error for Unpaired {}
 ///
 /// Both sides pass [`Graph::check`] and they share an arity, both settled
 /// once at construction so that [`Pair::apply`] can index either side
-/// without asking again. The two also share a **branch-id namespace**: a
-/// [`BranchId`] means the same branch on both sides, which is what lets a
-/// rewrite carry a branch across rather than only make or delete one.
+/// without asking again.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Pair {
     lhs: Graph,
@@ -1132,10 +927,6 @@ pub struct Match {
     pub inputs: Vec<Source>,
     /// The host sinks the pattern's boundary output `j` serves.
     pub outputs: Vec<Vec<Sink>>,
-    /// Image of the pattern's branch ids, by the pattern's own id. A branch
-    /// id is graph-local, so the correspondence is recorded rather than
-    /// compared.
-    pub branches: Vec<BranchId>,
 }
 
 impl Match {
@@ -1170,7 +961,6 @@ impl Match {
                 .iter()
                 .map(|sinks| sinks.iter().map(|&sink| reader(sink)).collect())
                 .collect(),
-            branches: self.branches.clone(),
         }
     }
 }
@@ -1208,8 +998,6 @@ pub struct Embedding {
     inputs: Vec<Source>,
     /// The outer sinks the inner graph's boundary output `j` serves.
     outputs: Vec<Vec<Sink>>,
-    /// What the outer graph calls the inner one's branch.
-    branches: HashMap<BranchId, BranchId>,
 }
 
 impl Embedding {
@@ -1229,19 +1017,13 @@ impl Embedding {
                 .collect(),
             inputs: at.inputs.clone(),
             outputs: at.outputs.clone(),
-            branches: at
-                .branches
-                .iter()
-                .enumerate()
-                .map(|(i, &to)| (BranchId::at(i), to))
-                .collect(),
         }
     }
 
     /// A match against the inner graph, said against the outer one.
     ///
-    /// `None` where the match names a box, a boundary or a branch this
-    /// embedding does not carry — which, for an embedding kept up to date by
+    /// `None` where the match names a box or a boundary this embedding does
+    /// not carry — which, for an embedding kept up to date by
     /// [`Embedding::extend`], means the match is not about the inner graph
     /// at all.
     pub fn carry(&self, at: &Match) -> Option<Match> {
@@ -1281,11 +1063,6 @@ impl Embedding {
                     carried.map(|lists| lists.concat())
                 })
                 .collect::<Option<_>>()?,
-            branches: at
-                .branches
-                .iter()
-                .map(|b| self.branches.get(b).copied())
-                .collect::<Option<_>>()?,
         })
     }
 
@@ -1294,23 +1071,20 @@ impl Embedding {
     /// Both arguments are the answer [`Pair::apply`] gave — the embedding of
     /// what it put down — `inner` from the run on the inner graph and
     /// `outer` from the run on the outer one. The same replacement went down
-    /// in both, so its boxes and its branches line up in order, and that is
-    /// the whole of the pairing.
+    /// in both, so its boxes line up in order, and that is the whole of the
+    /// pairing.
     ///
     /// Nothing is taken away. A box a rewrite deleted is a box no later
     /// rewrite can name — an id is never reused — so a stale entry is
     /// unreachable rather than wrong.
     pub fn extend(&mut self, inner: &Match, outer: &Match) {
         debug_assert_eq!(
-            (inner.nodes.len(), inner.branches.len()),
-            (outer.nodes.len(), outer.branches.len()),
+            inner.nodes.len(),
+            outer.nodes.len(),
             "one replacement went down on both sides"
         );
         for (&here, &there) in inner.nodes.iter().zip(&outer.nodes) {
             self.nodes.insert(here, there);
-        }
-        for (&here, &there) in inner.branches.iter().zip(&outer.branches) {
-            self.branches.insert(here, there);
         }
     }
 
@@ -1324,8 +1098,8 @@ impl Embedding {
 /// that disagreed, because that is the whole content of the check.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Mismatch {
-    /// The match names a different number of boxes, inputs, outputs or
-    /// branches than the pattern has, or names one box twice.
+    /// The match names a different number of boxes, inputs or outputs than
+    /// the pattern has, or names one box twice.
     Shape,
     /// A box the match names is not there.
     Gone(NodeId),
@@ -1390,8 +1164,7 @@ impl std::error::Error for Mismatch {}
 ///
 /// 1. **Shape** — one image per box, one source per boundary input, one
 ///    reader list per boundary output, and no box named twice.
-/// 2. **Kinds** — the same box, modulo the branch renaming the match
-///    carries.
+/// 2. **Kinds** — the same box.
 /// 3. **Edges** — every input port of a matched box reads what the pattern
 ///    says it reads.
 /// 4. **Fullness** — every output port's readers in the host are *exactly*
@@ -1414,14 +1187,11 @@ pub fn check_match(graph: &Graph, pattern: &Graph, at: &Match) -> Result<(), Mis
     if at.nodes.len() != boxes
         || at.inputs.len() != pattern.inputs.len()
         || at.outputs.len() != pattern.outputs.len()
-        || at.branches.len() != pattern.branches as usize
     {
         return Err(Mismatch::Shape);
     }
     let inside: HashSet<NodeId> = at.nodes.iter().copied().collect();
-    if inside.len() != at.nodes.len()
-        || at.branches.iter().collect::<HashSet<_>>().len() != at.branches.len()
-    {
+    if inside.len() != at.nodes.len() {
         return Err(Mismatch::Shape);
     }
     for &id in &at.nodes {
@@ -1441,7 +1211,7 @@ pub fn check_match(graph: &Graph, pattern: &Graph, at: &Match) -> Result<(), Mis
     for i in 0..boxes {
         let here = NodeId::at(i);
         let host = at.nodes[i];
-        if !same_kind(pattern.kind(here), graph.kind(host), &at.branches) {
+        if pattern.kind(here) != graph.kind(host) {
             return Err(Mismatch::Kind(host));
         }
         // Edges.
@@ -1520,13 +1290,6 @@ fn splice(graph: &mut Graph, replacement: &Graph, at: &Match) -> Match {
         graph.nodes[id.index()] = None;
     }
 
-    // A branch the replacement keeps is the one the match named; a branch it
-    // introduces is new to the host.
-    let mut branches = at.branches.clone();
-    while branches.len() < replacement.branches as usize {
-        branches.push(graph.next_branch());
-    }
-
     // In. A pattern builds its boxes producers-first, so its own order is
     // one the host can add them in.
     let mut fresh: Vec<NodeId> = Vec::with_capacity(replacement.nodes.len());
@@ -1539,9 +1302,8 @@ fn splice(graph: &mut Graph, replacement: &Graph, at: &Match) -> Match {
     };
     for slot in &replacement.nodes {
         let node = slot.as_ref().expect("a pattern deletes nothing");
-        let kind = rename(&node.kind, &branches);
         let inputs = node.inputs.iter().map(|&s| carry(s, at, &fresh)).collect();
-        fresh.push(graph.add_node(kind, inputs));
+        fresh.push(graph.add_node(node.kind.clone(), inputs));
     }
 
     // And the loose ends, re-pointed: everything the match handed to a
@@ -1574,63 +1336,6 @@ fn splice(graph: &mut Graph, replacement: &Graph, at: &Match) -> Match {
         // over the other side.
         inputs: at.inputs.clone(),
         outputs: at.outputs.clone(),
-        branches: branches[..replacement.branches as usize].to_vec(),
-    }
-}
-
-/// The same box, modulo the branch renaming — which is what a derived
-/// `PartialEq` on [`NodeKind`] cannot be, since a branch id is graph-local
-/// and two graphs that mean the same thing need not have hit on the same
-/// numbers.
-fn same_kind(pattern: &NodeKind, host: &NodeKind, branches: &[BranchId]) -> bool {
-    let named = |b: &BranchId| branches.get(b.index()).copied();
-    match (pattern, host) {
-        (
-            NodeKind::Fork { arity, branch },
-            NodeKind::Fork {
-                arity: n,
-                branch: b,
-            },
-        ) => arity == n && named(branch) == Some(*b),
-        (
-            NodeKind::Select { arity, branch },
-            NodeKind::Select {
-                arity: n,
-                branch: b,
-            },
-        ) => arity == n && named(branch) == Some(*b),
-        (NodeKind::Fork { .. } | NodeKind::Select { .. }, _) => false,
-        (_, NodeKind::Fork { .. } | NodeKind::Select { .. }) => false,
-        (a, b) => a == b,
-    }
-}
-
-/// The same box **ignoring** branch ids — what the search prunes on, since
-/// it binds the renaming as it goes and `same_kind` is what holds the
-/// binding it settled on. Also what a caller looking for boxes a pattern
-/// *could* match wants, before any renaming is settled.
-pub fn kinds_fit(pattern: &NodeKind, host: &NodeKind) -> bool {
-    match (pattern, host) {
-        (NodeKind::Fork { arity, .. }, NodeKind::Fork { arity: n, .. })
-        | (NodeKind::Select { arity, .. }, NodeKind::Select { arity: n, .. }) => arity == n,
-        (NodeKind::Fork { .. } | NodeKind::Select { .. }, _) => false,
-        (_, NodeKind::Fork { .. } | NodeKind::Select { .. }) => false,
-        (a, b) => a == b,
-    }
-}
-
-/// A replacement's box, with its branch ids read as the host's.
-fn rename(kind: &NodeKind, branches: &[BranchId]) -> NodeKind {
-    match kind {
-        NodeKind::Fork { arity, branch } => NodeKind::Fork {
-            arity: *arity,
-            branch: branches[branch.index()],
-        },
-        NodeKind::Select { arity, branch } => NodeKind::Select {
-            arity: *arity,
-            branch: branches[branch.index()],
-        },
-        other => other.clone(),
     }
 }
 
@@ -1669,16 +1374,11 @@ impl Graph {
     /// outputs name.
     ///
     /// This is what lets a piece of a program be **carried** rather than
-    /// spelled out. A rule about a whole branch cannot name its arms — they
-    /// are whatever the program put there — so it carries them, exactly as
-    /// the term version carried subterms, and implants them where they go.
-    ///
-    /// The graph implanted keeps its own branches: its ids are moved clear
-    /// of the ones this graph has already handed out, so nothing it carries
-    /// collides with anything already here.
+    /// spelled out. A rule about a region cannot name what is in it — that
+    /// is whatever the program put there — so it carries it, exactly as the
+    /// term version carried subterms, and implants it where it goes.
     pub(crate) fn implant(&mut self, arm: &Graph, inputs: &[Source]) -> Vec<Source> {
         debug_assert_eq!(inputs.len(), arm.inputs.len(), "one source per input");
-        let base = self.branches;
         let mut fresh: Vec<NodeId> = Vec::with_capacity(arm.nodes.len());
         let carry = |src: Source, fresh: &[NodeId]| match src {
             Source::Input(i) => inputs[i],
@@ -1692,26 +1392,9 @@ impl Graph {
                 .as_ref()
                 .expect("an implanted graph keeps every box it builds");
             let takes = node.inputs.iter().map(|&s| carry(s, &fresh)).collect();
-            fresh.push(self.add_node(lift(&node.kind, base), takes));
+            fresh.push(self.add_node(node.kind.clone(), takes));
         }
-        self.branches = self.branches.max(base + arm.branches);
         arm.outputs.iter().map(|&s| carry(s, &fresh)).collect()
-    }
-}
-
-/// An implanted graph's own branch ids, moved clear of the ones its host has
-/// already handed out.
-fn lift(kind: &NodeKind, base: u32) -> NodeKind {
-    match kind {
-        NodeKind::Fork { arity, branch } => NodeKind::Fork {
-            arity: *arity,
-            branch: BranchId(base + branch.0),
-        },
-        NodeKind::Select { arity, branch } => NodeKind::Select {
-            arity: *arity,
-            branch: BranchId(base + branch.0),
-        },
-        other => other.clone(),
     }
 }
 
@@ -1769,7 +1452,6 @@ pub fn find_pinned(graph: &Graph, pattern: &Graph, pat: usize, host: NodeId) -> 
         order,
         nodes: vec![None; pattern.nodes.len()],
         inputs: vec![None; pattern.inputs.len()],
-        branches: vec![None; pattern.branches as usize],
         used: HashSet::new(),
         seed: host,
         found: Vec::new(),
@@ -1781,32 +1463,15 @@ pub fn find_pinned(graph: &Graph, pattern: &Graph, pat: usize, host: NodeId) -> 
 /// Whether a pattern says enough about itself to be looked for — what
 /// [`find`] and its kin answer nothing for.
 ///
-/// The conditions: at least one
-/// box to anchor on, no source exported twice or exported straight from
-/// the boundary, no boundary input nothing in the pattern reads, and no
-/// branch id that no box witnesses.
-///
-/// The branch decline is what a pair that **skips** branch ids costs — the
-/// skipping is how a [`BranchId`] means the same branch on both sides, and
-/// an id no fork or select carries cannot be read off a match: its image in
-/// the host is a choice, exactly as a reader-split is, so the pattern has to
-/// be stated rather than searched for. The unread-input decline is the same
-/// story one step over: a window that stands for a wire it never touches
+/// The conditions: at least one box to anchor on, no source exported twice
+/// or exported straight from the boundary, and no boundary input nothing in
+/// the pattern reads — a window that stands for a wire it never touches
 /// cannot say which wire that is.
 pub fn pins_itself(pattern: &Graph) -> bool {
     if pattern.nodes.is_empty() {
         return false;
     }
     if pattern.inputs.iter().any(|readers| readers.is_empty()) {
-        return false;
-    }
-    let mut witnessed: HashSet<BranchId> = HashSet::new();
-    for (_, kind) in pattern.live() {
-        if let NodeKind::Fork { branch, .. } | NodeKind::Select { branch, .. } = kind {
-            witnessed.insert(*branch);
-        }
-    }
-    if witnessed.len() != pattern.branches as usize {
         return false;
     }
     let mut seen = HashSet::new();
@@ -1825,7 +1490,6 @@ struct Search<'g> {
     order: Vec<usize>,
     nodes: Vec<Option<NodeId>>,
     inputs: Vec<Option<Source>>,
-    branches: Vec<Option<BranchId>>,
     used: HashSet<NodeId>,
     seed: NodeId,
     found: Vec<Match>,
@@ -1881,45 +1545,26 @@ impl Search<'_> {
     }
 
     /// Pins the pattern's box `i` to a host box, answering with the boundary
-    /// inputs and the branch the assignment bound — the undo log, since a
-    /// search that took them back by recomputing would be a second copy of
-    /// this.
-    fn assign(&mut self, i: usize, host: NodeId) -> Option<(Vec<usize>, Option<usize>)> {
+    /// inputs the assignment bound — the undo log, since a search that took
+    /// them back by recomputing would be a second copy of this.
+    fn assign(&mut self, i: usize, host: NodeId) -> Option<Vec<usize>> {
         if self.used.contains(&host) {
             return None;
         }
         let here = NodeId::at(i);
-        let kind = self.pattern.kind(here);
-        let branch = match (kind, self.graph.kind(host)) {
-            (NodeKind::Fork { branch, .. }, NodeKind::Fork { branch: b, .. })
-            | (NodeKind::Select { branch, .. }, NodeKind::Select { branch: b, .. }) => {
-                match self.branches[branch.index()] {
-                    Some(held) if held != *b => return None,
-                    Some(_) => None,
-                    None => {
-                        self.branches[branch.index()] = Some(*b);
-                        Some(branch.index())
-                    }
-                }
-            }
-            _ => None,
-        };
-        if !kinds_fit(kind, self.graph.kind(host)) {
-            if let Some(slot) = branch {
-                self.branches[slot] = None;
-            }
+        if self.pattern.kind(here) != self.graph.kind(host) {
             return None;
         }
         let mut fixed = Vec::new();
         for (port, &src) in self.pattern.sources(here).iter().enumerate() {
             let Some(&hsrc) = self.graph.sources(host).get(port) else {
-                self.rollback(&fixed, branch);
+                self.rollback(&fixed);
                 return None;
             };
             match src {
                 Source::Input(l) => match self.inputs[l] {
                     Some(held) if held != hsrc => {
-                        self.rollback(&fixed, branch);
+                        self.rollback(&fixed);
                         return None;
                     }
                     Some(_) => {}
@@ -1938,7 +1583,7 @@ impl Search<'_> {
                         None => {}
                         Some(n) if hsrc == (Source::Port { node: n, port }) => {}
                         Some(_) => {
-                            self.rollback(&fixed, branch);
+                            self.rollback(&fixed);
                             return None;
                         }
                     }
@@ -1947,22 +1592,19 @@ impl Search<'_> {
         }
         self.nodes[i] = Some(host);
         self.used.insert(host);
-        Some((fixed, branch))
+        Some(fixed)
     }
 
-    fn rollback(&mut self, fixed: &[usize], branch: Option<usize>) {
+    fn rollback(&mut self, fixed: &[usize]) {
         for &l in fixed {
             self.inputs[l] = None;
         }
-        if let Some(slot) = branch {
-            self.branches[slot] = None;
-        }
     }
 
-    fn undo(&mut self, i: usize, host: NodeId, (fixed, branch): (Vec<usize>, Option<usize>)) {
+    fn undo(&mut self, i: usize, host: NodeId, fixed: Vec<usize>) {
         self.nodes[i] = None;
         self.used.remove(&host);
-        self.rollback(&fixed, branch);
+        self.rollback(&fixed);
     }
 
     /// Every box placed. What is left is to read off who reads what the
@@ -1974,10 +1616,6 @@ impl Search<'_> {
         };
         let inputs: Vec<Source> = match self.inputs.iter().copied().collect() {
             Some(inputs) => inputs,
-            None => return,
-        };
-        let branches: Vec<BranchId> = match self.branches.iter().copied().collect() {
-            Some(branches) => branches,
             None => return,
         };
         let mut outputs = Vec::with_capacity(self.pattern.outputs().len());
@@ -2014,7 +1652,6 @@ impl Search<'_> {
             nodes,
             inputs,
             outputs,
-            branches,
         };
         if check_match(self.graph, self.pattern, &found).is_ok() {
             self.found.push(found);
@@ -2119,8 +1756,7 @@ impl fmt::Display for NodeKind {
             NodeKind::Drop(n) => write!(f, "drop({})", n),
             NodeKind::Op(prim) => write!(f, "{}", prim),
             NodeKind::Call { target, .. } => write!(f, "call #{}", usize::from(*target)),
-            NodeKind::Fork { arity, branch } => write!(f, "fork({}){}", arity, branch),
-            NodeKind::Select { arity, branch } => write!(f, "select({}){}", arity, branch),
+            NodeKind::Select { arity } => write!(f, "select({})", arity),
         }
     }
 }
@@ -2191,7 +1827,7 @@ mod tests {
         assert!(!isomorphic(&a, &d));
         let (_t, e) = built("branch { add } { add }");
         let (_t, f) = built("branch { add } { add }");
-        assert!(isomorphic(&e, &f), "branch ids pair, they are not compared");
+        assert!(isomorphic(&e, &f), "one term built twice is one diagram");
         let (_t, g) = built("branch { add } { sub }");
         assert!(!isomorphic(&e, &g));
     }
@@ -2287,7 +1923,6 @@ mod tests {
             nodes: vec![push],
             inputs: host.sources(add).to_vec(),
             outputs: vec![Vec::new()],
-            branches: Vec::new(),
         };
         let mut spoiled = host.clone();
         assert_eq!(
@@ -2303,7 +1938,6 @@ mod tests {
             nodes: vec![add],
             inputs: host.sources(add).to_vec(),
             outputs: vec![Vec::new()],
-            branches: Vec::new(),
         };
         let mut spoiled = host.clone();
         assert!(matches!(
@@ -2317,7 +1951,6 @@ mod tests {
             nodes: vec![add, add],
             inputs: host.sources(add).to_vec(),
             outputs: vec![vec![Sink::Output(0)]],
-            branches: Vec::new(),
         };
         let mut spoiled = host.clone();
         assert_eq!(
@@ -2387,7 +2020,6 @@ mod tests {
             nodes: vec![NodeId::at(7)],
             inputs: vec![Source::Input(3)],
             outputs: vec![vec![Sink::Output(2)]],
-            branches: Vec::new(),
         });
         assert_eq!(carried.node(NodeId::at(0)), Some(NodeId::at(7)));
         assert_eq!(carried.node(NodeId::at(1)), None);
@@ -2396,7 +2028,6 @@ mod tests {
             nodes: vec![NodeId::at(1)],
             inputs: vec![Source::Input(0)],
             outputs: vec![vec![Sink::Output(0)]],
-            branches: Vec::new(),
         };
         assert_eq!(carried.carry(&stranger), None, "box 1 is not covered");
     }

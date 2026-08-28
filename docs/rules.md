@@ -17,8 +17,8 @@ discard or share work.
 ## Reading the equations
 
 Programs are graphs: one box per operation, wires carrying values between
-them, a branch as a `fork`/`select` pair with its arms laid out between the
-two ends. The equations below are stated in the term language as
+them, a branch as a single `select` with its arms laid out in front of
+it. The equations below are stated in the term language as
 pseudocode, because a linear spelling reads better than a wiring list —
 but the graph is what a law actually is, and the term spelling is a
 picture of it.
@@ -28,9 +28,10 @@ picture of it.
   stack region. `dip { A }` is `A * id(1)`.
 - `id(n)`, `copy(n)`, `drop(n)`, `swap` — a wire, a fan-out, a discard, a
   crossing.
-- `if c { T } else { E }` — a branch. In the graph the condition sits at
-  port 0 of both the fork and the select, which is what lets a rule
-  anchored at either end *name* it.
+- `if c { T } else { E }` — a branch. In the graph that is one `select`
+  box: the condition at port 0, then the two blocks. What hands both arms
+  the stack is an ordinary `copy`, which `copy-elim` deletes like any
+  other, so after the wiring pass both arms simply read the one port.
 
 Two facts about windows apply to every row. A law is stated in its
 minimal window and congruence is free: a match is an embedding, so every
@@ -58,7 +59,7 @@ familiar laws has no row — both sides are literally the same data:
 Don't look for rules for these; there is nothing to fire. Likewise some
 facts that look primitive are consequences: `push c ; copy(1) = push c ;
 push c` is `dedup` read backward, discarded work vanishes under
-`dead-node`, and `branch { A } { A } = drop-top ; A` is `fork-dedup`, then
+`dead-node`, and `branch { A } { A } = drop-top ; A` is `dedup`, then
 `select-same`, then `dead-node`.
 
 ## The three driven lists
@@ -69,12 +70,11 @@ them **shrinks** a graph, which is what makes running dry safe:
 | list | rows | what they are |
 |---|---|---|
 | `structural` | `dead-node`, `id-elim`, `swap-elim`, `copy-elim`, `dedup` | wiring facts — they move boxes without asking what any box computes |
-| `branching` | `select-literal`, `select-const`, `select-view`, `select-same`, `fork-hoist`, `fork-dedup`, `specialize-equal`, `specialize-bool`, `specialize-choice` | the branch layer, each row stated at an end of a branch |
+| `branching` | `select-literal`, `select-same`, `specialize-equal`, `specialize-bool`, `specialize-choice` | the branch layer, every row stated at the `select` |
 | `folding` | `fold`, `tested-bool`, `as-tuple-round-trip`, `retuple`, `is-tuple-built`, `not-not`, `and-literal`, `tuple-cancel`, `as-tuple-built`, `equal-refl` | the value layer — what specific instructions compute, with the machine as the judge |
 
 The `decide` drive — what the `diagram` closer runs — spends all three
-lists to fixpoint, with `view-value` held behind everything (see below).
-Six rows are on **no** list at all: `view-value`, `promised-bool`,
+lists to fixpoint. Five rows are on **no** list at all: `promised-bool`,
 `shannon`, `select-hoist`, `as-bool-branch` and `coercion-guard`. Each is
 held out on purpose, and a proof names the one it wants — `fire(law)`,
 `at(#box, law)` — the way it names `inline`.
@@ -87,7 +87,7 @@ held out on purpose, and a proof names the one it wants — `fire(law)`,
 | `swap-elim` | a crossing is not recorded: the two lines cross by being re-pointed. |
 | `copy-elim` | `copy(n)` is a port read twice. The one structural rule that grows a port's readers; read backward, it is how a copy is introduced. |
 | `dead-node` | a box nothing reads is deleted, its input links with it. This is also `drop`-elimination: a `drop(n)` has no outputs, so it is always dead. |
-| `dedup` | two boxes of one kind reading one set of sources are one box read twice. Refused on `fork` and `select`: a fork *is* a copy, and merging two would destroy the one fact a fork exists to record — which port is an arm's own view of a value. |
+| `dedup` | two boxes of one kind reading one set of sources are one box read twice. Every kind, `select` included. This is also what makes "the same operation in both arms is one operation" nothing special: once `copy-elim` has run, both arms read the one port, so the two boxes are two boxes on one set of sources like any other pair. |
 
 Side conditions are carried by the interface rather than tested:
 `dead-node`'s pattern has no boundary outputs, so a match only exists
@@ -100,32 +100,31 @@ match that is not one fails to be a match.
 
 ## The branch layer (`branching`)
 
-A branch's arms lie *between* its two ends, so a rule's window holds one
-end — enough to talk about the condition, which sits at port 0 of both —
-or it holds the whole branch, arms carried as payload. The difference
-matters: a one-ended window cannot see the **discard** the select
-performs, and only the discard makes reasoning from "the condition held"
-sound (the untaken arm is an answer nobody reads). So the rules that
-reason from the condition — `select-literal` and the three `specialize`
-rows — hold the select in their window.
+Every row here is stated at the `select`, and there is nowhere else to
+state one: a branch is that box, and its arms are ordinary boxes in front
+of it. That placement is also what licenses the rows that reason from the
+condition — the **discard** the select performs is what makes "the
+condition held" sound in a block (the untaken arm is an answer nobody
+reads), and the discard is at the select.
+
+What a window reaches is therefore a *block*, not the inside of an arm:
+`x` tested `equal` to `7` becomes `7` where the select reads it, while the
+boxes of the then arm go on reading `x`. Saying more would mean naming
+which boxes are an arm's own, and nothing in the graph records that — an
+arm is the boxes only that side's blocks read, which is a fact about the
+whole graph rather than about a window.
 
 | law | statement |
 |---|---|
-| `select-literal` | β: `push c ; if { T } else { E }` = the arm `truthy(c)` selects, the whole branch — fork, arms, select — going with it. The arms ride as payload, which keeps the two ends together and puts the discard inside the window. Sound on **every** value, not only bools: `truthy` is total, `false` the one falsy value. |
-| `select-const` | a literal condition on a select **no fork pairs with**: the select is the blocks the literal chooses. The fork-less sibling of `select-literal` — with no fork end to strand, no arms need carrying. |
-| `select-view` | a select block that is one of the views a fork handed out is the value the fork was handed. This is what makes the rest of the layer reach anything: everything an arm passes through arrives at the select *from behind the fork*, so until this fires, `select-same` and the specializing rows find a view where they need a value. |
+| `select-literal` | β: `push c ; if { T } else { E }` = the blocks `truthy(c)` chooses. Sound on **every** value, not only bools: `truthy` is total, `false` the one falsy value. The untaken arm is outside the window: its boxes lose their reader when the select goes, and `dead-node` collects them. |
 | `select-same` | `if c { x } else { x } = x`, one block at a time: a block the select answers with either way is what it answers. The select keeps its other blocks and narrows by one. |
-| `fork-hoist` | the same operation done in both arms is one operation done **before** the fork — with its answer still handed to the fork as a stack slot of its own, so the value stays inside the branch and rules anchored at the fork can still name it. |
-| `fork-dedup` | the same hoist with the answer read from *outside* the fork — `fork-hoist` and `view-value` spent in one step. The shorter road, and it costs the fork: a branch whose arms all read around it has nothing left reading its views, and the specializing rows lose their anchor. |
 | `specialize-equal` | a value that tested `equal` to a literal **is** that literal, in the block the test chose: `equal` answers `Bool(a == b)`, so a truthy answer is `a == b` and nothing weaker. |
-| `specialize-bool` | the very value a branch tested, when it is a bool, is what the branch decided: `true` in the then block, `false` in the else block. The window holds the `as_bool` in front of the fork — that coercion's presence is what says the condition is a bool at all (a condition of `5` is truthy, and its then block reads `5`, not `true`). `promised-bool` is the row that puts the coercion there. |
-| `specialize-choice` | a branch inside an arm whose condition is a view of the very value the outer branch tested is already decided: its then blocks are read in the outer then arm, its else blocks in the outer else arm — the same value tested twice answers the same. |
+| `specialize-bool` | the very value a branch tested, when it is a bool, is what the branch decided: `true` in the then block, `false` in the else block. The window holds the `as_bool` that made the condition — that coercion's presence is what says the condition is a bool at all (a condition of `5` is truthy, and its then block reads `5`, not `true`). `promised-bool` is the row that puts the coercion there. |
+| `specialize-choice` | a branch inside an arm whose condition is the very value the outer branch tested is already decided: its then blocks are read in the outer then arm, its else blocks in the outer else arm — the same value tested twice answers the same. |
 
-The list's order matters to a driver: `select-view` pulls blocks out from
-behind a fork, and until it has, most of the layer has nothing to match. A
-driver should also prefer `fork-hoist` over `fork-dedup` while it is
-holding `view-value` back, and for the same reason: both preserve the
-specializing rows' anchor or spend it, and spending it is a last resort.
+Lifting work both arms do out in front is not a row here: both arms read
+the one port once `copy-elim` has run, so two boxes doing the same work
+are two boxes on one set of sources, which is `dedup`.
 
 ## The value layer (`folding`)
 
@@ -153,14 +152,6 @@ implementation of the semantics anywhere in the rewriter.
 
 Each of these is deliberately on no list; a proof (or a hand-rolled
 tactic) names it.
-
-**`view-value`** — a fork's view of a value **is** the value: a view is a
-copy, so readers of the view may read the original. Plain wiring, and the
-mirror of `copy-elim` through the one copy `copy-elim` leaves alone. What
-it spends is not soundness but *information*: which port is an arm's own
-view is the fact the specializing rows anchor on, so firing it early
-takes their anchor with it. `decide` fires it only when nothing else
-fires; a proof can name it sooner.
 
 **`promised-bool`** — `op` = `op ; as_bool` for any `op` the instruction
 set promises answers a bool. `as_bool` is `truthy` made into an
@@ -196,10 +187,11 @@ answers go into `A` and nowhere else — and the interface carries it, by
 never exporting the answers. `A` rides as payload. Unlike `shannon`,
 nothing is pinned: the condition reaches the moved select untouched, so
 this holds of **any** branch, whatever computed its condition. It is the
-row that lets a branch grow *forwards* — `fork-hoist` moves work across
-the fork in either direction, so a branch could always grow backwards
-over what fed it; this is the same freedom at the select. It duplicates
-the region it moves over, so no list drives it.
+row that lets a branch grow *forwards*. Backwards is free — work in front
+of a branch is shared by both arms as a matter of wiring, and two boxes
+doing it twice are one box by `dedup`; this is the same freedom at the
+other end. It duplicates the region it moves over, so no list drives
+it.
 
 **`as-bool-branch`** — `as_bool` is the branch it is:
 
@@ -207,10 +199,10 @@ the region it moves over, so no list drives it.
 as_bool  =  if x { true } else { false }
 ```
 
-The arms read nothing, so the branch needs no fork. This is the unpacking
-that puts a *decision* where a coercion stood: after it, the branch layer
-can specialize each arm, and `select-literal` folds the branch away
-wherever the condition turns out literal.
+The arms read nothing, so the branch is the select and the two literals.
+This is the unpacking that puts a *decision* where a coercion stood:
+after it, the branch layer can specialize each arm, and `select-literal`
+folds the branch away wherever the condition turns out literal.
 
 **`coercion-guard`** — a coercion is a guarded identity, which is the
 instruction set's own sentence about all three of them:

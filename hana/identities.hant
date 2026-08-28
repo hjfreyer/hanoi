@@ -6,10 +6,11 @@
 // allowed to spend a sentence's definition on its own: say so.
 proof identities::testing_a_test_by_name = inline diagram;
 
-// The arm recomputes the very test its branch decided. The driver
-// identifies the two computations — `view-value`, then `dedup` — and the
-// case split on the one wire that remains decides both readings at once:
-// η, spent deliberately, where no rewrite window could.
+// The arm recomputes the very test its branch decided. Nothing stands
+// between an arm and what it reads, so the driver identifies the two
+// computations by `dedup` alone, and the case split on the one wire that
+// remains decides both readings at once: η, spent deliberately, where no
+// rewrite window could.
 proof identities::specializing_a_tested_value = both(decide) cases(equal) diagram;
 
 // The two unpackings of a coercion. Both grow the graph — they say a

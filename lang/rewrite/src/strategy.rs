@@ -10,8 +10,8 @@
 //! identity with no written proof gets — is `diagram` alone.
 //!
 //! The closer **is** the table now: `diagram` rewrites both sides by
-//! [`tactic::decide`](crate::diagram2::tactic::decide) — every law, to
-//! fixpoint, `view-value` held to last — and asks whether they landed on
+//! [`tactic::decide`](crate::diagram2::tactic::decide) — every driven
+//! law, to fixpoint — and asks whether they landed on
 //! one diagram, by isomorphism. Every rewrite on the way is an instance of
 //! a named law checked by
 //! [`rules::apply`], so the verdict is a
@@ -42,7 +42,7 @@ use crate::diagram2::rules::{self, Derivation, Law};
 use crate::diagram2::tactic::{Region, Tactic};
 use crate::diagram2::{self, read_back, tactic};
 use crate::goal::{Goal, Outcome, Proof, Residual, against};
-use crate::graph::{self, BranchId, Direction, Graph, Match, NodeId, Pair, Source};
+use crate::graph::{self, Direction, Graph, Match, NodeId, NodeKind, Pair, Source};
 use crate::hant::{Body, OnSide, Step, Strategy, default_strategy};
 use crate::term::{Context, Error, Prim, Term, TermIndex};
 
@@ -605,7 +605,7 @@ impl<'l> Prover<'l> {
             then_steps: 0,
             else_steps: 0,
         };
-        let mut branches: [Option<BranchId>; 2] = [None, None];
+        let mut branches: [Option<Source>; 2] = [None, None];
         let picks: [Pick; 2] = [|g| &mut g.lhs, |g| &mut g.rhs];
         for i in 0..2 {
             let within = match &scopes[i] {
@@ -627,12 +627,22 @@ impl<'l> Prover<'l> {
                 let why = format!("`cases` proposed a split the checker refused: {}", e);
                 return Err(Box::new(gave_up(ctx, goal, &why)));
             }
-            // The Shannon replacement mints its select's branch after the
-            // arms it implants, so the introduced branch is the last one
-            // the recorded inverse carries — the handle the arms scope to.
+            // The Shannon replacement adds its select last, so the
+            // introduced branch is the last select the recorded inverse
+            // names — and what the arms scope to is the wire that select
+            // turns on, which survives a rewrite that puts a narrower
+            // select in its place.
             branches[i] = derivs[i]
                 .latest_undo()
-                .and_then(|back| back.at.branches.last().copied());
+                .and_then(|back| {
+                    back.at
+                        .nodes
+                        .iter()
+                        .rev()
+                        .copied()
+                        .find(|&n| matches!(side.kind(n), NodeKind::Select { .. }))
+                })
+                .map(|select| side.sources(select)[0]);
             counts.splits += 1;
         }
         if branches.iter().all(Option::is_none) {
@@ -660,7 +670,7 @@ impl<'l> Prover<'l> {
         ctx: &mut Context,
         goal: &mut Goal,
         derivs: &mut [Derivation; 2],
-        branches: &[Option<BranchId>; 2],
+        branches: &[Option<Source>; 2],
         prim: &Prim,
         case: bool,
         strategy: &Option<Strategy<Body>>,
@@ -677,10 +687,10 @@ impl<'l> Prover<'l> {
         };
         // Which goal sides still hold the branch, read at entry; a branch
         // that vanishes mid-arm is the next step's business, loudly.
-        let active: [Option<BranchId>; 2] = [0, 1].map(|i| {
-            branches[i].filter(|&branch| {
+        let active: [Option<Source>; 2] = [0, 1].map(|i| {
+            branches[i].filter(|&cond| {
                 let side = if i == 0 { &goal.lhs } else { &goal.rhs };
-                tactic::arm_nodes(side, branch, case).is_some()
+                tactic::arm_nodes(side, cond, case).is_some()
             })
         });
         let mut landed = 0;
@@ -693,11 +703,11 @@ impl<'l> Prover<'l> {
                         OnSide::Both => &[0, 1],
                     };
                     for &i in sides {
-                        let Some(branch) = active[i] else {
+                        let Some(cond) = active[i] else {
                             continue;
                         };
                         let wrapped = Tactic::Within(
-                            Region::Arm { branch, side: case },
+                            Region::Arm { cond, side: case },
                             Box::new((**t).clone()),
                         );
                         let graph = if i == 0 { &mut goal.lhs } else { &mut goal.rhs };
@@ -719,9 +729,9 @@ impl<'l> Prover<'l> {
                 } => {
                     let scopes = [0, 1].map(|i| match active[i] {
                         None => Scope::Skip,
-                        Some(branch) => {
+                        Some(cond) => {
                             let side = if i == 0 { &goal.lhs } else { &goal.rhs };
-                            match tactic::arm_nodes(side, branch, case) {
+                            match tactic::arm_nodes(side, cond, case) {
                                 Some(set) => Scope::In(set),
                                 None => Scope::Skip,
                             }
@@ -1187,10 +1197,10 @@ mod tests {
         let (ctx, outcome) = prove_with(
             "identity probe { push 1 push 1 add } = { push 2 };",
             "probe",
-            Some("lhs(fire(dedup) fire(fork-dedup)) exact"),
+            Some("lhs(fire(dedup) fire(tuple-cancel)) exact"),
         );
         let Outcome::Stuck(residual) = outcome else {
-            panic!("there is no fork to dedup");
+            panic!("there is no tuple to cancel");
         };
         assert!(
             residual.stopped.contains("`lhs(…)`") && residual.stopped.contains("found nothing"),
@@ -1434,10 +1444,10 @@ mod tests {
         let (_ctx, outcome) = prove_with(
             code,
             "probe",
-            Some("both(decide) cases(equal) (true: both(fire(fork-dedup))) diagram"),
+            Some("both(decide) cases(equal) (true: both(fire(tuple-cancel))) diagram"),
         );
         let Outcome::Stuck(residual) = outcome else {
-            panic!("a split's branch has no fork to dedup");
+            panic!("a split's branch holds no tuple to cancel");
         };
         assert!(
             residual

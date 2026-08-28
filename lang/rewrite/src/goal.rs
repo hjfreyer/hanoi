@@ -670,7 +670,6 @@ mod tests {
                 nodes: Vec::new(),
                 inputs: Vec::new(),
                 outputs: Vec::new(),
-                branches: Vec::new(),
             },
         }
     }

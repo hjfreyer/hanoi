@@ -99,9 +99,9 @@ that shrink.
 
 The checker has no turnstile and is not getting one. "Assume the
 condition holds" is the branch itself: `shannon` introduces it, the
-specializing rows spend it (anchored on the fork that names the
-condition and the select that holds the discard), `select-same`
-discharges it, and `Proof::check` replays the chain with no idea a case
+specializing rows spend it (anchored on the select, which holds both the
+condition and the discard that licenses reasoning from it),
+`select-same` discharges it, and `Proof::check` replays the chain with no idea a case
 analysis happened. Only guard-shaped hypotheses compile away this way —
 "this wire's answer is `true`" for a wire the instruction set promises is
 a bool. That boundary is a theorem (hypothesis elimination, in the
