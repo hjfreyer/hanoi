@@ -430,9 +430,9 @@ reconstruction, no guard, no imaginary values.
   established what the postcondition goes on to ask. Nothing in the workspace
   can say so today.
 
-- ~~A way to discharge an `identity`.~~ `bin/prove` does, by equality
-  saturation over the term model — see [docs/proving.md](proving.md). It
+- ~~A way to discharge an `identity`.~~ `bin/prove` does, by checked
+  rewriting over program graphs — see [docs/proving.md](proving.md). It
   inherits the laws this document makes sound, and two of them precisely:
-  totality is what licenses discarding work (`drop-nat`) and reordering
-  disjoint computations, and determinism is what licenses sharing them
-  (`copy-nat`).
+  totality is what licenses discarding work (`dead-node`, and every
+  branch's untaken arm), and determinism is what licenses sharing it
+  (`dedup`). See [docs/invariants.md](invariants.md).

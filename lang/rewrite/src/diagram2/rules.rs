@@ -43,10 +43,11 @@
 //! Four are the eliminations `super` used to hardcode, restated:
 //! [`Law::IdElim`], [`Law::SwapElim`], [`Law::CopyElim`] and
 //! [`Law::DeadNode`] (which is `drop-elim` too — a `drop(n)` has no outputs,
-//! so it is always dead). Layer 1 of
-//! [docs/algebra.md](../../../../docs/algebra.md) has no other spelling here:
-//! the associativities, the units, the interchange and Yang–Baxter are all
-//! *representation*, true of the wiring because the wiring cannot say them.
+//! so it is always dead). The rest of the structural theory
+//! ([docs/rules.md](../../../../docs/rules.md) opens with the list) has no
+//! spelling here: the associativities, the units, the interchange and
+//! Yang–Baxter are all *representation*, true of the wiring because the
+//! wiring cannot say them.
 //!
 //! Two are new, and they are why a table is worth having:
 //!
@@ -63,7 +64,7 @@
 //!
 //! ## The value layer, and the two rows no list drives
 //!
-//! [`folding`] is layer 3 of the sheet: what an operation *computes*, with
+//! [`folding`] is the value layer: what an operation *computes*, with
 //! the machine itself as the judge — [`Law::Fold`] runs a literal window on
 //! `vm`, and the rest are facts about particular instructions.
 //!
@@ -131,7 +132,7 @@
 //!
 //! ## The branch layer, and the one place it stops
 //!
-//! [`branching`] is layer 2 of the sheet: [`Law::ForkHoist`],
+//! [`branching`] is the branch layer: [`Law::ForkHoist`],
 //! [`Law::ForkDedup`], [`Law::SelectView`], [`Law::SelectSame`],
 //! [`Law::SelectLiteral`], [`Law::SpecializeEqual`] and
 //! [`Law::SpecializeBool`]. Between them they fold a literal condition into
@@ -413,8 +414,8 @@ pub enum Rule {
     /// boundary input sits.
     AndLiteral { literal: Side, value: Value },
     /// Taking apart what `tuple n` built answers the built elements:
-    /// `tuple n ; untuple n = id(n)` — the algebra sheet's tuple
-    /// cancellation, stated with the tuple **kept**, since its port may
+    /// `tuple n ; untuple n = id(n)` — tuple cancellation, stated with
+    /// the tuple **kept**, since its port may
     /// have other readers: the equation re-points the untuple's readers
     /// at the element wires and leaves the tuple standing for whoever
     /// else holds it; a tuple nobody else reads falls to `dead-node`.
@@ -431,8 +432,7 @@ pub enum Rule {
     /// identity and the language is deterministic and pure, so a value
     /// compared with itself answers yes. The wire itself is a boundary
     /// input — its other readers never entered the window — and the
-    /// answer side leaves it unread, the discard totality licenses. The
-    /// candidate law the algebra sheet names `equal_refl`.
+    /// answer side leaves it unread, the discard totality licenses.
     EqualRefl,
 
     // ---- the branch layer ----
@@ -882,8 +882,8 @@ impl Rule {
     }
 }
 
-/// The wiring laws: everything true of the wiring alone, which is layer 1 of
-/// the algebra sheet and nothing else.
+/// The wiring laws: everything true of the wiring alone — the `structural`
+/// list of [docs/rules.md](../../../../docs/rules.md).
 ///
 /// `DeadNode` leads because it is the cheapest test and because a dead box
 /// should go before anything bothers looking inside it — advice to a driver

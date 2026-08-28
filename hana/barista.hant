@@ -4,7 +4,7 @@
 
 // The contract claim, and the corpus's biggest goal: 351 boxes against 2
 // once `inline` has opened it. It closes as a decision tree of three
-// hypotheses, written as structured `cases` (docs/hypotheses.md) and
+// hypotheses, written as structured `cases` (docs/proving.md) and
 // compiled to one checked derivation per side.
 //
 // One state decides everything: `emit` dispatches on `equal(x.2,
