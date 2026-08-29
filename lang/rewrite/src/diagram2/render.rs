@@ -10,11 +10,26 @@
 //! A **term** is the wrong shape for the report twice over. A graph is a
 //! DAG and a term is a spine, so anything writing one has to reimpose a
 //! stack and pay for it in routing; and a term has no name for a box, so
-//! two consecutive steps of a proof cannot be compared. A [`NodeId`] is
-//! stable for the life of a graph — a box is named by what it computes,
-//! and nothing edits one — so a listing keyed by one is a diff, and "31
-//! boxes went, the branches are gone" is a sentence about what a tactic
-//! did.
+//! two consecutive steps of a proof cannot be compared. An [`Address`] is
+//! a box's name in every graph that computes it — a box is named by what
+//! it computes, and nothing edits one — so a listing keyed by one is a
+//! diff, and "31 boxes went, the branches are gone" is a sentence about
+//! what a tactic did.
+//!
+//! ## A name, and how much of it to write
+//!
+//! An address is twelve letters and nobody writes twelve. Every line
+//! carries the whole of its box's address with the **shortest prefix no
+//! other box on the page shares** emphasised, and every reference to a
+//! box — what it reads, what reads it, what a branch turns on — carries
+//! just that prefix. So what is bold on a line is exactly what the rest
+//! of the page calls that box, and exactly what `at(#nkz, fold)` is
+//! written with. The debt is Jujutsu's, whose change ids are read this
+//! way for the same reason.
+//!
+//! The emphasis is an escape sequence, so it is off unless whoever
+//! prints the listing says otherwise ([`Listing::bold`]) — one goes into
+//! an assertion and a piped log as often as it goes to a terminal.
 //!
 //! So this is the only reading of a stuck goal, and the term language is
 //! left to what it is for: stating a claim, and writing a `via` waypoint by
@@ -27,22 +42,21 @@
 //! how to read that:
 //!
 //! ```text
-//!   #3     copy(1)                    ← #1.0             → #4 #6
-//!          if #2.0
-//!   #4     | copy(1)                  ← #3.0             → #5
-//!   #5     | add                      ← #4.0 #4.1        → #7
-//!          else #2.0
-//!   #6     | negate                   ← #3.1             → #7
-//!   #7     endif #2.0                 then #5.0  else #6.0   → out0
+//!                   if in0
+//!   #nyoqvutuxsru   | push 1                        → #k
+//!   #kzmrpklnynyw   | add       ← in0 #n.0          → #m
+//!                   else in0
+//!   #lwyywqnqtorp   | negate    ← in0               → #m
+//!   #msowwltslwoo   endif in0   then #k.0 else #l.0 → out0
 //! ```
 //!
 //! The condition is named on all three lines, so a block deep in a nest
 //! says which wire it turns on without a reader counting bars. The `endif`
-//! is the [`Select`](super::NodeKind::Select), so it keeps its id and its
-//! links: the right-hand columns still say what the box reads and who
+//! is the [`Select`](super::NodeKind::Select), so it keeps its name and
+//! its links: the right-hand columns still say what the box reads and who
 //! reads it, which is what a next proof step names. The `if` and the
 //! `else` are lines the listing draws rather than boxes — a branch is one
-//! box and that box is its end — and their **empty id column** is how a
+//! box and that box is its end — and their **empty name column** is how a
 //! reader tells the two apart.
 //!
 //! ## What makes 351 boxes legible
@@ -85,9 +99,9 @@
 //! content **is** its identity, and two lines reading `push true` are not
 //! two things a reader can confuse. A box that reads something has a
 //! history, and a second copy of a history invites the question "the same
-//! box?" — which is what a listing keyed by [`NodeId`] exists to answer.
+//! box?" — which is what a listing keyed by [`Address`] exists to answer.
 //! A value may be written wherever it is used; a computation is written
-//! once, and a **parenthesised id** is how a line says which it is.
+//! once, and a **parenthesised address** is how a line says which it is.
 //!
 //! The sharing is still on the page: the `→` columns of a box's lines
 //! partition its readers, so their union is the whole of who reads it.
@@ -119,20 +133,113 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::fmt;
 
-use crate::graph::{Graph, NodeId, NodeKind, Sink, Source};
+use crate::graph::{Address, Graph, NodeId, NodeKind, Sink, Source};
 
 /// One side of a goal, written out. Build it with [`listing`].
 pub struct Listing<'g> {
     graph: &'g Graph,
     tag: &'g str,
+    /// Whether the shortest unique prefix of each address is emphasised.
+    bold: bool,
 }
 
 /// A graph as a listing: every box the boundary reaches, one to a line.
 ///
 /// There is nothing a reader would rather look through — every box is an
 /// operation — so there is no dial for how much of one to print.
+///
+/// Plain by default: the emphasis is an escape sequence, and a listing
+/// goes into a test's assertion and a piped log as often as it goes to a
+/// terminal. Whoever is writing to a terminal says so — `bin/prove` asks
+/// the terminal itself.
 pub fn listing<'g>(graph: &'g Graph, tag: &'g str) -> Listing<'g> {
-    Listing { graph, tag }
+    Listing {
+        graph,
+        tag,
+        bold: false,
+    }
+}
+
+impl<'g> Listing<'g> {
+    /// Emphasise the shortest unique prefix of every address, for a reader
+    /// whose terminal can show it.
+    pub fn bold(self, bold: bool) -> Listing<'g> {
+        Listing { bold, ..self }
+    }
+}
+
+/// Where the emphasis on an address's unique prefix begins and ends.
+const ON: &str = "\u{1b}[1m";
+const OFF: &str = "\u{1b}[0m";
+
+/// How wide a spelled-out address reads: the `#` and the letters. The
+/// emphasis is escapes, which take no room on the page, so this is the
+/// width whether or not a listing is emphasised.
+const SPELLED: usize = 1 + Address::LETTERS;
+
+/// How wide the name column is: a spelled address, and the parentheses a
+/// repeated line writes one in.
+const NAME: usize = SPELLED + 2;
+
+/// Where a line's own text begins: two spaces, the name column, a space.
+/// The gutter a branch indents with is measured from here.
+pub(super) const MARGIN: usize = 2 + NAME + 1;
+
+/// How a listing writes the names of boxes: the address of each, and how
+/// much of it tells that box from every other on the page.
+///
+/// Two spellings, and the difference between them is the whole of what
+/// the emphasis means. A box's **own line** carries the whole address with
+/// its unique prefix marked; every **reference** to it — what a box reads,
+/// what reads it, what a branch turns on — carries just that prefix. So
+/// what is bold on a line is exactly what the rest of the page calls it,
+/// and exactly what a proof writes in `at(#nkz, fold)`.
+struct Names {
+    short: HashMap<NodeId, String>,
+    bold: bool,
+}
+
+impl Names {
+    fn of(graph: &Graph, bold: bool) -> Names {
+        Names {
+            short: graph.names(),
+            bold,
+        }
+    }
+
+    /// A box's own line: the whole address, the telling prefix marked.
+    fn spell(&self, graph: &Graph, id: NodeId) -> String {
+        let letters = graph.address(id).letters();
+        let cut = self.short.get(&id).map_or(letters.len(), String::len);
+        match self.bold {
+            true => format!("#{}{}{}{}", ON, &letters[..cut], OFF, &letters[cut..]),
+            false => format!("#{}", letters),
+        }
+    }
+
+    /// A reference to a box: as much of its address as tells it apart.
+    fn refer(&self, graph: &Graph, id: NodeId) -> String {
+        match self.short.get(&id) {
+            Some(prefix) => format!("#{}", prefix),
+            None => graph.address(id).to_string(),
+        }
+    }
+
+    /// What an input port reads, or a boundary input.
+    fn source(&self, graph: &Graph, source: Source) -> String {
+        match source {
+            Source::Input(i) => format!("in{}", i),
+            Source::Port { node, port } => format!("{}.{}", self.refer(graph, node), port),
+        }
+    }
+
+    /// What reads an output port, or a boundary output.
+    fn sink(&self, graph: &Graph, sink: Sink) -> String {
+        match sink {
+            Sink::Output(i) => format!("out{}", i),
+            Sink::Port { node, .. } => self.refer(graph, node),
+        }
+    }
 }
 
 /// Everything reachable from `from`, forwards or backwards.
@@ -923,6 +1030,7 @@ const LABEL: usize = 44;
 impl fmt::Display for Listing<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let graph = self.graph;
+        let names = Names::of(graph, self.bold);
         let mut inside = nesting(graph);
         let arms = arms(graph, &mut inside);
         let written = schedule(graph, &inside, &arms);
@@ -949,7 +1057,7 @@ impl fmt::Display for Listing<'_> {
             .filter_map(|(id, kind)| match kind {
                 NodeKind::Select { .. } => {
                     let source = *graph.sources(id).first()?;
-                    Some((name_of(id), source.to_string()))
+                    Some((name_of(id), names.source(graph, source)))
                 }
                 _ => None,
             })
@@ -1049,13 +1157,17 @@ impl fmt::Display for Listing<'_> {
                 ahead.push(("if", branch, mine.len()));
             }
             for (word, branch, depth) in ahead {
+                // An empty name column: a branch is one box and that box
+                // is its `endif`, so an `if` and an `else` are lines the
+                // listing draws rather than boxes it prints.
                 writeln!(
                     f,
-                    "  {:<6} {}{} {}",
+                    "{:<margin$}{}{} {}",
                     "",
                     gutter(depth),
                     word,
-                    condition.get(&branch).map_or("?", String::as_str)
+                    condition.get(&branch).map_or("?", String::as_str),
+                    margin = MARGIN
                 )?;
                 match word {
                     "if" => opened.insert(branch),
@@ -1083,7 +1195,7 @@ impl fmt::Display for Listing<'_> {
             let sources: Vec<String> = graph
                 .sources(id)
                 .iter()
-                .map(|&source| source.to_string())
+                .map(|&source| names.source(graph, source))
                 .collect();
             // A select reads its condition at port 0 and the label has
             // already said so, so what is left for this column is what it
@@ -1102,10 +1214,7 @@ impl fmt::Display for Listing<'_> {
             let mut read_by: Vec<String> = printing
                 .read_by
                 .iter()
-                .map(|sink| match sink {
-                    Sink::Output(i) => format!("out{}", i),
-                    Sink::Port { node, .. } => node.to_string(),
-                })
+                .map(|&sink| names.sink(graph, sink))
                 .collect();
             read_by.dedup();
             let read_by = match read_by.is_empty() {
@@ -1113,28 +1222,34 @@ impl fmt::Display for Listing<'_> {
                 false => format!("  → {}", read_by.join(" ")),
             };
 
+            // The name column is padded by hand: an emphasised address
+            // carries escapes that take no room on the page, and `{:<n}`
+            // would count them as if they did.
+            let (name, wide) = match printing.repeat {
+                true => (format!("({})", names.spell(graph, id)), NAME),
+                false => (names.spell(graph, id), SPELLED),
+            };
             writeln!(
                 f,
-                "  {:<6} {:<width$}{:<24}{}",
-                match printing.repeat {
-                    true => format!("({})", id),
-                    false => id.to_string(),
-                },
+                "  {}{} {:<label$}{:<24}{}",
+                name,
+                " ".repeat(NAME - wide),
                 label,
                 reads,
                 read_by,
-                width = LABEL + 1
+                label = LABEL + 1
             )?;
         }
 
         let outputs: Vec<String> = graph
             .outputs()
             .iter()
-            .map(|&source| source.to_string())
+            .map(|&source| names.source(graph, source))
             .collect();
+        let out = format!("{:<width$}", "out", width = NAME);
         match outputs.is_empty() {
-            true => writeln!(f, "\n  out   ()"),
-            false => writeln!(f, "\n  out   ← {}", outputs.join(" ")),
+            true => writeln!(f, "\n  {}()", out),
+            false => writeln!(f, "\n  {}← {}", out, outputs.join(" ")),
         }
     }
 }
@@ -1188,15 +1303,26 @@ mod tests {
         graph
     }
 
+    /// A box's own line, as the listing spells it: the whole address.
+    fn spelled(graph: &Graph, id: NodeId) -> String {
+        format!("#{}", graph.address(id).letters())
+    }
+
+    /// A reference to a box, as the listing spells one: the prefix that
+    /// tells it apart.
+    fn referred(graph: &Graph, id: NodeId) -> String {
+        format!("#{}", graph.shortest(id))
+    }
+
     #[test]
     fn a_listing_names_every_box_it_shows() {
         let graph = built("push 1 push 2 add");
         let text = listing(&graph, "left").to_string();
         for (id, _) in graph.live() {
             assert!(
-                text.contains(&format!("  {} ", id)),
+                text.contains(&format!("  {} ", spelled(&graph, id))),
                 "{} is missing from\n{}",
-                id,
+                graph.address(id),
                 text
             );
         }
@@ -1243,7 +1369,7 @@ mod tests {
         // The opening has no box behind it — a branch is its `endif` —
         // and the empty id column is how the listing says so.
         assert!(
-            lines[at("if in0")].starts_with("        "),
+            lines[at("if in0")].starts_with(&" ".repeat(MARGIN)),
             "a drawn opening names a box:\n{}",
             text
         );
@@ -1374,13 +1500,13 @@ mod tests {
         let text = listing(&graph, "left").to_string();
         let mine: Vec<&str> = text
             .lines()
-            .filter(|line| line.contains(&format!("({})", shared)))
+            .filter(|line| line.contains(&format!("({})", spelled(&graph, shared))))
             .collect();
         assert_eq!(
             mine.len(),
             2,
             "{} is not written in both arms:\n{}",
-            shared,
+            graph.address(shared),
             text
         );
 
@@ -1415,7 +1541,7 @@ mod tests {
             .iter()
             .map(|sink| match sink {
                 Sink::Output(i) => format!("out{}", i),
-                Sink::Port { node, .. } => node.to_string(),
+                Sink::Port { node, .. } => referred(&graph, *node),
             })
             .collect();
         let said: HashSet<String> = readers
@@ -1510,8 +1636,11 @@ mod tests {
             let mut stack: Vec<(String, usize)> = Vec::new();
             let mut blocks = 0;
             for line in text.lines() {
-                // Past the id column is the gutter, and past that the word.
-                let Some(rest) = line.get(9..) else { continue };
+                // Past the name column is the gutter, and past that the
+                // word.
+                let Some(rest) = line.get(MARGIN..) else {
+                    continue;
+                };
                 let depth = rest.matches("| ").count();
                 let word = rest.trim_start_matches("| ");
                 let condition = |word: &str| {

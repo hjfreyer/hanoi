@@ -1386,9 +1386,10 @@ mod tests {
     }
 
     /// The loop an addressed step exists to close: a stuck goal prints a
-    /// listing keyed by box id, and the id it printed is what the next
-    /// step writes back. `fire` cannot say "that one"; `at` is how the
-    /// proof answers the report in the report's own words.
+    /// listing keyed by address, and the address it printed is what the
+    /// next step writes back — in full, or in the prefix the listing
+    /// emphasised. `fire` cannot say "that one"; `at` is how the proof
+    /// answers the report in the report's own words.
     #[test]
     fn a_proof_can_name_the_box_the_residual_printed() {
         use crate::diagram2::render;
@@ -1406,35 +1407,43 @@ mod tests {
             .live()
             .find(|(_, kind)| matches!(kind, NodeKind::Op(Prim::Add)))
             .expect("the sum, unspent");
+        let address = residual.lhs_graph.address(add);
         let listing = render::listing(&residual.lhs_graph, "left").to_string();
         assert!(
-            listing.contains(&add.to_string()),
+            listing.contains(&address.letters()),
             "the listing names the box a proof would name:\n{}",
             listing
         );
 
-        // …and that is the address, written exactly as it was printed.
-        let (_ctx, outcome) = prove_with(
-            code,
-            "probe",
-            Some(&format!("lhs(at({}, fold)) diagram", add)),
-        );
-        let Outcome::Closed(proof) = outcome else {
-            panic!("the named box is a fold the machine can work out");
-        };
-        assert!(
-            proof.summary().contains("lhs: 1 rewrite"),
-            "{}",
-            proof.summary()
-        );
+        // …and the name is the whole address, or the prefix the listing
+        // emphasised: either is what that box is called.
+        for written in [
+            address.to_string(),
+            format!("#{}", residual.lhs_graph.shortest(add)),
+        ] {
+            let (_ctx, outcome) = prove_with(
+                code,
+                "probe",
+                Some(&format!("lhs(at({}, fold)) diagram", written)),
+            );
+            let Outcome::Closed(proof) = outcome else {
+                panic!("the named box is a fold the machine can work out");
+            };
+            assert!(
+                proof.summary().contains("lhs: 1 rewrite"),
+                "{}",
+                proof.summary()
+            );
+        }
 
         // A box the side does not have is its own mistake, said as one.
-        let (_ctx, outcome) = prove_with(code, "probe", Some("lhs(at(#999, fold)) diagram"));
+        let (_ctx, outcome) =
+            prove_with(code, "probe", Some("lhs(at(#zzzzzzzzzzzz, fold)) diagram"));
         let Outcome::Stuck(residual) = outcome else {
-            panic!("there is no #999")
+            panic!("no box is called that")
         };
         assert!(
-            residual.stopped.contains("#999 is not a live box"),
+            residual.stopped.contains("#zzzzzzzzzzzz is not a live box"),
             "{}",
             residual.stopped
         );
@@ -1443,7 +1452,7 @@ mod tests {
         let (_ctx, outcome) = prove_with(
             code,
             "probe",
-            Some(&format!("lhs(at({}, equal-refl)) diagram", add)),
+            Some(&format!("lhs(at({}, equal-refl)) diagram", address)),
         );
         let Outcome::Stuck(residual) = outcome else {
             panic!("an `add` is no `equal`")
@@ -1451,7 +1460,7 @@ mod tests {
         assert!(
             residual
                 .stopped
-                .contains(&format!("no forward `equal-refl` match holds {}", add)),
+                .contains(&format!("no forward `equal-refl` match holds {}", address)),
             "{}",
             residual.stopped
         );

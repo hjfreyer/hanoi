@@ -24,6 +24,11 @@ as what it is.
 declaration only when a name follows it on the same line, which is exactly
 when it is one.
 
+A box address — the `#nkz` an `at` step names a box with, which a proof
+copies out of a failed run's listing — reads as a constant. The letters are
+`k` through `z` and nothing else, which is what tells one from every other
+word in the file.
+
 **Comments.** `//` to end of line is the only comment the language has, so
 that is the only one configured: `Ctrl+/` toggles it, and *Toggle Block
 Comment* falls back to it rather than inserting a `/* */` the lexer would

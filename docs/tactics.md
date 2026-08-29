@@ -22,7 +22,7 @@ steps are:
 | `branches` | the branch layer to fixpoint |
 | `decide` | the whole table to fixpoint — what the `diagram` closer drives |
 | `fire(law, …)` | the first proposal of those laws, once — fails finding none |
-| `at(#box, law)` | that law, once, in a match that holds **that box** — the id the residual printed |
+| `at(#box, law)` | that law, once, in a match that holds **that box** — the address the residual printed |
 | `at(#box, law, backward)` | the same, reading the law's equation right to left |
 | `repeat(t …)` | the sequence until it stops advancing |
 | `try(t …)` | the sequence, or nothing — failure becomes no progress |
@@ -39,29 +39,39 @@ proof needs one.
 
 `fire` takes the first match it is offered anywhere on the side, in the
 canonical order. `at` is for when that is the wrong one: it names a box
-by the id the **residual listing** printed beside it, and fires the law
-in a match that holds that box — anywhere in the match, not only where
-the law's pattern happens to anchor (`not-not` fired by naming its
+by the address the **residual listing** printed beside it, and fires the
+law in a match that holds that box — anywhere in the match, not only
+where the law's pattern happens to anchor (`not-not` fired by naming its
 second `not` is the small case; a whole-branch law named at a box inside
 an arm is the one that matters). A goal offering nine `fold`s and
 needing the seventh has no other proof to write.
 
 The direction field makes `at` a **found** backward step:
-`at(#7, not-not, backward)` looks for the law's right-hand side. A
+`at(#nkz, not-not, backward)` looks for the law's right-hand side. A
 right-hand side is a graph like any other, so backward is a direction
 like forward. What limits it is the payload: `instances` reads payloads
 off the boxes the graph itself spells, so a rule whose payload nothing
 in the graph names is not on offer. The failure says which.
 
-An id is an exact address and a brittle one, and both halves are the
-point. A `NodeId` means one box of one graph at one moment, so an `at`
-is written by reading a report and is only good against the goal that
-report described: change a step in front of it and the ids behind it
-move. (A box's *content* is now its identity, so a box that no rewrite
-touched keeps its id — but a rewrite rebuilds everything downstream of
-what it replaced, and those boxes are new.) What it buys is that no other spelling of "that one" exists. The
-id is never *held* across a rewrite either — it is checked live at every
-entry and fails by name, `NoSuchNode`, the moment its box is gone.
+An address is a box's **name**, and the name is what it computes: a
+digest of the box's kind and of the addresses of what it reads, written
+in twelve letters of a sixteen-letter alphabet — `z` for nought through
+`k` for fifteen, which is Jujutsu's change ids, borrowed whole. A proof
+writes as much of one as tells that box from the others on the page,
+which is what the listing prints in **bold** on the box's own line and
+what it prints wherever one box refers to another. Two or three letters,
+in practice.
+
+Being a fact about the computation rather than about the graph, an
+address means the same box in every graph that computes it — the goal's
+other side included, and the goal as the next step leaves it. What it
+does not survive is a rewrite *under* the box, because a value made of
+different values is a different value; so an `at` written off a report
+is good exactly as long as the steps in front of it leave its box
+computing what it computed. What it buys is that no other spelling of
+"that one" exists. The name is never *held* across a rewrite either — it
+is looked up live at every entry, and fails by name the moment nothing
+answers to it (`NoSuchBox`) or two boxes do (`ManyBoxes`).
 
 ### The library drives
 
@@ -156,8 +166,8 @@ before any `apply`; persistence across steps is the query's job — run it
 again. `NodeId`s shift meaning across rewrites, so the language never
 stores one across a step; it stores the *description*, which is exactly
 what "the copy feeding the add" is. (`at`'s named box is the one
-deliberate exception, and it is re-checked at every entry rather than
-held.)
+deliberate exception, and it is a name rather than an id — looked up
+against the live graph at every entry rather than held.)
 
 ### Found and stated steps
 
@@ -214,7 +224,9 @@ pub enum Tactic {
     /// Forward, found: query → anchor → propose → pick → apply.
     Fire { at: Query, rule: RuleSpec, pick: Pick },
     /// One law, one named box, either direction — the surface's `at`.
-    At { node: NodeId, law: Law, dir: Direction, pick: Pick },
+    /// The name is as much of the box's `Address` as somebody wrote,
+    /// resolved against the side's live boxes at every entry.
+    At { at: Prefix, law: Law, dir: Direction, pick: Pick },
     /// Stated, either direction: query → resolve(MatchSpec) → apply.
     State { at: Query, rule: Rule, dir: Direction, with: MatchSpec, pick: Pick },
 
