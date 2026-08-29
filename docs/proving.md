@@ -24,12 +24,12 @@ cargo run --bin prove -- ../hana --filter two_spellings
 ```
 
 ```
-Proving 24 identities...
+Proving 25 identities...
 identity identities::testing_a_test ... ok (the two sides are one diagram)
 identity identities::testing_a_test_by_name ... ok (inline; the two sides are one diagram)
 identity barista::customer_impl::emit_does_pre_and_post_is_constant ... ok (inline; both: 299 rewrite(s); cases: 1 split(s) (true: 209 rewrite(s); false: 0 rewrite(s)); the two sides are one diagram)
 ...
-identity result: ok. 24 passed; 0 failed; 0 problem(s); 0 filtered out
+identity result: ok. 25 passed; 0 failed; 0 problem(s); 0 filtered out
 ```
 
 Exit codes: `0` every identity proved, `1` a claim unproved or a hint
@@ -92,6 +92,7 @@ proof identities::testing_a_test_by_name = inline diagram;
 | `symm` | swaps the two sides | never — but two in a row are refused |
 | `exact` | claims the sides are one diagram — which the auto-close has already checked, so a reached `exact` fails and shows the goal exactly as it stands | always, when reached |
 | `via { body } (left: s, right: s)` | **cuts**: `A = B` splits into the goals `A = C` and `C = B`, the waypoint built as a graph | the waypoint's net stack change is not the goal's, or a side fails |
+| `select-same (true: s, false: s)` | **splits a branch**: the left side answers with a `select`, so `select(c, T, E) = B` becomes the goals `T = B` and `E = B` (see below) | the left side's answer is not one `select`, or a block fails |
 | `cases(op)` | **case analysis** on an intermediate result: an `op` answer is `true` or `false` and nothing else, so everything depending on it becomes a branch holding one copy per case, the assumed answer pasted in as a literal (see below) | no side computes `op`, or nothing depends on its answer |
 | `cases(op(lit))` | the same split, with the wire addressed by what it tests: the outermost `op` one of whose operands is the pushed literal `lit` names — by any tail of its spelling, the way `inline` names a sentence | no such test |
 | `cases(is_tuple n)` | the same, on the one test that takes an operand: `is_tuple` asks whether a value is a tuple at all, `is_tuple n` whether it is one of exactly that width — two different questions | likewise |
@@ -99,9 +100,9 @@ proof identities::testing_a_test_by_name = inline diagram;
 | `diagram` | rewrites both sides by the whole table to fixpoint and asks whether they landed on one diagram | they did not — and the residual is both sides as they stand |
 
 A strategy acts on **one goal**, and the proof mirrors a tree of goals:
-the manipulations transform the current goal, the splitter — `via` —
-replaces it with independent subgoals each carrying its own strategy
-inside the split, and `diagram` closes it. So the closers end a strategy,
+the manipulations transform the current goal, a splitter — `via`,
+`select-same` — replaces it with independent subgoals each carrying its
+own strategy inside the split, and `diagram` closes it. So the closers end a strategy,
 and what follows a split is written *inside* it. A goal whose sides
 become isomorphic at any point closes on the spot — the second road to a
 proof: rewrite a side until the two are one graph. And a step that finds
@@ -114,7 +115,8 @@ provable** — the engine treats a call as an opaque box and a computed
 value as opaque, and these are the two ways a proof spends what the
 driver will not. The tactic steps direct and report: they spend named
 laws where the author points them. `via` lets a failure say which half of
-a journey it lives in, checked against a named midpoint. `exact` is the
+a journey it lives in, checked against a named midpoint, and
+`select-same` lets it say which block of a branch. `exact` is the
 way to *read* a goal: write `proof x = exact;`, look at the goal as built
 and aligned, then replace `exact` with the real strategy. `symm` claims
 nothing — equality is symmetric — it moves which side the asymmetric
@@ -122,7 +124,42 @@ steps read.
 
 An omitted `via` side gets `diagram`: a cut's sides are the author's own
 construction, and handing the decision procedure the halves is what a cut
-is for.
+is for. An omitted `select-same` block gets `diagram` for the same
+reason, and a block that is already the right side closes before any step
+runs, so its arm is usually left out.
+
+## `select-same`: proving a branch block by block
+
+A goal whose left side **answers with a branch** — every one of its
+boundary outputs an output of one `select`, which is what "the last box
+is a `select`" means — is a goal about two programs at once, and
+`select-same` is how a proof says so:
+
+```text
+proof identities::a_branch_whose_blocks_agree =
+    select-same (true: lhs(fire(as-bool-branch)));
+```
+
+`select(c, T, E) = B` becomes `T = B` and `E = B`, each an independent
+goal under its own strategy. What licenses putting them back together is
+the law the step is named for ([docs/rules.md](rules.md)): a branch both
+of whose blocks are `B` *is* `B`, and the condition goes with the branch,
+discarded the way every untaken arm is. Carving a block out deletes
+nothing — the block's goal is the same graph closed on that block's
+sources, so the condition and the other block become boxes no output
+reaches.
+
+It is the mirror of `cases`. `cases` **makes** a branch to reason under,
+spending a hypothesis as the structure that holds it; `select-same`
+**spends** a branch the goal already has, so a proof stops having to find
+one rewriting that suits both blocks and can name a step at the block
+that wants it. A block failing says which block it was, and shows that
+block against the right side rather than the branch it came out of.
+
+Two things to know. It reads the **left** side, and `symm` is how a proof
+says the branch is on the other one. And a side answering with a branch
+*and something else besides* is two answers rather than one, which the
+law has nothing to say about: the step refuses it rather than guessing.
 
 ### The tactic language, in brief
 

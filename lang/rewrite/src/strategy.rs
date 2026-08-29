@@ -3,8 +3,9 @@
 //! A proof mirrors a tree of goals, and a goal is two
 //! [graphs](crate::diagram2). A strategy acts on one: manipulations
 //! transform it — the tactic steps rewrite a side in place, `inline` opens
-//! calls, `symm` turns it — a splitter (`via`) replaces it with independent
-//! subgoals each carrying its own strategy, and `diagram` closes it. A goal
+//! calls, `symm` turns it — a splitter (`via`, `select-same`) replaces it
+//! with independent subgoals each carrying its own strategy, and
+//! `diagram` closes it. A goal
 //! whose sides have become **isomorphic** closes on its own, before any
 //! step runs, which is what `exact`'s claim tests. The default — what an
 //! identity with no written proof gets — is `diagram` alone.
@@ -41,7 +42,7 @@ use bytecode::{IdentityIndex, Library};
 use crate::diagram2::rules::{self, Derivation, Law};
 use crate::diagram2::tactic::{Region, Tactic};
 use crate::diagram2::{self, tactic};
-use crate::goal::{Goal, Outcome, Proof, Residual, against};
+use crate::goal::{self, Goal, Outcome, Proof, Residual, against};
 use crate::graph::{self, Direction, Graph, Match, NodeId, NodeKind, Pair, Source};
 use crate::hant::{Body, OnSide, Step, Strategy, default_strategy};
 use crate::term::{Context, Error, Prim};
@@ -492,6 +493,46 @@ impl<'l> Prover<'l> {
                     left_sub,
                     right_sub,
                 }))
+            }
+
+            // The other splitter, and the one that eliminates a branch
+            // rather than introducing one: the left side answers with a
+            // `select`, so the goal `select(c, T, E) = B` is the two goals
+            // `T = B` and `E = B`, each on its own road. What licenses
+            // putting them back together is the law the step is named for
+            // — a branch both of whose blocks are `B` is `B` — and the
+            // condition goes with the branch, discarded the way every
+            // untaken arm is.
+            //
+            // Where `cases` spends a hypothesis by *making* the branch that
+            // holds it, this spends the branch a goal already has: a proof
+            // stops having to find one rewriting that suits both blocks.
+            // It reads the left side, so `symm` is how a proof says the
+            // branch is on the other one.
+            Step::SelectSame { then_arm, else_arm } => {
+                let Some((then, els)) = goal::blocks(&goal.lhs) else {
+                    return Ok(Outcome::Stuck(gave_up(
+                        &goal,
+                        "`select-same` needs the left side to answer with one branch, and                          its last box is not a `select` the whole answer reads",
+                    )));
+                };
+                let sub = Goal {
+                    lhs: then,
+                    rhs: goal.rhs.clone(),
+                };
+                let then_sub = match self.side(ctx, "in the branch's true block", then_arm, sub)? {
+                    Ok(p) => p,
+                    Err(residual) => return Ok(Outcome::Stuck(residual)),
+                };
+                let sub = Goal {
+                    lhs: els,
+                    rhs: goal.rhs.clone(),
+                };
+                let else_sub = match self.side(ctx, "in the branch's false block", else_arm, sub)? {
+                    Ok(p) => p,
+                    Err(residual) => return Ok(Outcome::Stuck(residual)),
+                };
+                Ok(Outcome::Closed(Proof::SelectSame { then_sub, else_sub }))
             }
 
             Step::Symm => {
@@ -1464,5 +1505,123 @@ mod tests {
             "{}",
             residual.stopped
         );
+    }
+
+    /// The other splitter: the goal's left side answers with a branch, so
+    /// each block answers for itself against the right side.
+    #[test]
+    fn a_branch_answers_block_by_block() {
+        let code = r#"
+            #[arity(1,1)] sentence drop_and_true { drop 0 push true }
+            identity probe
+                { branch { jump crate::drop_and_true } { drop 0 push true } }
+              = { drop 0 drop 0 push true };
+        "#;
+        // The driver alone cannot: a call is opaque, so the two blocks are
+        // not the one block `select-same` would need to see.
+        let (_ctx, outcome) = prove_identity(code, "probe");
+        assert!(matches!(outcome, Outcome::Stuck(_)));
+
+        // Split, and each block takes its own road — the false one needing
+        // no steps at all, since it is already what the right side says.
+        let (_ctx, outcome) = prove_with(code, "probe", Some("select-same (true: inline diagram)"));
+        let Outcome::Closed(proof) = outcome else {
+            panic!("both blocks answer to the right side");
+        };
+        assert_eq!(
+            proof.summary(),
+            "select-same (true: inline; the two sides are one graph; \
+             false: the two sides are one graph)"
+        );
+    }
+
+    /// A block that does not close says which block it was, and shows that
+    /// block against the right side rather than the branch it came out of.
+    #[test]
+    fn a_block_that_sticks_names_itself() {
+        let (_ctx, outcome) = prove_with(
+            "identity probe { branch { push 1 } { push 2 } } = { drop 0 push 1 };",
+            "probe",
+            Some("select-same"),
+        );
+        let Outcome::Stuck(residual) = outcome else {
+            panic!("`push 2` is not `push 1`");
+        };
+        assert!(
+            residual.path.iter().any(|p| p.contains("false block")),
+            "{:?}",
+            residual.path
+        );
+        assert_eq!(
+            kinds(&residual.lhs_graph),
+            vec![NodeKind::Op(Prim::Push(Value::Int(2)))],
+            "the left is the block, not the branch it was carved from"
+        );
+    }
+
+    /// The step reads the left side, and says so when the left side is not
+    /// a branch — `symm` being how a proof says it is the other one.
+    #[test]
+    fn a_side_that_is_no_branch_is_refused() {
+        let code = "identity probe { drop 0 push true } = { branch { push true } { push true } };";
+        let (_ctx, outcome) = prove_with(code, "probe", Some("select-same"));
+        let Outcome::Stuck(residual) = outcome else {
+            panic!("the left side is a literal");
+        };
+        assert!(
+            residual.stopped.contains("answer with one branch"),
+            "{}",
+            residual.stopped
+        );
+
+        // Turned round, the same claim splits.
+        let (_ctx, outcome) = prove_with(code, "probe", Some("symm select-same"));
+        assert!(matches!(outcome, Outcome::Closed(_)));
+
+        // And the checker asks the same question the step did, rather than
+        // taking a proof's word that a split happened: it carves the two
+        // blocks off the goal itself, so a claimed split of a side that is
+        // no branch has nothing to carve.
+        let library = assemble(code).unwrap();
+        let mut ctx = Context::new();
+        let idx = library.identity_by_name("probe").unwrap();
+        let goal = Goal::of_identity(&mut ctx, &library, idx).unwrap();
+        let err = Proof::SelectSame {
+            then_sub: Box::new(Proof::Trivial),
+            else_sub: Box::new(Proof::Trivial),
+        }
+        .check(goal, &mut ctx, &library)
+        .unwrap_err();
+        assert!(err.contains("does not answer with one branch"), "{}", err);
+    }
+
+    /// A branch is not the *whole* answer when something else is answered
+    /// beside it: two answers, and the law has nothing to say about them.
+    /// Either end of the answer is enough to refuse it.
+    #[test]
+    fn a_branch_answering_only_part_is_refused() {
+        for (lhs, rhs) in [
+            // The branch answers the top, something else the rest…
+            (
+                "push 9 roll 1 branch { push 1 } { push 1 }",
+                "drop 0 push 9 push 1",
+            ),
+            // …and the other way round.
+            (
+                "branch { push 1 } { push 1 } push 9",
+                "drop 0 push 1 push 9",
+            ),
+        ] {
+            let code = format!("identity probe {{ {} }} = {{ {} }};", lhs, rhs);
+            let (_ctx, outcome) = prove_with(&code, "probe", Some("select-same"));
+            let Outcome::Stuck(residual) = outcome else {
+                panic!("`{}` answers more than the branch does", lhs);
+            };
+            assert!(
+                residual.stopped.contains("answer with one branch"),
+                "{}",
+                residual.stopped
+            );
+        }
     }
 }

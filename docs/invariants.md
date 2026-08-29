@@ -93,7 +93,12 @@ that is the property it exists to have — so:
 
 A `Proof` carries its full record — every step each drive landed, the
 inline's target, the cut's waypoint — and `Prover::prove` re-checks the
-whole tree against the goal *as stated* before answering: every step
+whole tree against the goal *as stated* before answering. Where a node
+records nothing, it is because the move is a function of the goal and the
+checker re-performs it: `inline` re-opens, and a `select-same` split
+re-carves the two blocks off the left side's own `select`, refusing a
+proof whose left side does not answer with one. The checking is the same
+either way: every step
 replayed through the table, every isomorphism asked again. A proof that
 does not re-check comes back stuck, named as the prover bug it is. A
 citation (`by name`) stands **given the corpus**: the citation order is a
@@ -115,8 +120,10 @@ The checker has no turnstile and is not getting one. "Assume the
 condition holds" is the branch itself: `shannon` introduces it, the
 specializing rows spend it (anchored on the select, which holds both the
 condition and the discard that licenses reasoning from it),
-`select-same` discharges it, and `Proof::check` replays the chain with no idea a case
-analysis happened. Only guard-shaped hypotheses compile away this way —
+`select-same` discharges it — as a row the branch layer drives, and as
+the proof step of that name, which spends a branch the goal already holds
+by asking each block to answer for itself — and `Proof::check` replays
+the chain with no idea a case analysis happened. Only guard-shaped hypotheses compile away this way —
 "this wire's answer is `true`" for a wire the instruction set promises is
 a bool. That boundary is a theorem (hypothesis elimination, in the
 Kleene-algebra-with-tests literature), not an implementation gap: an

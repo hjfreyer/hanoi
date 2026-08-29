@@ -142,7 +142,7 @@ The language lives in `lang/`, a cargo workspace of several key packages, and th
 - **[lang/rewrite](lang/rewrite)**: The prover.
   - [lang/rewrite/src/term.rs](lang/rewrite/src/term.rs): The term model — programs as two arity-exact operators (`;` and `*`) over a handful of leaves; the language goals are lowered from and `via` waypoints are written in.
   - [lang/rewrite/src/diagram2](lang/rewrite/src/diagram2): The graph engine — programs as literal graphs of boxes and wires, the law table (`rules.rs`), and the tactic language that drives it (`tactic.rs`).
-  - [lang/rewrite/src/hant.rs](lang/rewrite/src/hant.rs): The strategy language proofs are written in (`inline`, `cases`, `via`, `diagram`, `by`); [strategy.rs](lang/rewrite/src/strategy.rs) interprets one per identity behind `bin/prove`.
+  - [lang/rewrite/src/hant.rs](lang/rewrite/src/hant.rs): The strategy language proofs are written in (`inline`, `cases`, `via`, `select-same`, `diagram`, `by`); [strategy.rs](lang/rewrite/src/strategy.rs) interprets one per identity behind `bin/prove`.
 - **[lang/test-runner](lang/test-runner)**: CLI harness that compiles and runs integration test suites.
 - **[hana](hana)**: The `.hana`/`.hant` corpus — test cases covering all VM features, string/data parsers, queues, and multi-agent CSP networks, and the identities `bin/prove` discharges.
 

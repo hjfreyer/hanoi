@@ -59,6 +59,10 @@ pub(crate) fn lemmas_of(strategy: &Strategy<Body>, out: &mut Vec<IdentityIndex>)
                 then_arm: left,
                 else_arm: right,
                 ..
+            }
+            | Step::SelectSame {
+                then_arm: left,
+                else_arm: right,
             } => {
                 for arm in [left, right].into_iter().flatten() {
                     lemmas_of(arm, out);
@@ -134,6 +138,12 @@ pub(crate) fn attach(
                 } => Step::Cases {
                     prim: prim.clone(),
                     literal: literal.clone(),
+                    then_arm: side(ctx, then_arm, library)?,
+                    else_arm: side(ctx, else_arm, library)?,
+                },
+                // Nothing in it waits on the library: the branch it splits
+                // is the goal's own, and the blocks are read off it.
+                Step::SelectSame { then_arm, else_arm } => Step::SelectSame {
                     then_arm: side(ctx, then_arm, library)?,
                     else_arm: side(ctx, else_arm, library)?,
                 },
