@@ -65,11 +65,10 @@ say:
   same sources, so they *are* one box, and `select-same` is the whole
   of it.
 
-There used to be five rows here — `id-elim`, `swap-elim`, `copy-elim`,
-`dead-node` and `dedup` — and a driver that spent them before the value
-layer could reach anything. They are gone, and the change is not that
-they became unnecessary but that they became **unstatable**: there is no
-graph for either side of them to be.
+None of these is a row waiting to be written, and the reason is
+stronger than "unnecessary": each is **unstatable**. There is no graph
+for either side of `copy-elim` or `dedup` to be, so there is nothing for
+a driver to spend and nothing for a proof to name.
 
 ## The two driven lists
 
@@ -104,7 +103,7 @@ whole graph rather than about a window.
 
 | law | statement |
 |---|---|
-| `select-literal` | β: `push c ; if { T } else { E }` = the blocks `truthy(c)` chooses. Sound on **every** value, not only bools: `truthy` is total, `false` the one falsy value. The untaken arm is outside the window: its boxes lose their reader when the select goes, and a box the boundary no longer reaches is no longer in the program. |
+| `select-literal` | β: `push c ; if { T } else { E }` = the blocks `truthy(c)` chooses. Sound on **every** value, not only bools: `truthy` is total, `false` the one falsy value. The untaken arm is outside the window: its boxes lose their reader when the select goes, and a box the boundary does not reach is not in the program. |
 | `select-same` | `if c { x } else { x } = x`, one block at a time: a block the select answers with either way is what it answers. The select keeps its other blocks and narrows by one. |
 | `specialize-equal` | a value that tested `equal` to a literal **is** that literal, in the block the test chose: `equal` answers `Bool(a == b)`, so a truthy answer is `a == b` and nothing weaker. |
 | `specialize-bool` | the very value a branch tested, when it is a bool, is what the branch decided: `true` in the then block, `false` in the else block. The window holds the `as_bool` that made the condition — that coercion's presence is what says the condition is a bool at all (a condition of `5` is truthy, and its then block reads `5`, not `true`). `promised-bool` is the row that puts the coercion there. |

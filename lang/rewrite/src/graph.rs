@@ -32,7 +32,7 @@
 //! one way only — [`Graph::sources`] down, and no reader lists to keep in
 //! step. [`Graph::sinks`] answers by reading, and answers about the
 //! **reachable** graph: a node no boundary output reaches is not part of
-//! the program, and reachability is the whole of what deletion used to be.
+//! the program, and reachability is the whole of what deletion means.
 //!
 //! ## A rewrite replaces a value, not a subgraph
 //!
@@ -302,8 +302,8 @@ impl Graph {
     /// already says that.
     ///
     /// The interning is the model: a value is named by what it is, so
-    /// asking for one twice asks for the same one. Everything the wiring
-    /// laws used to do happens here, before there is anything to rewrite.
+    /// asking for one twice asks for the same one. The whole wiring
+    /// theory is settled here, before there is anything to rewrite.
     pub(crate) fn add(&mut self, kind: NodeKind, inputs: Vec<Source>) -> Vec<Source> {
         let arity = kind.arity();
         debug_assert_eq!(inputs.len(), arity.inputs, "the caller cuts by arity");
@@ -408,10 +408,10 @@ impl Graph {
 
     /// Whether every source names a port that is there.
     ///
-    /// Short, because the representation has stopped admitting most of what
-    /// this used to check: there are no reader lists to fall out of step,
-    /// a node's ports are its kind's by construction, and nothing can reach
-    /// itself because a node is built after what it reads.
+    /// Short, because the representation admits so little: there are no
+    /// reader lists to fall out of step, a node's ports are its kind's by
+    /// construction, and nothing can reach itself, since a node is built
+    /// after what it reads.
     pub fn check(&self) -> Result<(), Error> {
         for (i, node) in self.nodes.iter().enumerate() {
             if node.inputs.len() != node.kind.arity().inputs {
@@ -722,15 +722,13 @@ impl Pair {
     /// exports, which is the equation said in the host's own values. And
     /// everything that read the one is rebuilt to read the other.
     ///
-    /// What used to be five conditions is now three, and the two that went
-    /// were the same condition twice: a splice had to account for every
-    /// reader it was about to strand, so a law could not fire in a window
-    /// anything else read into. Substitution stands nothing up: a reader
-    /// the pattern never mentioned goes on reading the box it always read,
-    /// which is still there and still means what it meant. The one thing
-    /// left to refuse is a replacement that is *already* part of what it
-    /// replaces — an equation spent on its own answer, which says nothing
-    /// and would only grow the graph.
+    /// Nothing here has to account for a reader the pattern never
+    /// mentioned: that reader goes on reading the box it always read,
+    /// which is still there and still means what it meant. So a law fires
+    /// in a window other things read into, which is what it always meant.
+    /// The one thing to refuse is a replacement that is *already* part of
+    /// what it replaces — an equation spent on its own answer, which says
+    /// nothing and would only grow the graph.
     ///
     /// The answer is the **embedding of what went in**, which is where the
     /// way back lands: a [`Match`] names host [`NodeId`]s, so the inverse
@@ -811,11 +809,10 @@ impl Pair {
 /// anyone may state one. [`Pair::apply`] checks before it builds, so a
 /// wrong claim costs a [`Mismatch`] rather than a wrong graph.
 ///
-/// There is no third field. A match used to have to say which of a port's
-/// outside readers belonged to the window, because a splice re-pointed
-/// them; substitution re-points *every* reader of a value it replaces, and
-/// leaves every reader of anything else alone. The one genuine choice a
-/// match ever carried is gone with the operation that needed it.
+/// Two fields, and no choice among them: both are readings of the host.
+/// A substitution re-points *every* reader of the value it replaces and
+/// leaves every reader of anything else alone, so a match never has to
+/// say which of a port's outside readers belong to the window.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Match {
     /// Image of the pattern's boxes, indexed by the pattern's own node
@@ -826,8 +823,8 @@ pub struct Match {
 }
 
 impl Match {
-    /// This match said again in terms of the boxes that stand where its own
-    /// used to.
+    /// This match said again in terms of the boxes that stand where its
+    /// own stood.
     pub fn rebase(&self, moved: &HashMap<NodeId, NodeId>) -> Match {
         let now = |id: NodeId| moved.get(&id).copied().unwrap_or(id);
         Match {
@@ -977,18 +974,17 @@ impl std::error::Error for Mismatch {}
 
 /// Whether the match points at boxes that really are the pattern.
 ///
-/// Three conditions, where there were five, and the two that went were the
-/// price of destroying things:
+/// Three conditions, and between them "these boxes are that pattern":
 ///
 /// 1. **Shape** — one image per box, one source per boundary input.
 /// 2. **Kinds** — the same box.
 /// 3. **Edges** — every input port of a matched box reads what the pattern
 ///    says it reads.
 ///
-/// *Fullness* — every reader of every exported port accounted for — and
-/// *inducedness* were about a splice's loose ends, and a substitution has
-/// none. Their going is why a law fires in a window other things read into,
-/// which is what it always meant.
+/// Nothing about who reads what the pattern *leaves*. Accounting for that
+/// is the price of destroying things, and a substitution destroys
+/// nothing — which is why a law fires in a window other things read into,
+/// which is what a law always meant.
 pub fn check_match(graph: &Graph, pattern: &Graph, at: &Match) -> Result<(), Mismatch> {
     let boxes = pattern.nodes.len();
     if at.nodes.len() != boxes || at.inputs.len() != pattern.inputs {
@@ -1088,15 +1084,15 @@ pub fn find_over(graph: &Graph, pattern: &Graph, host: NodeId) -> Vec<Match> {
 
 /// Whether a pattern says enough about itself to be looked for.
 ///
-/// Two conditions now: at least one box to anchor on, and no boundary input
+/// Two conditions: at least one box to anchor on, and no boundary input
 /// that nothing in the pattern reads — a window standing for a wire it
 /// never touches cannot say which wire that is.
 ///
-/// The third is gone with the reader-split. A pattern that exported one
-/// port twice used to be unsearchable, because nothing in the host said
-/// which of that port's readers belonged to which export; a substitution
-/// asks no such question, so most right-hand sides can now be looked for,
-/// and a backward step is a step like any other.
+/// A pattern that exports one port twice is searchable like any other,
+/// which is what makes a right-hand side searchable and a backward step a
+/// step like any other: nothing in the host has to say which of that
+/// port's readers belong to which export, because a substitution asks no
+/// such question.
 pub fn pins_itself(pattern: &Graph) -> bool {
     if pattern.nodes.is_empty() {
         return false;
@@ -1457,11 +1453,8 @@ mod tests {
     /// A rewrite replaces a **value**, so every reader of it is rebuilt —
     /// including ones the window never mentioned.
     ///
-    /// This is the condition that went with the splice. The old checker
-    /// refused a match whose boxes had readers it did not account for,
-    /// because deleting those boxes would have stranded them; nothing is
-    /// deleted, so nothing is stranded, and a law fires in a window other
-    /// things read into.
+    /// Nothing is deleted, so nothing is stranded: a match whose boxes
+    /// have readers it never accounts for is a match like any other.
     #[test]
     fn a_reader_the_window_never_named_is_no_obstacle() {
         // `not(x)` read by a second `not` *and* by the boundary.
@@ -1476,8 +1469,8 @@ mod tests {
                 let mut g = Graph::empty(1);
                 let first = g.add(NodeKind::Op(Prim::Not), vec![Source::Input(0)]);
                 let second = g.add(NodeKind::Op(Prim::Not), first);
-                // The middle port is not exported, and that used to be the
-                // whole side condition.
+                // The middle port is not exported, and nothing about
+                // that holds the rule to an unshared window.
                 g.close(second);
                 g
             },

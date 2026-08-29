@@ -1,12 +1,11 @@
 //! The driver, as data: tactics over the table in [`rules`] and the
 //! queries in [`query`], run into a [`Derivation`].
 //!
-//! There was a `saturate` in [`rules`] — a worklist that ran a list of laws
-//! to fixpoint — and it was deleted on purpose: *which* laws, *where*, and
-//! *in what order* is a strategy, and a strategy belongs to whoever is
-//! proving something. This module is where a strategy is **written**: a
-//! [`Tactic`] is a plain value, an interpreter runs it, and the deleted
-//! driver comes back as one program among many ([`decide`]).
+//! No driver lives in [`rules`], and none should: *which* laws, *where*,
+//! and *in what order* is a strategy, and a strategy belongs to whoever
+//! is proving something. This module is where one is **written**: a
+//! [`Tactic`] is a plain value, an interpreter runs it, and a driver is
+//! one program among many ([`decide`]).
 //!
 //! Everything here is untrusted, and holding that line is the design. A
 //! tactic mutates a graph through [`Derivation::push`] and nothing else, so
@@ -998,14 +997,13 @@ mod tests {
         );
     }
 
-    /// What the deleted wiring driver used to be for, asked of `build`
-    /// instead: a graph arrives with nothing to sweep.
+    /// A graph arrives with nothing to sweep.
     ///
-    /// Every one of these bodies was a wiring exercise — two crossings
+    /// Every one of these bodies is a wiring exercise — two crossings
     /// that cancel, a `pick` that copies, a `drop` that discards — and
-    /// every one of them now lands as the values it computes and no
-    /// boxes besides. There is no run to make, which is the strongest
-    /// form of the run always terminating.
+    /// every one lands as the values it computes and no boxes besides.
+    /// There is no run to make, which is the strongest form of a run
+    /// always terminating.
     #[test]
     fn a_built_graph_has_no_wiring_to_sweep() {
         for (body, boxes) in [
@@ -1065,10 +1063,10 @@ mod tests {
     /// The directed spelling: fold the literal condition, claiming there
     /// is exactly one.
     ///
-    /// And what a fold leaves, which is the change: the untaken arm's
-    /// literal is not *deleted*, it is simply no longer reached. There is
-    /// no cleanup pass, focused or otherwise — the boundary stops naming
-    /// it and it stops being part of the program in the same move.
+    /// And what a fold leaves: the untaken arm's literal is not
+    /// *deleted*, it is simply not reached. There is no cleanup pass,
+    /// focused or otherwise — the boundary stops naming it and it stops
+    /// being part of the program in the same move.
     #[test]
     fn a_literal_condition_keeps_its_arm() {
         let mut graph = built("push true branch { push 1 } { push 2 }");
@@ -1461,12 +1459,9 @@ mod tests {
     /// The direction is the author's, and `backward` reads the law's
     /// equation right to left.
     ///
-    /// It used to find something only where a right-hand side pinned its
-    /// own match, which most did not: a side exporting one port twice
-    /// left the split of that port's readers a choice, so those steps had
-    /// to be stated. Nothing splits readers any more, so a right-hand side
-    /// is looked for like anything else — here `as_bool`, read back as the
-    /// two `not`s it is.
+    /// A right-hand side is looked for like anything else, because
+    /// nothing splits readers — here `as_bool`, read back as the two
+    /// `not`s it is.
     #[test]
     fn a_named_box_can_be_rewritten_backward() {
         // A `not` for the payload to be read off, and the `as_bool` the

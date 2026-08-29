@@ -7,8 +7,12 @@
 // case analysis had to be written out waypoint by waypoint. The diagram
 // engine builds that case analysis itself: branches become an ordered case
 // tree, the arm that tested equal to a literal holds the literal, and each
-// leaf folds on the machine. All the proof has left to say is the one thing
-// the engine never does on its own — spend the definitions.
+// leaf folds on the machine. What the proof has left to say is the one
+// thing the engine never does on its own — spend the definitions — and
+// which of the four `equal`s each split is about: the tag tests are named
+// by their literals, since an unaddressed `cases(equal)` takes the first
+// it is offered, which is the postcondition's own shape guard and decides
+// nothing.
 proof types_test::number_does_pre_and_post_is_constant =
     inline both(decide)
     cases(equal(types_test::t1)) both(decide)

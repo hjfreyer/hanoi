@@ -42,12 +42,11 @@ wants a shape says it in the pattern rather than testing for it —
 it pins as payload, `select-literal` carries its arms. Nothing asks a
 question a match could answer. New rules follow the same discipline.
 
-What a boundary no longer says is *and nothing else reads this*. That
-was the fullness condition, and it went with the splice: a rewrite
-replaces the value a window exports and rebuilds whatever read it, so a
-reader the window never mentioned is not a loose end. `not-not` used to
-decline on a first `not` somebody else read; it fires there now, and the
-other reader goes on reading the box it always read.
+What a boundary does **not** say is *and nothing else reads this*. A
+rewrite replaces the value a window exports and rebuilds whatever read
+it, so a reader the window never mentioned is not a loose end: `not-not`
+fires on a first `not` somebody else reads, and that somebody goes on
+reading the box it always read.
 
 ## Totality, purity and determinism are load-bearing
 
@@ -58,14 +57,13 @@ other reader goes on reading the box it always read.
   is licensed by **determinism and purity**: running twice is running
   once.
 
-Neither is a law any more, and that is the point of saying them here.
-They used to be `dead-node` and `dedup`, rows a driver spent; they are
-now properties of the representation — a value is named by what it is,
-and a value nothing names is not there. The licenses did not go with the
-rows. If a partial instruction ever arrives, discard stops being sound
-and the graph would have to record what it currently forgets; if an
-effectful or nondeterministic one arrives, interning goes, and with it
-the whole model.
+Neither is a law that fires, and that is exactly why the licenses are
+stated here rather than beside a row: both are properties of the
+representation. A value is named by what it is, and a value nothing
+names is not there. If a partial instruction ever arrives, discard stops
+being sound and the graph would have to record what it currently
+forgets; if an effectful or nondeterministic one arrives, interning
+goes, and with it the whole model.
 
 No instruction may be added without revisiting the table against this
 list.
