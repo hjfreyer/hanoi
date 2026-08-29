@@ -28,7 +28,7 @@
 //! | `symm` | swaps the two sides | never — but two in a row are refused |
 //! | `exact` | claims the sides are one diagram — **isomorphic** — which the auto-close has already checked, so a reached `exact` fails and shows the goal exactly as it stands | always, when reached |
 //! | `via { body } (left: s, right: s)` | **cuts**: `A = B` splits into the goals `A = C` and `C = B`, the waypoint built as a graph | the waypoint's net stack change is not the goal's, or a side fails |
-//! | `select-same (true: s, false: s)` | **splits a branch**: the left side answers with a `select`, so `select(c, T, E) = B` splits into the goals `T = B` and `E = B`, each on its own road. The law of that name is what puts them back together — a branch answering `B` either way *is* `B` — and the condition goes with the branch. The mirror of `cases`: that one makes a branch to reason under, this one spends the one a goal already has | the left side's answer is not one `select` — every boundary output that box's own — or a block fails, and the residual says which block |
+//! | `select-same (then: s, else: s)` | **splits a branch**: the left side answers with a `select`, so `select(c, T, E) = B` splits into the goals `T = B` and `E = B`, each on its own road. The law of that name is what puts them back together — a branch answering `B` either way *is* `B` — and the condition goes with the branch. The mirror of `cases`: that one makes a branch to reason under, this one spends the one a goal already has | the left side's answer is not one `select` — every boundary output that box's own — or a block fails, and the residual says which block |
 //! | `cases(op)` | **case analysis** on an intermediate result: an `op` answer is `true` or `false` and nothing else, so everything depending on it becomes a branch holding one copy per case, the assumption pasted in as a literal — one checked rewrite per side, simplified under each assumption by the ordinary laws | no side computes `op`, or nothing depends on its answer |
 //! | `cases(is_tuple n)` | the same, on the one test that takes an operand: `is_tuple` asks whether a value is a tuple at all and `is_tuple n` whether it is one of exactly that width, and they are two questions | likewise |
 //! | `cases(op) (true: s, false: s)` | the same split, with a sub-strategy per case: each runs with its rewrites scoped to its side of the fresh branch — the hypothesis, spent as the structure it is. An arm holds side rewrites and nested `cases`; either is omissible, and a side whose branch is already gone skips its arm quietly | the split fails, or an arm's tactic does — and the residual names whose case it stood in |
@@ -506,12 +506,11 @@ fn parse_step(input: &str) -> Result<(Step<String>, &str), String> {
         "symm" => Ok((Step::Symm, rest)),
         "exact" => Ok((Step::Exact, rest)),
         // The blocks of the branch the left side answers with, each against
-        // the right side. The arms ride `via`'s spelling and `cases`'s
-        // labels: the block a truthy condition answers with is the `true`
-        // one.
+        // the right side. The arms ride `via`'s spelling, and their labels
+        // are the graph layer's own names for a `select`'s two blocks.
         "select-same" => {
             let (arms, after) = if rest.trim_start().starts_with('(') {
-                parse_arms("select-same", "true", "false", rest.trim_start())?
+                parse_arms("select-same", "then", "else", rest.trim_start())?
             } else {
                 ((None, None), rest)
             };
@@ -1242,7 +1241,7 @@ mod tests {
         // is omissible — a block that is already the right side needs no
         // strategy of its own.
         let entries =
-            parse_hant("proof p = symm select-same (true: inline diagram, false: exact);").unwrap();
+            parse_hant("proof p = symm select-same (then: inline diagram, else: exact);").unwrap();
         let [
             Step::Symm,
             Step::SelectSame {
@@ -1256,7 +1255,7 @@ mod tests {
         assert_eq!(then_arm.as_slice(), [Step::Inline(None), Step::Diagram]);
         assert_eq!(else_arm.as_slice(), [Step::Exact]);
 
-        let entries = parse_hant("proof p = select-same (false: diagram);").unwrap();
+        let entries = parse_hant("proof p = select-same (else: diagram);").unwrap();
         assert!(matches!(
             entries[0].strategy[..],
             [Step::SelectSame {
@@ -1269,10 +1268,10 @@ mod tests {
         // own right — so each takes a whole strategy, closer and all.
         let err = parse_hant("proof p = select-same diagram;").unwrap_err();
         assert!(err.contains("nothing can follow"), "{}", err);
-        let err = parse_hant("proof p = select-same (true: diagram inline);").unwrap_err();
+        let err = parse_hant("proof p = select-same (else: diagram inline);").unwrap_err();
         assert!(err.contains("nothing can follow"), "{}", err);
-        let err = parse_hant("proof p = select-same (then: diagram);").unwrap_err();
-        assert!(err.contains("`true:` or `false:`"), "{}", err);
+        let err = parse_hant("proof p = select-same (true: diagram);").unwrap_err();
+        assert!(err.contains("`then:` or `else:`"), "{}", err);
     }
 
     #[test]

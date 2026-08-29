@@ -23,11 +23,11 @@ proof identities::as_tuple_is_a_guarded_identity = lhs(fire(coercion-guard)) dia
 
 // The other splitter, and the one that spends a branch rather than making
 // one: the left side answers with a branch, so each of its blocks answers
-// for itself against the right side. The true block is the coercion and
-// wants the unpacking named at it; the false block is already the right
+// for itself against the right side. The `then` block is the coercion and
+// wants the unpacking named at it; the `else` block is already the right
 // side, so its goal closes before any step runs and the arm is left out.
 proof identities::a_branch_whose_blocks_agree =
-    select-same (true: lhs(fire(as-bool-branch)));
+    select-same (then: lhs(fire(as-bool-branch)));
 
 // The commuting conversion, spent where a proof asks for it. The row grows
 // the graph — it duplicates the region the branch grows over — so no list

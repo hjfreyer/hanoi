@@ -92,7 +92,7 @@ proof identities::testing_a_test_by_name = inline diagram;
 | `symm` | swaps the two sides | never — but two in a row are refused |
 | `exact` | claims the sides are one diagram — which the auto-close has already checked, so a reached `exact` fails and shows the goal exactly as it stands | always, when reached |
 | `via { body } (left: s, right: s)` | **cuts**: `A = B` splits into the goals `A = C` and `C = B`, the waypoint built as a graph | the waypoint's net stack change is not the goal's, or a side fails |
-| `select-same (true: s, false: s)` | **splits a branch**: the left side answers with a `select`, so `select(c, T, E) = B` becomes the goals `T = B` and `E = B` (see below) | the left side's answer is not one `select`, or a block fails |
+| `select-same (then: s, else: s)` | **splits a branch**: the left side answers with a `select`, so `select(c, T, E) = B` becomes the goals `T = B` and `E = B` (see below) | the left side's answer is not one `select`, or a block fails |
 | `cases(op)` | **case analysis** on an intermediate result: an `op` answer is `true` or `false` and nothing else, so everything depending on it becomes a branch holding one copy per case, the assumed answer pasted in as a literal (see below) | no side computes `op`, or nothing depends on its answer |
 | `cases(op(lit))` | the same split, with the wire addressed by what it tests: the outermost `op` one of whose operands is the pushed literal `lit` names — by any tail of its spelling, the way `inline` names a sentence | no such test |
 | `cases(is_tuple n)` | the same, on the one test that takes an operand: `is_tuple` asks whether a value is a tuple at all, `is_tuple n` whether it is one of exactly that width — two different questions | likewise |
@@ -137,7 +137,7 @@ is a `select`" means — is a goal about two programs at once, and
 
 ```text
 proof identities::a_branch_whose_blocks_agree =
-    select-same (true: lhs(fire(as-bool-branch)));
+    select-same (then: lhs(fire(as-bool-branch)));
 ```
 
 `select(c, T, E) = B` becomes `T = B` and `E = B`, each an independent

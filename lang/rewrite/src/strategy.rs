@@ -520,7 +520,7 @@ impl<'l> Prover<'l> {
                     lhs: then,
                     rhs: goal.rhs.clone(),
                 };
-                let then_sub = match self.side(ctx, "in the branch's true block", then_arm, sub)? {
+                let then_sub = match self.side(ctx, "in the branch's then block", then_arm, sub)? {
                     Ok(p) => p,
                     Err(residual) => return Ok(Outcome::Stuck(residual)),
                 };
@@ -528,7 +528,7 @@ impl<'l> Prover<'l> {
                     lhs: els,
                     rhs: goal.rhs.clone(),
                 };
-                let else_sub = match self.side(ctx, "in the branch's false block", else_arm, sub)? {
+                let else_sub = match self.side(ctx, "in the branch's else block", else_arm, sub)? {
                     Ok(p) => p,
                     Err(residual) => return Ok(Outcome::Stuck(residual)),
                 };
@@ -1524,14 +1524,14 @@ mod tests {
 
         // Split, and each block takes its own road — the false one needing
         // no steps at all, since it is already what the right side says.
-        let (_ctx, outcome) = prove_with(code, "probe", Some("select-same (true: inline diagram)"));
+        let (_ctx, outcome) = prove_with(code, "probe", Some("select-same (then: inline diagram)"));
         let Outcome::Closed(proof) = outcome else {
             panic!("both blocks answer to the right side");
         };
         assert_eq!(
             proof.summary(),
-            "select-same (true: inline; the two sides are one graph; \
-             false: the two sides are one graph)"
+            "select-same (then: inline; the two sides are one graph; \
+             else: the two sides are one graph)"
         );
     }
 
@@ -1548,7 +1548,7 @@ mod tests {
             panic!("`push 2` is not `push 1`");
         };
         assert!(
-            residual.path.iter().any(|p| p.contains("false block")),
+            residual.path.iter().any(|p| p.contains("else block")),
             "{:?}",
             residual.path
         );
