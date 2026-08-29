@@ -2609,7 +2609,7 @@ mod tests {
             .enumerate()
             .map(|(i, v)| (Source::Input(i), v.clone()))
             .collect();
-        for id in crate::diagram2::schedule(graph) {
+        for id in crate::graph::schedule(graph) {
             let took: Vec<Value> = graph
                 .sources(id)
                 .iter()
