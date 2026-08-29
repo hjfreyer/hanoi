@@ -18,7 +18,7 @@ use bytecode::{IdentityIndex, Library, SentenceIndex};
 
 use crate::diagram2;
 use crate::diagram2::rules::{Step, replay};
-use crate::graph::{self, Direction, Graph, Match, Pair};
+use crate::graph::{self, Direction, Graph, Match, NodeKind, Pair, Source};
 use crate::term::{Context, Error, TermIndex, lower};
 
 /// Two graphs of one arity, claimed to be the same program.
@@ -182,6 +182,21 @@ pub enum Proof {
         left_sub: Box<Proof>,
         right_sub: Box<Proof>,
     },
+    /// A `select-same` split the goal at the branch its left side answers
+    /// with: `select(c, T, E) = B` became `T = B` and `E = B`, each closed
+    /// independently, and the law of the same name is what puts the two
+    /// back together — a branch both of whose blocks are `B` *is* `B`.
+    ///
+    /// Like [`Cut`](Proof::Cut), it records the two sub-proofs and nothing
+    /// else: the halves are [`blocks`]'s to rebuild, from the goal, the
+    /// same way the prover carved them, so the two cannot disagree about
+    /// what the split meant. A left side that no longer answers with one
+    /// `select` fails the check rather than being taken on the prover's
+    /// word.
+    SelectSame {
+        then_sub: Box<Proof>,
+        else_sub: Box<Proof>,
+    },
     /// A `cases` expanded a boolean-valued wire — η, spent as the table's
     /// own Shannon law — on each side that held one, and the expanded goal
     /// closed. The per-side records hold the split(s) and, when the step
@@ -295,6 +310,35 @@ impl Proof {
                     .check(Goal { lhs: stone, rhs }, ctx, library)
                     .map_err(|e| format!("in the right half of the cut: {}", e))
             }
+            Proof::SelectSame { then_sub, else_sub } => {
+                let Some((then, els)) = blocks(&goal.lhs) else {
+                    return Err(
+                        "claimed a `select-same` split, and the left side does not answer \
+                         with one branch"
+                            .to_string(),
+                    );
+                };
+                then_sub
+                    .check(
+                        Goal {
+                            lhs: then,
+                            rhs: goal.rhs.clone(),
+                        },
+                        ctx,
+                        library,
+                    )
+                    .map_err(|e| format!("in the branch's true block: {}", e))?;
+                else_sub
+                    .check(
+                        Goal {
+                            lhs: els,
+                            rhs: goal.rhs,
+                        },
+                        ctx,
+                        library,
+                    )
+                    .map_err(|e| format!("in the branch's false block: {}", e))
+            }
         }
     }
 
@@ -381,6 +425,12 @@ impl Proof {
                  halves do not meet on the nose"
                     .to_string(),
             ),
+            Proof::SelectSame { .. } => Err(
+                "it splits the branch its left side answers with, and the two blocks' runs \
+                 sit under a `select` rather than one after the other, so there is no single \
+                 run to carry"
+                    .to_string(),
+            ),
         }
     }
 
@@ -411,6 +461,10 @@ impl Proof {
             } => {
                 left_sub.cites(out);
                 right_sub.cites(out);
+            }
+            Proof::SelectSame { then_sub, else_sub } => {
+                then_sub.cites(out);
+                else_sub.cites(out);
             }
         }
     }
@@ -445,6 +499,11 @@ impl Proof {
                 left_sub.summary(),
                 right_sub.summary()
             ),
+            Proof::SelectSame { then_sub, else_sub } => format!(
+                "select-same (true: {}; false: {})",
+                then_sub.summary(),
+                else_sub.summary()
+            ),
             Proof::Cases {
                 splits, arms, sub, ..
             } => match arms {
@@ -478,6 +537,48 @@ pub(crate) fn against(ctx: &mut Context, side: &Graph, waypoint: TermIndex) -> (
             diagram2::build(ctx, waypoint),
         )
     }
+}
+
+/// The two graphs a side that **answers with one branch** is: the same
+/// side reading the `select`'s `then` blocks for its outputs, and the same
+/// side reading its `else` blocks.
+///
+/// `None` when the side's answer is not one `select` — every boundary
+/// output has to be that box's own output port, in order, which is what
+/// "the last box is a `select`" means. A side answering with a branch and
+/// something else besides is two answers, and the law has nothing to say
+/// about it.
+///
+/// Nothing is deleted to carve a block out: closing the graph on the
+/// block's sources leaves the condition — and the other block — boxes no
+/// boundary output reaches, which is the whole of what discarding means
+/// here. Both the prover's `select-same` step and the checker's re-walk of
+/// a [`Proof::SelectSame`] carve their halves here, so the two cannot
+/// disagree about what the split meant.
+pub(crate) fn blocks(side: &Graph) -> Option<(Graph, Graph)> {
+    let outputs = side.outputs();
+    let &Source::Port { node, port: 0 } = outputs.first()? else {
+        return None;
+    };
+    let NodeKind::Select { arity } = *side.kind(node) else {
+        return None;
+    };
+    let whole = outputs.len() == arity
+        && outputs
+            .iter()
+            .enumerate()
+            .all(|(i, &src)| src == Source::Port { node, port: i });
+    if !whole {
+        return None;
+    }
+    // Input 0 is the condition, `1..=n` the `then` blocks, `n+1..=2n` the
+    // `else` blocks — the wiring [`NodeKind::Select`] states.
+    let takes = side.sources(node).to_vec();
+    let mut then = side.clone();
+    then.close(takes[1..=arity].to_vec());
+    let mut els = side.clone();
+    els.close(takes[arity + 1..].to_vec());
+    Some((then, els))
 }
 
 /// What is left when a goal did not close: what each side became, as the

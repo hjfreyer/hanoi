@@ -540,6 +540,22 @@ test sentence coercing_to_bool_is_the_branch_it_makes {
 identity as_bool_is_the_branch_it_makes
     { as_bool } = { branch { push true } { push false } };
 
+// `branch { A } { B }` = `C`, where the branch decides nothing: both blocks
+// answer `C`, so the branch answers `C` and the condition is discarded with
+// it. That is `select-same` — the law — and the step of the same name is the
+// law read as a proof: two goals, one per block, against the same right side.
+//
+// The blocks here are the two spellings of the coercion above, so the claim
+// is that one above with a branch drawn around it. Driving will not close it:
+// the unpacking that turns `as_bool` into the branch it makes grows a graph,
+// so no list spends it, and until it is spent the two blocks are not the one
+// block `select-same` needs to see. Answering block by block is what lets the
+// unpacking be named where it is wanted and nowhere else — and the false
+// block, already the right side, needs no strategy at all.
+identity a_branch_whose_blocks_agree
+    { branch { as_bool } { branch { push true } { push false } } }
+  = { drop 0 branch { push true } { push false } };
+
 // A coercion is a guarded identity: the value where its test holds, and the
 // default where it does not.
 //
