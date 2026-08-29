@@ -327,7 +327,7 @@ impl Proof {
                         ctx,
                         library,
                     )
-                    .map_err(|e| format!("in the branch's true block: {}", e))?;
+                    .map_err(|e| format!("in the branch's then block: {}", e))?;
                 else_sub
                     .check(
                         Goal {
@@ -337,7 +337,7 @@ impl Proof {
                         ctx,
                         library,
                     )
-                    .map_err(|e| format!("in the branch's false block: {}", e))
+                    .map_err(|e| format!("in the branch's else block: {}", e))
             }
         }
     }
@@ -500,7 +500,7 @@ impl Proof {
                 right_sub.summary()
             ),
             Proof::SelectSame { then_sub, else_sub } => format!(
-                "select-same (true: {}; false: {})",
+                "select-same (then: {}; else: {})",
                 then_sub.summary(),
                 else_sub.summary()
             ),
