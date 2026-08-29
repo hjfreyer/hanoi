@@ -1421,6 +1421,19 @@ mod tests {
                 "identities::a_coerced_tuple_survives_the_round_trip",
                 "identities::a_built_tuple_is_the_width_it_was_built",
                 "identities::a_built_tuple_is_no_other_width",
+                // The rows that were `not yet written`, each decided by
+                // `decide` alone now that it has them — every one of these
+                // failed honestly before. `comm` is the one of the new rows
+                // missing here, and it is missing on purpose: it permutes
+                // rather than shrinking, so no list drives it and
+                // `the_operands_of_a_sum_are_interchangeable` names it.
+                "identities::an_or_with_a_falsy_literal",
+                "identities::an_or_with_a_truthy_literal",
+                "identities::a_negated_condition_swaps_the_arms",
+                "identities::coercing_to_int_twice_is_coercing_once",
+                "identities::coercing_to_a_tuple_twice_is_coercing_once",
+                "identities::a_promised_bool_is_no_tuple",
+                "identities::a_promised_bool_is_no_integer",
             ],
             "the table's reach changed"
         );

@@ -49,12 +49,35 @@
 //! one box. [docs/rules.md](../../../../docs/rules.md) opens with the
 //! whole list, the associativities and Yang–Baxter among them.
 //!
+//! [`Law::Commute`] is the one that looks like wiring and is not. A
+//! crossing is not recorded, so everything about `swap` is unstatable —
+//! but *which operand of a box is which* is recorded, so
+//! `swap ; op = op` for a commutative `op` is a claim the graph can make
+//! and only the instruction set can settle. The row is about the operand
+//! order and never mentions a crossing.
+//!
 //! What is here is the two things the representation cannot decide: what
 //! a branch means ([`branching`]) and what an operation computes
 //! ([`folding`]). [`Law::NotNot`] — `not ; not = as_bool` — is the elder
 //! of the second: the opaque-operation oracle the tests judge by reads
 //! `not(not(x))` and `as_bool(x)` as different symbols, so this is a law
 //! about what the machine computes, and `vm` is what measures it.
+//!
+//! ## One row for a family
+//!
+//! Three rows read a **fact off the instruction set** rather than naming
+//! an instruction, and each stands for what would otherwise be a family:
+//! [`Law::Commute`] over
+//! [`commutative`](bytecode::Instruction::commutative), [`Law::Idem`] over
+//! [`idempotent`](bytecode::Instruction::idempotent), and
+//! [`Law::TestedBool`] over
+//! [`yields_bool`](bytecode::Instruction::yields_bool) and whichever type
+//! test it is asked with. `idem` is the three coercions and `comm` the
+//! five operators that answer either way round, and neither list is
+//! written here: `vm` measures both, the way it measures every other fact
+//! about what the machine does, and a row per member would be several
+//! copies of one sentence with a fourth to write whenever the instruction
+//! set grew one.
 //!
 //! ## The value layer, and the two rows no list drives
 //!
@@ -127,11 +150,11 @@
 //! ## The branch layer, and where it reaches
 //!
 //! [`branching`] is the branch layer: [`Law::SelectSame`],
-//! [`Law::SelectLiteral`], [`Law::SpecializeEqual`],
+//! [`Law::SelectLiteral`], [`Law::NotBranch`], [`Law::SpecializeEqual`],
 //! [`Law::SpecializeBool`] and [`Law::SpecializeChoice`]. Between them they
 //! fold a literal condition into the blocks it chooses, delete a branch
-//! whose arms answer alike, and write what a test decided into the block
-//! that tested it.
+//! whose arms answer alike, swallow a negation into the arms it exchanges,
+//! and write what a test decided into the block that tested it.
 //!
 //! Every one of them is stated at the `select`, because a `select` is the
 //! whole of what a branch is. Lifting work both arms do out in front is
@@ -203,6 +226,7 @@ use crate::term::{Arity, Prim};
 pub enum Law {
     NotNot,
     AndLiteral,
+    OrLiteral,
     TupleCancel,
     AsTupleBuilt,
     EqualRefl,
@@ -211,6 +235,7 @@ pub enum Law {
     // the only place some of them can be stated soundly at all.
     SelectSame,
     SelectLiteral,
+    NotBranch,
     SpecializeEqual,
     SpecializeBool,
     SpecializeChoice,
@@ -223,6 +248,10 @@ pub enum Law {
     Retuple,
     AsTupleRoundTrip,
     IsTupleBuilt,
+    // The two rows read off a fact about the instruction rather than off a
+    // particular one: doing it twice, and doing it the other way round.
+    Idem,
+    Commute,
     // The two unpackings: a coercion said as the program it is. Both grow
     // a graph, so no list drives them — see [`folding`].
     AsBoolBranch,
@@ -241,11 +270,13 @@ impl Law {
         match self {
             Law::NotNot => "not-not",
             Law::AndLiteral => "and-literal",
+            Law::OrLiteral => "or-literal",
             Law::TupleCancel => "tuple-cancel",
             Law::AsTupleBuilt => "as-tuple-built",
             Law::EqualRefl => "equal-refl",
             Law::SelectSame => "select-same",
             Law::SelectLiteral => "select-literal",
+            Law::NotBranch => "not-branch",
             Law::SpecializeEqual => "specialize-equal",
             Law::SpecializeBool => "specialize-bool",
             Law::SpecializeChoice => "specialize-choice",
@@ -257,6 +288,8 @@ impl Law {
             Law::Retuple => "retuple",
             Law::AsTupleRoundTrip => "as-tuple-round-trip",
             Law::IsTupleBuilt => "is-tuple-built",
+            Law::Idem => "idem",
+            Law::Commute => "comm",
             Law::AsBoolBranch => "as-bool-branch",
             Law::CoercionGuard => "coercion-guard",
         }
@@ -272,11 +305,13 @@ impl Law {
         vec![
             Law::NotNot,
             Law::AndLiteral,
+            Law::OrLiteral,
             Law::TupleCancel,
             Law::AsTupleBuilt,
             Law::EqualRefl,
             Law::SelectSame,
             Law::SelectLiteral,
+            Law::NotBranch,
             Law::SpecializeEqual,
             Law::SpecializeBool,
             Law::SpecializeChoice,
@@ -288,6 +323,8 @@ impl Law {
             Law::Retuple,
             Law::AsTupleRoundTrip,
             Law::IsTupleBuilt,
+            Law::Idem,
+            Law::Commute,
             Law::AsBoolBranch,
             Law::CoercionGuard,
         ]
@@ -341,6 +378,21 @@ pub enum Rule {
     /// carries which, so the two sides of the equation agree on where the
     /// boundary input sits.
     AndLiteral { literal: Side, value: Value },
+    /// `or` with a literal operand, which is [`Rule::AndLiteral`] read
+    /// through the other connective and decided by the same `truthy`. The
+    /// poles swap, and nothing else does: the one **falsy** value
+    /// contributes only the coercion, so the answer is `as_bool` of the
+    /// other operand, and a truthy literal decides the whole answer —
+    /// `push true`, the other operand discarded.
+    ///
+    /// Everything the sibling row says about the window holds here for the
+    /// same reasons: the literal stays **exported** on both sides, since a
+    /// deduped literal is one box with many readers; the discard is the one
+    /// totality and purity license; and this is what lets a case split
+    /// spend a **disjunction** one disjunct at a time.
+    ///
+    /// `literal` names the operand the pushed value feeds.
+    OrLiteral { literal: Side, value: Value },
     /// Taking apart what `tuple n` built answers the built elements:
     /// `tuple n ; untuple n = id(n)` — tuple cancellation, stated with
     /// the tuple **kept**, since its port may
@@ -388,6 +440,25 @@ pub enum Rule {
         arity: usize,
         lit_blocks: Vec<usize>,
     },
+    /// A negated condition is the branch with its arms the other way
+    /// round: `not ; if { A } else { B } = if { B } else { A }`.
+    ///
+    /// `not v` is `Bool(!truthy(v))`, and `false` is the one falsy value —
+    /// so `not v` is truthy exactly where `v` is falsy, and the two selects
+    /// choose opposite blocks of the very same pair. Sound on **every**
+    /// value and not only on bools, for the reason
+    /// [`Rule::SelectLiteral`] is: a select reads truthiness and `not`
+    /// answers it.
+    ///
+    /// The `not` is **not exported**, which is the same side condition
+    /// [`Rule::NotNot`] states: a negation something else reads is not this
+    /// window's box to spend. Nothing is stranded either way — a reader
+    /// outside goes on reading the box it always read, and the row swaps
+    /// only the blocks this select chose between.
+    ///
+    /// `arity` is the select's width: every block moves, since the branch
+    /// decided every one of them the other way.
+    NotBranch { arity: usize },
     /// A value that tested `equal` to a literal **is** that literal, in the
     /// block the test chose. `equal` answers `Bool(a == b)`, so a truthy
     /// answer is `a == b` and nothing weaker.
@@ -554,13 +625,24 @@ pub enum Rule {
     /// re-proposing it forever is [`propose`]'s business, and search is
     /// where a termination argument belongs.
     PromisedBool { kind: NodeKind },
-    /// `is_bool` of an answer the instruction set promises is a bool is
-    /// `true`, and the answer itself is untouched: `op ; is_bool` on one
-    /// wire is `op` and `push true` side by side. The promise is
+    /// A type test of an answer the instruction set promises is a bool is
+    /// **decided**, and the answer itself is untouched: `op ; is_T` on one
+    /// wire is `op` and `push (T is Bool)` side by side. The promise is
     /// [`yields_bool`](bytecode::Instruction::yields_bool), measured by
     /// `vm`; the answer stays exported, so the window does not care who
     /// else reads it.
-    TestedBool { kind: NodeKind },
+    ///
+    /// One row for the whole family, because one fact answers all of it. A
+    /// codomain does not only say which test succeeds — it says which
+    /// tests **fail**, and the failures are worth as much: `op ; is_int` is
+    /// `push false` on a promised bool, and that is what folds a shape
+    /// guard asking the wrong question. `test` is which test, and the
+    /// answer is read off it and the promise together.
+    ///
+    /// `is_tuple` is a test at either reading, the width-blind one
+    /// included: a `Bool` is no tuple of any width, so both answer `false`.
+    /// A `prim` that is no type test at all states no equation here.
+    TestedBool { kind: NodeKind, test: Prim },
     /// Rebuilding what `untuple n` took apart is the coercion, not the
     /// identity — the slots may have been junk-filled: `untuple n ; tuple
     /// n = as_tuple n`, whole or not at all.
@@ -607,6 +689,52 @@ pub enum Rule {
     /// `pick 0 ; is_tuple n` it hands over a test instead, and without
     /// this row a built tuple meeting one is a question nothing decides.
     IsTupleBuilt { built: usize, asked: usize },
+    /// Doing it twice is doing it once: `op ; op = op`, for any `op` the
+    /// instruction set says is
+    /// [idempotent](bytecode::Instruction::idempotent).
+    ///
+    /// One row for a family, and the family is the three coercions —
+    /// `as_bool ; as_bool`, `as_int ; as_int`, `as_tuple n ; as_tuple n`.
+    /// Which is no accident and is also not this module's to know: a
+    /// coercion's whole content is its **codomain**, so what it leaves is
+    /// already of the type it forces; the fact lives on the instruction and
+    /// `vm` measures it, the way it measures
+    /// [`commutative`](bytecode::Instruction::commutative) and
+    /// [`yields_bool`](bytecode::Instruction::yields_bool). A row per
+    /// coercion would be three copies of one sentence and a fourth to write
+    /// whenever the instruction set grew one.
+    ///
+    /// The middle port is **not exported**, the side condition
+    /// [`Rule::NotNot`] states in the same words: the pair has to be this
+    /// window's to collapse. Backwards it is the clone — one box becomes
+    /// two — which is what a proof wants when the shape it is heading for
+    /// spells the coercion twice.
+    ///
+    /// The width rides in `kind`, as it does everywhere: `as_tuple 2 ;
+    /// as_tuple 3` is two different questions and no instance of this at
+    /// all.
+    Idem { kind: NodeKind },
+    /// The other way round is the same answer: `swap ; op = op`, for any
+    /// `op` the instruction set says is
+    /// [commutative](bytecode::Instruction::commutative).
+    ///
+    /// A crossing is not a box — two names in the other order is all a
+    /// `swap` is — so what this equation relates is one box reading `(a,
+    /// b)` and one box reading `(b, a)`, and the `swap` of the surface
+    /// spelling has nowhere to appear. That is also why the row is *needed*
+    /// where the wiring laws are not: the operands are recorded, so their
+    /// order is something the graph says, and only the instruction set can
+    /// say it does not matter.
+    ///
+    /// The junk answer commutes too, which is what makes the fact total:
+    /// `add` on a symbol and an int has no sum to give whichever order they
+    /// arrive in, and answers `0` both ways.
+    ///
+    /// **No list drives it.** It neither grows a graph nor shrinks one — it
+    /// permutes, and a driver run to fixpoint would swap the same two
+    /// operands forever. So a proof names it, `fire(comm)` or `at(#box,
+    /// comm)`, the way it names an unpacking.
+    Commute { kind: NodeKind },
     /// `as_bool` is the branch it is: `as_bool x = if x { true } else
     /// { false }`.
     ///
@@ -666,11 +794,13 @@ impl Rule {
         match self {
             Rule::NotNot => Law::NotNot,
             Rule::AndLiteral { .. } => Law::AndLiteral,
+            Rule::OrLiteral { .. } => Law::OrLiteral,
             Rule::TupleCancel { .. } => Law::TupleCancel,
             Rule::AsTupleBuilt { .. } => Law::AsTupleBuilt,
             Rule::EqualRefl => Law::EqualRefl,
             Rule::SelectSame { .. } => Law::SelectSame,
             Rule::SelectLiteral { .. } => Law::SelectLiteral,
+            Rule::NotBranch { .. } => Law::NotBranch,
             Rule::SpecializeEqual { .. } => Law::SpecializeEqual,
             Rule::SpecializeBool { .. } => Law::SpecializeBool,
             Rule::SpecializeChoice { .. } => Law::SpecializeChoice,
@@ -682,6 +812,8 @@ impl Rule {
             Rule::Retuple { .. } => Law::Retuple,
             Rule::AsTupleRoundTrip { .. } => Law::AsTupleRoundTrip,
             Rule::IsTupleBuilt { .. } => Law::IsTupleBuilt,
+            Rule::Idem { .. } => Law::Idem,
+            Rule::Commute { .. } => Law::Commute,
             Rule::AsBoolBranch => Law::AsBoolBranch,
             Rule::CoercionGuard { .. } => Law::CoercionGuard,
         }
@@ -711,6 +843,11 @@ pub fn branching() -> Vec<Law> {
     vec![
         Law::SelectLiteral,
         Law::SelectSame,
+        // The one row here that reads the condition's *maker* rather than
+        // its blocks, and the one that shrinks without deciding anything:
+        // a negation in front of a branch is the branch with its arms
+        // exchanged, and the negation is gone.
+        Law::NotBranch,
         Law::SpecializeEqual,
         Law::SpecializeBool,
         Law::SpecializeChoice,
@@ -740,6 +877,11 @@ pub fn folding() -> Vec<Law> {
         Law::IsTupleBuilt,
         Law::NotNot,
         Law::AndLiteral,
+        Law::OrLiteral,
+        // Two of the pair collapse to one. `comm` is its sibling in the
+        // instruction-set facts and is **not** here: it permutes instead of
+        // shrinking, so a driver would swap the same two operands forever.
+        Law::Idem,
         Law::TupleCancel,
         Law::AsTupleBuilt,
         Law::EqualRefl,
@@ -757,11 +899,13 @@ pub fn is_wiring(law: Law) -> bool {
         law,
         Law::NotNot
             | Law::AndLiteral
+            | Law::OrLiteral
             | Law::TupleCancel
             | Law::AsTupleBuilt
             | Law::EqualRefl
             | Law::PromisedBool
             | Law::SelectLiteral
+            | Law::NotBranch
             | Law::SpecializeEqual
             | Law::SpecializeBool
             | Law::SpecializeChoice
@@ -772,6 +916,8 @@ pub fn is_wiring(law: Law) -> bool {
             | Law::Retuple
             | Law::AsTupleRoundTrip
             | Law::IsTupleBuilt
+            | Law::Idem
+            | Law::Commute
             | Law::AsBoolBranch
             | Law::CoercionGuard
     )
@@ -908,6 +1054,30 @@ pub fn sides(rule: &Rule) -> Result<Pair, Error> {
                 short.add(NodeKind::Op(Prim::AsBool), vec![Source::Input(0)])
             } else {
                 short.add(NodeKind::Op(Prim::Push(Value::Bool(false))), Vec::new())
+            };
+            short.close(vec![lit[0], answer[0]]);
+
+            (long, short)
+        }
+        Rule::OrLiteral { literal, value } => {
+            let mut long = Graph::empty(1);
+            let lit = long.add(NodeKind::Op(Prim::Push(value.clone())), Vec::new());
+            let operands = match literal {
+                Side::Deep => vec![lit[0], Source::Input(0)],
+                Side::Top => vec![Source::Input(0), lit[0]],
+            };
+            let or = long.add(NodeKind::Op(Prim::Or), operands);
+            long.close(vec![lit[0], or[0]]);
+
+            // The poles of the sibling row, swapped: the one falsy value
+            // leaves the other operand's coercion, and a truthy literal
+            // leaves `true` and the other operand unread.
+            let mut short = Graph::empty(1);
+            let lit = short.add(NodeKind::Op(Prim::Push(value.clone())), Vec::new());
+            let answer = if value.truthy() {
+                short.add(NodeKind::Op(Prim::Push(Value::Bool(true))), Vec::new())
+            } else {
+                short.add(NodeKind::Op(Prim::AsBool), vec![Source::Input(0)])
             };
             short.close(vec![lit[0], answer[0]]);
 
@@ -1060,6 +1230,34 @@ pub fn sides(rule: &Rule) -> Result<Pair, Error> {
             chosen.close(out);
 
             (both, chosen)
+        }
+        Rule::NotBranch { arity } => {
+            let n = *arity;
+            if n == 0 {
+                return Err(ill(Ill::Refused));
+            }
+            // The condition, then the two blocks of every answer. Both
+            // sides read the same `2n` blocks and differ only in which half
+            // the select is handed first.
+            let block = |i: usize| Source::Input(1 + i);
+
+            let mut negated = Graph::empty(1 + 2 * n);
+            // Not exported, which is the side condition: a `not` something
+            // else reads is not this window.
+            let flipped = negated.add(NodeKind::Op(Prim::Not), vec![Source::Input(0)]);
+            let mut takes = vec![flipped[0]];
+            takes.extend((0..2 * n).map(block));
+            let answers = negated.add(NodeKind::Select { arity: n }, takes);
+            negated.close(answers);
+
+            let mut direct = Graph::empty(1 + 2 * n);
+            let mut takes = vec![Source::Input(0)];
+            takes.extend((0..n).map(|i| block(n + i)));
+            takes.extend((0..n).map(block));
+            let answers = direct.add(NodeKind::Select { arity: n }, takes);
+            direct.close(answers);
+
+            (negated, direct)
         }
         Rule::SpecializeEqual {
             arity,
@@ -1358,11 +1556,17 @@ pub fn sides(rule: &Rule) -> Result<Pair, Error> {
 
             (bare, asserted)
         }
-        Rule::TestedBool { kind } => {
+        Rule::TestedBool { kind, test } => {
             let NodeKind::Op(prim) = kind else {
                 return Err(ill(Ill::Refused));
             };
             let arity = prim.arity();
+            // The promise, and the test the promise answers. Nothing else
+            // decides the verdict: what the operation *is* never enters,
+            // only that the set says what type it leaves.
+            let Some(verdict) = asked_of_a_bool(test) else {
+                return Err(ill(Ill::Refused));
+            };
             if arity.outputs != 1 || !prim.to_instruction().yields_bool() {
                 return Err(ill(Ill::Refused));
             }
@@ -1370,7 +1574,7 @@ pub fn sides(rule: &Rule) -> Result<Pair, Error> {
 
             let mut tested = Graph::empty(arity.inputs);
             let answer = tested.add(kind.clone(), ins.clone());
-            let truth = tested.add(NodeKind::Op(Prim::IsBool), answer.clone());
+            let truth = tested.add(NodeKind::Op(test.clone()), answer.clone());
             // The answer stays exported, so the window does not care who
             // else reads it — `dead-node` collects it where nobody does.
             let mut out = answer;
@@ -1379,7 +1583,7 @@ pub fn sides(rule: &Rule) -> Result<Pair, Error> {
 
             let mut known = Graph::empty(arity.inputs);
             let answer = known.add(kind.clone(), ins);
-            let truth = known.add(NodeKind::Op(Prim::Push(Value::Bool(true))), Vec::new());
+            let truth = known.add(NodeKind::Op(Prim::Push(Value::Bool(verdict))), Vec::new());
             let mut out = answer;
             out.extend(truth);
             known.close(out);
@@ -1446,6 +1650,48 @@ pub fn sides(rule: &Rule) -> Result<Pair, Error> {
 
             (question, settled)
         }
+        Rule::Idem { kind } => {
+            let NodeKind::Op(prim) = kind else {
+                return Err(ill(Ill::Refused));
+            };
+            let arity = prim.arity();
+            if arity.inputs != 1 || arity.outputs != 1 || !prim.to_instruction().idempotent() {
+                return Err(ill(Ill::Refused));
+            }
+
+            let mut twice = Graph::empty(1);
+            let first = twice.add(kind.clone(), vec![Source::Input(0)]);
+            // The middle port is not exported, the side condition
+            // `not-not` states in the same words.
+            let second = twice.add(kind.clone(), first);
+            twice.close(second);
+
+            let mut once = Graph::empty(1);
+            let only = once.add(kind.clone(), vec![Source::Input(0)]);
+            once.close(only);
+
+            (twice, once)
+        }
+        Rule::Commute { kind } => {
+            let NodeKind::Op(prim) = kind else {
+                return Err(ill(Ill::Refused));
+            };
+            let arity = prim.arity();
+            if arity.inputs != 2 || !prim.to_instruction().commutative() {
+                return Err(ill(Ill::Refused));
+            }
+            // No `swap` appears on either side, and none could: a crossing
+            // is two names in the other order, and this is the two orders.
+            let mut asked = Graph::empty(2);
+            let answer = asked.add(kind.clone(), vec![Source::Input(0), Source::Input(1)]);
+            asked.close(answer);
+
+            let mut crossed = Graph::empty(2);
+            let answer = crossed.add(kind.clone(), vec![Source::Input(1), Source::Input(0)]);
+            crossed.close(answer);
+
+            (asked, crossed)
+        }
         Rule::AsBoolBranch => {
             let mut forced = Graph::empty(1);
             let out = forced.add(NodeKind::Op(Prim::AsBool), vec![Source::Input(0)]);
@@ -1498,6 +1744,22 @@ pub fn sides(rule: &Rule) -> Result<Pair, Error> {
         }
     };
     Pair::new(a, b).map_err(|why| ill(why.into()))
+}
+
+/// What a type test answers of a value the instruction set promises is a
+/// `Bool`, or `None` for a prim that asks no question about a type.
+///
+/// The one thing [`Rule::TestedBool`] reads off its `test`, and it is a
+/// reading rather than a computation: a promised bool *is* a `Bool`, so
+/// `is_bool` holds of it and every other test of a type does not. The
+/// widths `is_tuple` may carry make no difference — a `Bool` is a tuple of
+/// no width at all.
+fn asked_of_a_bool(test: &Prim) -> Option<bool> {
+    match test {
+        Prim::IsBool => Some(true),
+        Prim::IsInt | Prim::IsConstString | Prim::IsSymbol | Prim::IsTuple(_) => Some(false),
+        _ => None,
+    }
 }
 
 /// Runs one instruction on the operands it wants, on the machine itself.
@@ -1929,6 +2191,24 @@ fn read_off(graph: &Graph, law: Law, id: NodeId) -> Vec<(Rule, NodeId)> {
             out
         }
 
+        // `or` with a literal operand, read exactly as its sibling is: one
+        // rule per operand a pushed value feeds, seeded at that literal.
+        (Law::OrLiteral, NodeKind::Op(Prim::Or)) => {
+            let mut out = Vec::new();
+            for (side, port) in [(Side::Deep, 0), (Side::Top, 1)] {
+                if let Some((lit, NodeKind::Op(Prim::Push(value)))) = made_by(takes[port]) {
+                    out.push((
+                        Rule::OrLiteral {
+                            literal: side,
+                            value: value.clone(),
+                        },
+                        lit,
+                    ));
+                }
+            }
+            out
+        }
+
         // Taking apart, or coercing, what `tuple n` built — seeded at the
         // tuple, which is where the pattern anchors.
         (Law::TupleCancel, NodeKind::Op(Prim::Untuple(n))) => match made_by(takes[0]) {
@@ -1990,6 +2270,16 @@ fn read_off(graph: &Graph, law: Law, id: NodeId) -> Vec<(Rule, NodeId)> {
                 lit,
             )]
         }
+
+        // A condition made by a `not`: the branch is the same branch with
+        // its arms exchanged, and the negation is spent. Seeded at the
+        // `not`, which is the pattern's first box.
+        (Law::NotBranch, NodeKind::Select { arity: n }) => match made_by(takes[0]) {
+            Some((flipped, NodeKind::Op(Prim::Not))) => {
+                vec![(Rule::NotBranch { arity: *n }, flipped)]
+            }
+            _ => Vec::new(),
+        },
 
         // A condition that is a test against a literal, and a block that
         // answers with the very value tested.
@@ -2181,8 +2471,11 @@ fn read_off(graph: &Graph, law: Law, id: NodeId) -> Vec<(Rule, NodeId)> {
             )]
         }
 
-        // `is_bool` of an answer the instruction set promises is a bool.
-        (Law::TestedBool, NodeKind::Op(Prim::IsBool)) => {
+        // A type test — any of them — of an answer the instruction set
+        // promises is a bool. Which test it is decides the answer and not
+        // whether there is one, so nothing here compares the two: the
+        // promise is the whole side condition.
+        (Law::TestedBool, NodeKind::Op(test)) if asked_of_a_bool(test).is_some() => {
             let Some((answered, NodeKind::Op(prim))) = made_by(takes[0]) else {
                 return Vec::new();
             };
@@ -2192,6 +2485,7 @@ fn read_off(graph: &Graph, law: Law, id: NodeId) -> Vec<(Rule, NodeId)> {
             vec![(
                 Rule::TestedBool {
                     kind: graph.kind(answered).clone(),
+                    test: test.clone(),
                 },
                 answered,
             )]
@@ -2220,6 +2514,36 @@ fn read_off(graph: &Graph, law: Law, id: NodeId) -> Vec<(Rule, NodeId)> {
                 return Vec::new();
             }
             vec![(Rule::AsTupleRoundTrip { n }, coerced)]
+        }
+
+        // The same box twice over, read off the second and seeded at the
+        // first — which is where the pattern anchors.
+        (Law::Idem, NodeKind::Op(prim)) => {
+            let arity = prim.arity();
+            if arity.inputs != 1 || arity.outputs != 1 || !prim.to_instruction().idempotent() {
+                return Vec::new();
+            }
+            match made_by(takes[0]) {
+                Some((first, before)) if *before == kind => {
+                    vec![(Rule::Idem { kind: kind.clone() }, first)]
+                }
+                _ => Vec::new(),
+            }
+        }
+
+        // Two operands the instruction set says are interchangeable.
+        // Declined where they are one wire read twice: that box already
+        // *is* what the other order would build, so there is nothing for
+        // the step to do, and search is where an argument like that
+        // belongs.
+        (Law::Commute, NodeKind::Op(prim)) => {
+            if prim.arity().inputs != 2
+                || !prim.to_instruction().commutative()
+                || takes[0] == takes[1]
+            {
+                return Vec::new();
+            }
+            one(Rule::Commute { kind: kind.clone() })
         }
 
         // The two unpackings of a coercion, each read off the box it
@@ -2873,37 +3197,99 @@ mod tests {
         }
     }
 
-    /// `is_bool` of an answer the instruction set promises is a bool.
+    /// Every type test of an answer the instruction set promises is a
+    /// bool: `is_bool` answers `true` and every other one answers `false`,
+    /// which is the whole of what a codomain decides.
     #[test]
-    fn a_promised_bool_tests_true() {
-        the_machine_agrees(
-            Law::TestedBool,
-            Rule::TestedBool {
-                kind: NodeKind::Op(Prim::IsInt),
-            },
-        );
-        the_machine_agrees(
-            Law::TestedBool,
-            Rule::TestedBool {
-                kind: NodeKind::Op(Prim::Equal),
-            },
-        );
-        the_machine_agrees(
-            Law::TestedBool,
-            Rule::TestedBool {
-                kind: NodeKind::Op(Prim::IsBool),
-            },
-        );
+    fn a_promised_bool_answers_every_type_test() {
+        for kind in [Prim::IsInt, Prim::Equal, Prim::IsBool, Prim::AsBool] {
+            for test in [
+                Prim::IsBool,
+                Prim::IsInt,
+                Prim::IsSymbol,
+                Prim::IsConstString,
+                Prim::IsTuple(None),
+                Prim::IsTuple(Some(2)),
+            ] {
+                the_machine_agrees(
+                    Law::TestedBool,
+                    Rule::TestedBool {
+                        kind: NodeKind::Op(kind.clone()),
+                        test,
+                    },
+                );
+            }
+        }
         // An answer the set does not promise is no window.
         assert!(matches!(
             sides(&Rule::TestedBool {
                 kind: NodeKind::Op(Prim::Add),
+                test: Prim::IsBool,
             }),
             Err(Error::Ill {
                 why: Ill::Refused,
                 ..
             })
         ));
+        // And neither is a box that asks nothing about a type. `not` of a
+        // promised bool is a true equation of another kind entirely, and
+        // this row does not state it.
+        for test in [Prim::Not, Prim::AsBool, Prim::TupleLength] {
+            assert!(
+                matches!(
+                    sides(&Rule::TestedBool {
+                        kind: NodeKind::Op(Prim::IsInt),
+                        test: test.clone(),
+                    }),
+                    Err(Error::Ill {
+                        why: Ill::Refused,
+                        ..
+                    })
+                ),
+                "{:?} is no type test",
+                test
+            );
+        }
+    }
+
+    /// The other half of the family, read off a graph rather than stated:
+    /// the shape guard that asks the wrong question of a promised bool
+    /// folds to `false`, and the tuple's width makes no difference to it.
+    #[test]
+    fn the_wrong_test_of_a_promised_bool_folds_to_false() {
+        let mut graph = Graph::empty(2);
+        let tested = graph.add(
+            NodeKind::Op(Prim::Equal),
+            vec![Source::Input(0), Source::Input(1)],
+        );
+        let asked = graph.add(NodeKind::Op(Prim::IsTuple(Some(2))), tested.clone());
+        graph.close(vec![asked[0]]);
+        graph.check().unwrap();
+
+        let steps = propose(
+            &graph,
+            &[Law::TestedBool],
+            only(&NodeKind::Op(Prim::IsTuple(Some(2))), &graph),
+        );
+        let [step] = &steps[..] else {
+            panic!("one promised bool, one test:\n{}", graph)
+        };
+        assert_eq!(
+            step.rule,
+            Rule::TestedBool {
+                kind: NodeKind::Op(Prim::Equal),
+                test: Prim::IsTuple(Some(2)),
+            }
+        );
+        apply(&mut graph, step).unwrap();
+        graph.check().unwrap();
+        assert!(
+            graph
+                .live()
+                .any(|(_, kind)| kind == &NodeKind::Op(Prim::Push(Value::Bool(false)))),
+            "a `Bool` is no tuple:\n{}",
+            graph
+        );
     }
 
     /// `and` with a literal operand is decided by `truthy` alone: a truthy
@@ -2928,6 +3314,205 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// `or` with a literal operand, decided by `truthy` alone: the one
+    /// falsy value leaves the other operand's coercion, a truthy literal
+    /// leaves `true` — the poles of `and-literal`, exchanged.
+    #[test]
+    fn an_or_with_a_literal_is_decided_by_truthiness() {
+        for value in [
+            Value::Bool(true),
+            Value::Bool(false),
+            Value::Int(0),
+            Value::Int(7),
+            Value::unit(),
+        ] {
+            for literal in [Side::Deep, Side::Top] {
+                the_machine_agrees(
+                    Law::OrLiteral,
+                    Rule::OrLiteral {
+                        literal,
+                        value: value.clone(),
+                    },
+                );
+            }
+        }
+    }
+
+    /// A negated condition is the branch with its arms the other way
+    /// round. `not v` is truthy exactly where `v` is falsy — `false` being
+    /// the one falsy value — so this is exact on every value and not only
+    /// on bools, which is what the sample list checks.
+    #[test]
+    fn a_negated_condition_swaps_the_arms() {
+        for arity in 1..=3 {
+            the_machine_agrees(Law::NotBranch, Rule::NotBranch { arity });
+        }
+        // A branch that answers nothing is not a branch.
+        assert!(matches!(
+            sides(&Rule::NotBranch { arity: 0 }),
+            Err(Error::Ill {
+                why: Ill::Refused,
+                ..
+            })
+        ));
+
+        // And it is read off the select, seeded at the `not` — the box the
+        // pattern begins with — with the blocks coming back exchanged.
+        let mut graph = Graph::empty(3);
+        let flipped = graph.add(NodeKind::Op(Prim::Not), vec![Source::Input(0)]);
+        let answers = graph.add(
+            NodeKind::Select { arity: 1 },
+            vec![flipped[0], Source::Input(1), Source::Input(2)],
+        );
+        graph.close(answers);
+        graph.check().unwrap();
+        let before = graph.clone();
+
+        let select = only(&NodeKind::Select { arity: 1 }, &graph);
+        let steps = propose(&graph, &[Law::NotBranch], select);
+        let [step] = &steps[..] else {
+            panic!("one negated condition:\n{}", graph)
+        };
+        assert_eq!(step.rule, Rule::NotBranch { arity: 1 });
+        assert_eq!(
+            step.at.nodes[0],
+            only(&NodeKind::Op(Prim::Not), &graph),
+            "the pattern is built `not`-first, so that is where it anchors"
+        );
+        apply(&mut graph, step).unwrap();
+        graph.check().unwrap();
+
+        // The negation is gone — nothing else read it — and the branch now
+        // turns on the value itself, its blocks exchanged.
+        assert_eq!(graph.live_count(), 1, "the `not` is spent:\n{}", graph);
+        let moved = only(&NodeKind::Select { arity: 1 }, &graph);
+        assert_eq!(
+            graph.sources(moved),
+            [Source::Input(0), Source::Input(2), Source::Input(1)],
+            "\n{}",
+            graph
+        );
+        for values in samples(3) {
+            assert_eq!(
+                eval_on(&before, &values),
+                eval_on(&graph, &values),
+                "the arms swapped and the program changed, on {:?}",
+                values
+            );
+        }
+    }
+
+    /// Doing it twice is doing it once, for every operation the
+    /// instruction set says so of — which is the three coercions, widths
+    /// and all.
+    #[test]
+    fn an_idempotent_operation_done_twice_is_done_once() {
+        for prim in [
+            Prim::AsBool,
+            Prim::AsInt,
+            Prim::AsTuple(1),
+            Prim::AsTuple(2),
+        ] {
+            the_machine_agrees(
+                Law::Idem,
+                Rule::Idem {
+                    kind: NodeKind::Op(prim),
+                },
+            );
+        }
+        // Nothing else is. `not ; not` is a row of its own and a different
+        // one — the coercion, not the `not` — and `tuple 1` wraps again.
+        for prim in [Prim::Not, Prim::Negate, Prim::Tuple(1), Prim::IsBool] {
+            assert!(
+                matches!(
+                    sides(&Rule::Idem {
+                        kind: NodeKind::Op(prim.clone()),
+                    }),
+                    Err(Error::Ill {
+                        why: Ill::Refused,
+                        ..
+                    })
+                ),
+                "{:?} is not idempotent",
+                prim
+            );
+        }
+
+        // Two of one width collapse; two of different widths are two
+        // questions, and no payload the graph offers states them as one.
+        let mut graph = Graph::empty(1);
+        let inner = graph.add(NodeKind::Op(Prim::AsTuple(2)), vec![Source::Input(0)]);
+        let outer = graph.add(NodeKind::Op(Prim::AsTuple(3)), inner);
+        graph.close(outer);
+        graph.check().unwrap();
+        assert!(
+            propose(
+                &graph,
+                &[Law::Idem],
+                only(&NodeKind::Op(Prim::AsTuple(3)), &graph)
+            )
+            .is_empty(),
+            "the width is part of the type:\n{}",
+            graph
+        );
+    }
+
+    /// The other order is the same answer, for every operation the
+    /// instruction set says so of — the junk answer included, since `add`
+    /// on a symbol and an int answers `0` whichever way round they arrive.
+    #[test]
+    fn a_commutative_operation_reads_its_operands_either_way() {
+        for prim in [Prim::Add, Prim::Multiply, Prim::And, Prim::Or, Prim::Equal] {
+            the_machine_agrees(
+                Law::Commute,
+                Rule::Commute {
+                    kind: NodeKind::Op(prim),
+                },
+            );
+        }
+        // Nothing else does, and a one-operand box has no order at all.
+        for prim in [Prim::Subtract, Prim::Less, Prim::Tuple(2), Prim::Not] {
+            assert!(
+                matches!(
+                    sides(&Rule::Commute {
+                        kind: NodeKind::Op(prim.clone()),
+                    }),
+                    Err(Error::Ill {
+                        why: Ill::Refused,
+                        ..
+                    })
+                ),
+                "{:?} does not commute",
+                prim
+            );
+        }
+
+        // No list drives it: it permutes rather than shrinking, so a
+        // driver run to fixpoint would swap the same pair forever.
+        assert!(!folding().contains(&Law::Commute));
+        assert!(!branching().contains(&Law::Commute));
+
+        // And one wire read twice is already the box the swap would build,
+        // so the search does not offer a step that does nothing.
+        let mut graph = Graph::empty(1);
+        let doubled = graph.add(
+            NodeKind::Op(Prim::Add),
+            vec![Source::Input(0), Source::Input(0)],
+        );
+        graph.close(doubled);
+        graph.check().unwrap();
+        assert!(
+            propose(
+                &graph,
+                &[Law::Commute],
+                only(&NodeKind::Op(Prim::Add), &graph)
+            )
+            .is_empty(),
+            "there is nothing to exchange:\n{}",
+            graph
+        );
     }
 
     /// The tuple rows: taking apart or coercing what `tuple n` built, and
@@ -3261,6 +3846,10 @@ mod tests {
                 literal: Side::Top,
                 value: Value::Bool(true),
             },
+            Rule::OrLiteral {
+                literal: Side::Deep,
+                value: Value::Bool(false),
+            },
             Rule::TupleCancel { n: 2 },
             Rule::AsTupleBuilt { n: 2 },
             Rule::EqualRefl,
@@ -3270,6 +3859,7 @@ mod tests {
                 arity: 1,
                 lit_blocks: vec![1],
             },
+            Rule::NotBranch { arity: 1 },
             Rule::SpecializeEqual {
                 arity: 1,
                 at: 0,
@@ -3301,11 +3891,22 @@ mod tests {
             },
             Rule::TestedBool {
                 kind: NodeKind::Op(Prim::IsInt),
+                test: Prim::IsBool,
+            },
+            Rule::TestedBool {
+                kind: NodeKind::Op(Prim::IsInt),
+                test: Prim::IsInt,
             },
             Rule::Retuple { n: 2 },
             Rule::AsTupleRoundTrip { n: 2 },
             Rule::IsTupleBuilt { built: 2, asked: 2 },
             Rule::IsTupleBuilt { built: 2, asked: 3 },
+            Rule::Idem {
+                kind: NodeKind::Op(Prim::AsTuple(2)),
+            },
+            Rule::Commute {
+                kind: NodeKind::Op(Prim::Add),
+            },
             Rule::AsBoolBranch,
             Rule::CoercionGuard {
                 prim: Prim::AsTuple(2),
@@ -3407,7 +4008,10 @@ mod tests {
         // The lists are short, and that is the point: a graph arrives with
         // no wiring to sweep, so what it offers on the first asking is
         // what it is about.
-        offers("push 1 push 2 add", &[Law::Fold]);
+        // `add` reads two literals, so the fold decides it — and the
+        // instruction set says its operands are interchangeable, which is
+        // a step at the same box and on no driven list.
+        offers("push 1 push 2 add", &[Law::Fold, Law::Commute]);
         offers("swap swap", &[]);
         offers("push 9 pick 0", &[]);
         offers("dip { swap } swap dip { swap }", &[]);
@@ -3416,7 +4020,7 @@ mod tests {
         offers("pick 1 pick 1 equal drop 0", &[]);
         // The answer goes straight to the boundary, so there is no
         // region downstream of it for `shannon` to split.
-        offers("pick 1 pick 1 equal", &[Law::PromisedBool]);
+        offers("pick 1 pick 1 equal", &[Law::PromisedBool, Law::Commute]);
         // One wire compared with itself — which is what it is, now that
         // `pick` is a second reference rather than a `copy`.
         offers("pick 0 pick 0 equal", &[Law::EqualRefl, Law::PromisedBool]);
@@ -3426,13 +4030,16 @@ mod tests {
         );
         offers(
             "pick 0 push 1 equal branch { not } { negate }",
-            &[Law::PromisedBool, Law::Shannon],
+            &[Law::PromisedBool, Law::Shannon, Law::Commute],
         );
         // One operation in both arms is *one box*: the two arms are handed
         // the same sources, so they compute the same value and there is
         // one of it.
-        offers("branch { add } { add }", &[Law::SelectSame]);
-        offers("push 1 pick 1 branch { add } { add }", &[Law::SelectSame]);
+        offers("branch { add } { add }", &[Law::SelectSame, Law::Commute]);
+        offers(
+            "push 1 pick 1 branch { add } { add }",
+            &[Law::SelectSame, Law::Commute],
+        );
         // Work after a branch, which is what `select-hoist` reads: the
         // region downstream of the select's answers, lifted out as the
         // body the branch grows over. Nothing about the condition is
@@ -3484,7 +4091,7 @@ mod tests {
         let all = Law::every();
         assert_eq!(
             all.len(),
-            20,
+            24,
             "a law joined the table: name it, and list it in `Law::every`"
         );
         let mut names: Vec<&str> = all.iter().map(|law| law.name()).collect();

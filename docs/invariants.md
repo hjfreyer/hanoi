@@ -28,8 +28,11 @@ crate-private; the tactic layer needs none of it.
 ## No second semantics
 
 Facts about instructions live **on the instruction** and are measured by
-`vm` — `truthy`, `op_arity`, `yields_bool` — never restated in the
-rewriter. `fold` executes its window on a scratch VM rather than
+`vm` — `truthy`, `op_arity`, `yields_bool`, `commutative`, `idempotent` —
+never restated in the rewriter. A row may read one to stand for a whole
+family (`comm`, `idem`, `tested-bool`), which is the same discipline seen
+from the other end: the table asks the instruction set which instructions
+a law is about instead of naming them itself. `fold` executes its window on a scratch VM rather than
 reimplementing any operation. A law that turns on what the machine
 computes is tested against `vm`; only pure wiring laws may be judged by
 the opaque-operation oracle (`rules::is_wiring` is the split).

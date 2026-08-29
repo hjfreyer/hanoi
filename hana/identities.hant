@@ -50,3 +50,10 @@ proof identities::a_double_negative_is_the_branch_it_makes =
 // branch now leaves.
 proof identities::three_negatives_are_a_branch_and_a_negative =
     lhs(by identities::a_double_negative_is_the_branch_it_makes);
+
+// Commutativity, named where it is wanted. `comm` permutes rather than
+// shrinking — a driver would swap the same two operands forever — so no list
+// hands it out, and one firing is the whole proof: the crossing was never a
+// box, so what the left side and the right side differ by is the operand
+// order, and that is exactly what the row exchanges.
+proof identities::the_operands_of_a_sum_are_interchangeable = lhs(fire(comm));
