@@ -1153,6 +1153,11 @@ mod totality_tests {
             sym(7),
             unit(),
             Value::Tuple(vec![Value::Int(1), Value::Int(2)]),
+            // A tuple holding a tuple, at the one width where taking it
+            // apart hands back something that can be taken apart again:
+            // without it `untuple 1` reads as its own answer, since every
+            // other shape here coerces to the same one-slot junk.
+            Value::Tuple(vec![Value::Tuple(vec![Value::Int(1)])]),
         ]
     }
 
@@ -1217,6 +1222,82 @@ mod totality_tests {
                 inst,
                 commutes,
                 inst.commutative(),
+                witness
+            );
+        }
+    }
+
+    /// Every instruction that reads one operand and leaves one.
+    ///
+    /// The candidates for the idempotence sweep, and like [`every_binary`]
+    /// it is a list of questions rather than a list of answers: `not` and
+    /// `negate` are their own inverses, `tuple 1` wraps whatever it is
+    /// handed, and each `is_` test asked of its own answer asks about a
+    /// `Bool` — five negative cases, so a sweep that passed on any list at
+    /// all would be caught here.
+    ///
+    /// [`every_binary`]: every_binary
+    fn every_unary() -> Vec<Instruction> {
+        vec![
+            Instruction::Not,
+            Instruction::Negate,
+            Instruction::ConstStringLen,
+            Instruction::IsInt,
+            Instruction::IsBool,
+            Instruction::IsConstString,
+            Instruction::IsSymbol,
+            Instruction::IsTuple(None),
+            Instruction::IsTuple(Some(2)),
+            Instruction::TupleLength,
+            Instruction::Tuple(1),
+            Instruction::Untuple(1),
+            Instruction::AsBool,
+            Instruction::AsInt,
+            // Both a width `every_shape` supplies a matching tuple for and
+            // one it does not, so the sweep sees the coercion where it is
+            // the identity and where it invents a value.
+            Instruction::AsTuple(1),
+            Instruction::AsTuple(2),
+        ]
+    }
+
+    /// Runs `a` and then `inst` repeated `times`, and reports the stack.
+    fn run_repeated(a: &Value, inst: &Instruction, times: usize) -> Result<Vec<Value>, String> {
+        let mut library = Library::new();
+        let mut body = vec![Instruction::Push(a.clone())];
+        for _ in 0..times {
+            body.push(inst.clone());
+        }
+        library.sentences.push(body);
+        let mut vm = VM::new(library);
+        vm.execute(SentenceIndex::from(0))?;
+        Ok(vm.stack().to_vec())
+    }
+
+    /// `Instruction::idempotent` is measured, not asserted.
+    ///
+    /// Collapsing `op ; op` to `op` rests on that list, so a wrong entry
+    /// would be a soundness bug in whatever reads it rather than an
+    /// inaccuracy in a comment. This runs every candidate once and twice on
+    /// every shape of operand and holds the list to what it finds.
+    #[test]
+    fn the_idempotent_instructions_are_exactly_the_ones_the_list_names() {
+        for inst in every_unary() {
+            let mut idempotent = true;
+            let mut witness = None;
+            for a in every_shape() {
+                if run_repeated(&a, &inst, 1) != run_repeated(&a, &inst, 2) {
+                    idempotent = false;
+                    witness = Some(a.clone());
+                }
+            }
+            assert_eq!(
+                idempotent,
+                inst.idempotent(),
+                "{:?} is idempotent = {}, but the list says {} (witness {:?})",
+                inst,
+                idempotent,
+                inst.idempotent(),
                 witness
             );
         }

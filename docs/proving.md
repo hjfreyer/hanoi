@@ -426,7 +426,8 @@ fail closed. [docs/invariants.md](invariants.md) is the full statement.
   *persists* a `Proof` to disk, so re-checking without re-proving means
   serializing the artifact beside the corpus. The shape is ready; the
   file format is not chosen.
-- **Reach.** A handful of true equations are not rows yet — commutative
-  operand sorting and coercion idempotence among them; the list is in
-  [docs/rules.md](rules.md). A claim that needs one fails honestly, and
-  the row is a `sides` construction away.
+- **Reach.** The list of true equations that were not rows yet — commutative
+  operand sorting and coercion idempotence among them — is empty:
+  [docs/rules.md](rules.md) says where each landed. A claim that needs a
+  row the table still lacks fails honestly, and the row is a `sides`
+  construction away.

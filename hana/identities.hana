@@ -678,3 +678,95 @@ identity a_double_negative_is_the_branch_it_makes
 identity three_negatives_are_a_branch_and_a_negative
     { not not not }
   = { branch { push true } { push false } not };
+
+// The rows the table was missing.
+// ---------------------------------------------------------------------------
+//
+// Each of these was a true equation `docs/rules.md` listed as *not yet
+// written* — held against the junk semantics, spendable by nothing, so a claim
+// that needed one failed honestly. Each is now a row, and each is stated here
+// the way every law above is: run against the interpreter, and claimed over
+// every input beside it.
+
+// `push c ; or` = the disjunction `truthy` alone decides — short-circuiting as
+// an equation, and `and-literal` read through the other connective.
+//
+// The poles swap and nothing else does. The one **falsy** value contributes
+// only the coercion, so the answer is `as_bool` of the other operand; a truthy
+// literal decides the whole answer, and the other operand goes unread.
+test sentence an_or_with_a_literal_is_decided_by_truthiness {
+    push 7     push false or   push true  jump crate::prelude::check_equals ? drop 0
+    push false push false or   push false jump crate::prelude::check_equals ? drop 0
+    push ()    push false or   push true  jump crate::prelude::check_equals ? drop 0
+    push false push 7     or   push true  jump crate::prelude::check_equals
+}
+
+identity an_or_with_a_falsy_literal { push false or } = { as_bool };
+
+identity an_or_with_a_truthy_literal { push 7 or } = { drop 0 push true };
+
+// `not ; branch { A } { B }` = `branch { B } { A }` — the negation a branch
+// swallows.
+//
+// `not v` is truthy exactly where `v` is falsy, and `false` is the one falsy
+// value, so the two branches pick opposite blocks of the very same pair. The
+// condition need not be a boolean for that: truthiness is all a branch reads,
+// and answering it is all `not` does.
+test sentence a_negation_in_front_of_a_branch_swaps_its_arms {
+    push true  not branch { push 1 } { push 2 }   push 2 jump crate::prelude::check_equals ? drop 0
+    push false not branch { push 1 } { push 2 }   push 1 jump crate::prelude::check_equals ? drop 0
+    push 7     not branch { push 1 } { push 2 }   push 2 jump crate::prelude::check_equals ? drop 0
+    push ()    not branch { push 1 } { push 2 }   push 2 jump crate::prelude::check_equals
+}
+
+identity a_negated_condition_swaps_the_arms
+    { not branch { push 1 } { push 2 } } = { branch { push 2 } { push 1 } };
+
+// `as_X ; as_X` = `as_X` — a coerced value is already the shape it coerces to.
+//
+// One row states all three, because what makes it true is not any one of them:
+// a coercion's whole content is its **codomain**, so what it leaves is already
+// of the type it forces, and forcing it again asks a question that has been
+// answered. `vm` measures which instructions are idempotent, the way it
+// measures which commute.
+test sentence coercing_twice_is_coercing_once {
+    push 7  as_int as_int          push 7        jump crate::prelude::check_equals ? drop 0
+    push () as_int as_int          push 0        jump crate::prelude::check_equals ? drop 0
+    push 7  as_bool as_bool        push true     jump crate::prelude::check_equals ? drop 0
+    push 7  as_tuple 2 as_tuple 2  push ((), ()) jump crate::prelude::check_equals
+}
+
+identity coercing_to_int_twice_is_coercing_once { as_int as_int } = { as_int };
+
+identity coercing_to_a_tuple_twice_is_coercing_once
+    { as_tuple 2 as_tuple 2 } = { as_tuple 2 };
+
+// `op ; is_T` = `op ; drop ; push (T is op's codomain)`, for an op the
+// instruction set promises answers a bool.
+//
+// `testing_a_test` above is the half where the test succeeds. This is the
+// other half, and it is worth as much: a codomain says which tests **fail**
+// too, so a shape guard that asks the wrong question of a promised bool is
+// decided without anything running.
+test sentence a_promised_bool_answers_every_type_test {
+    push 7 is_int is_bool     push true  jump crate::prelude::check_equals ? drop 0
+    push 7 is_int is_int      push false jump crate::prelude::check_equals ? drop 0
+    push 7 is_int is_tuple 2  push false jump crate::prelude::check_equals ? drop 0
+    push 7 is_int is_symbol   push false jump crate::prelude::check_equals
+}
+
+identity a_promised_bool_is_no_tuple { is_int is_tuple 2 } = { drop 0 push false };
+
+identity a_promised_bool_is_no_integer { is_int is_int } = { drop 0 push false };
+
+// `roll 1 ; op` = `op`, for the commutative operators.
+//
+// A crossing is not a box — two names in the other order is the whole of what
+// a `swap` is — so the `roll 1` has nowhere to appear in the graph, and what
+// is left to state is the operand *order*, which the graph does record. That
+// is why this needs a row where the wiring laws do not.
+//
+// No list drives it. The row neither grows a graph nor shrinks one, so a
+// driver run to fixpoint would exchange the same two operands forever; the
+// proof beside this file names it once.
+identity the_operands_of_a_sum_are_interchangeable { roll 1 add } = { add };

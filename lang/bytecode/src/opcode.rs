@@ -260,6 +260,36 @@ impl Instruction {
         )
     }
 
+    /// Whether doing this twice is doing it once.
+    ///
+    /// A fact about the instruction set for the same reason
+    /// [`commutative`] is, and read the same way: `op ; op` is `op` for
+    /// these and for nothing else, so a rewriter may collapse a repeat
+    /// without asking what the operand was. `vm` measures it, running
+    /// every candidate once and twice on every shape of operand.
+    ///
+    /// The list is the three coercions, and that is not a coincidence: a
+    /// coercion's whole content is its **codomain**, so what it leaves is
+    /// already of the type it forces, and forcing it again is asking a
+    /// question that has been answered. Nothing else on the list of
+    /// one-operand instructions is idempotent — `not` and `negate` are
+    /// their own inverses rather than their own answer, `tuple 1` wraps
+    /// again, and each `is_` test asked of its own answer is asking
+    /// something about a `Bool`.
+    ///
+    /// The width in [`AsTuple`][Instruction::AsTuple] rides along, as it
+    /// does everywhere else: `as_tuple n ; as_tuple n` is the identity on
+    /// the second coercion, while `as_tuple 2 ; as_tuple 3` is two
+    /// different questions and is no instance of this at all.
+    ///
+    /// [`commutative`]: Instruction::commutative
+    pub fn idempotent(&self) -> bool {
+        matches!(
+            self,
+            Instruction::AsBool | Instruction::AsInt | Instruction::AsTuple(_)
+        )
+    }
+
     /// Whether what this leaves on top of the stack is always a `Bool`.
     ///
     /// Folding `op ; is_bool` to `op ; drop ; push true` rests on this, so a

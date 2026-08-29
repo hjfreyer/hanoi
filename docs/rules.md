@@ -55,7 +55,10 @@ say:
   interchange;
 - everything about `swap` — a crossing is not recorded, so
   `swap ; swap = id(2)`, naturality of the crossing, and the braid
-  relation are all one wiring;
+  relation are all one wiring. What *is* recorded is which operand of a
+  box is which, so `swap ; op = op` for a commutative `op` is a row after
+  all, and `comm` is it: the equation is about the operand order, not
+  about the crossing;
 - coassociativity and cocommutativity of `copy` — fan-out has no shape;
 - **δ-naturality** — `push c ; copy(1) = push c ; push c` is not a law
   either way round, because both sides are the one box read twice;
@@ -76,14 +79,18 @@ Two lists group the rows a driver can run to fixpoint:
 
 | list | rows | what they are |
 |---|---|---|
-| `branching` | `select-literal`, `select-same`, `specialize-equal`, `specialize-bool`, `specialize-choice` | the branch layer, every row stated at the `select` |
-| `folding` | `fold`, `tested-bool`, `as-tuple-round-trip`, `retuple`, `is-tuple-built`, `not-not`, `and-literal`, `tuple-cancel`, `as-tuple-built`, `equal-refl` | the value layer — what specific instructions compute, with the machine as the judge |
+| `branching` | `select-literal`, `select-same`, `not-branch`, `specialize-equal`, `specialize-bool`, `specialize-choice` | the branch layer, every row stated at the `select` |
+| `folding` | `fold`, `tested-bool`, `as-tuple-round-trip`, `retuple`, `is-tuple-built`, `not-not`, `and-literal`, `or-literal`, `idem`, `tuple-cancel`, `as-tuple-built`, `equal-refl` | the value layer — what specific instructions compute, with the machine as the judge |
 
 The `decide` drive — what the `diagram` closer runs — spends both lists
-to fixpoint. Five rows are on **no** list at all: `promised-bool`,
-`shannon`, `select-hoist`, `as-bool-branch` and `coercion-guard`. Each is
-held out on purpose, and a proof names the one it wants — `fire(law)`,
-`at(#box, law)` — the way it names `inline`.
+to fixpoint. Six rows are on **no** list at all: `promised-bool`,
+`shannon`, `select-hoist`, `comm`, `as-bool-branch` and `coercion-guard`.
+Each is held out on purpose, and a proof names the one it wants —
+`fire(law)`, `at(#box, law)` — the way it names `inline`.
+
+What holds a row off a list is that a driver could not run it to
+fixpoint. Five of the six **grow** a graph. `comm` does neither: it
+permutes, and a driver would exchange the same two operands forever.
 
 ## The branch layer (`branching`)
 
@@ -93,6 +100,11 @@ of it. That placement is also what licenses the rows that reason from the
 condition — the **discard** the select performs is what makes "the
 condition held" sound in a block (the untaken arm is an answer nobody
 reads), and the discard is at the select.
+
+`not-branch` is the one row here that spends no discard: it reads the box
+that *made* the condition rather than the blocks, and what it concludes is
+about the blocks as a pair. That is why it is also the one that shrinks
+without deciding anything.
 
 What a window reaches is therefore a *block*, not the inside of an arm:
 `x` tested `equal` to `7` becomes `7` where the select reads it, while the
@@ -105,6 +117,7 @@ whole graph rather than about a window.
 |---|---|
 | `select-literal` | β: `push c ; if { T } else { E }` = the blocks `truthy(c)` chooses. Sound on **every** value, not only bools: `truthy` is total, `false` the one falsy value. The untaken arm is outside the window: its boxes lose their reader when the select goes, and a box the boundary does not reach is not in the program. |
 | `select-same` | `if c { x } else { x } = x`, one block at a time: a block the select answers with either way is what it answers. The select keeps its other blocks and narrows by one. The strategy step of the same name ([docs/proving.md](proving.md)) is this row read as a proof: a goal whose left side answers with a branch becomes one goal per block, and this is what puts them back together. |
+| `not-branch` | `not ; if { A } else { B } = if { B } else { A }`: a negation in front of a branch is the branch with its arms exchanged, and the negation is spent. `not v` is truthy exactly where `v` is falsy — `false` being the one falsy value — so the two selects pick opposite blocks of the same pair. Sound on **every** value, for `select-literal`'s reason: truthiness is all a branch reads, and answering it is all `not` does. The `not` is not exported, the side condition `not-not` states in the same words. |
 | `specialize-equal` | a value that tested `equal` to a literal **is** that literal, in the block the test chose: `equal` answers `Bool(a == b)`, so a truthy answer is `a == b` and nothing weaker. |
 | `specialize-bool` | the very value a branch tested, when it is a bool, is what the branch decided: `true` in the then block, `false` in the else block. The window holds the `as_bool` that made the condition — that coercion's presence is what says the condition is a bool at all (a condition of `5` is truthy, and its then block reads `5`, not `true`). `promised-bool` is the row that puts the coercion there. |
 | `specialize-choice` | a branch inside an arm whose condition is the very value the outer branch tested is already decided: its then blocks are read in the outer then arm, its else blocks in the outer else arm — the same value tested twice answers the same. |
@@ -117,20 +130,25 @@ work done in both is one box from the moment it is written.
 
 Laws about what specific instructions compute. The discipline that
 governs the whole layer: **facts live on the instruction and are measured
-by `vm`, never restated**. `truthy`, `op_arity` and `yields_bool` are read
-off the instruction set, and `fold` goes one further — it executes the
+by `vm`, never restated**. `truthy`, `op_arity`, `yields_bool`,
+`commutative` and `idempotent` are read off the instruction set — and the
+last three are what let one row stand for a family, since the row asks the
+set which instructions it is about rather than listing them. `fold` goes
+one further — it executes the
 literal window on a scratch VM (`run_window`), so there is no second
 implementation of the semantics anywhere in the rewriter.
 
 | law | statement |
 |---|---|
 | `fold` | an operation on literal operands is the answer the machine gives, junk included: `push v̄ ; op` = the pushes of what `vm` answers. The answer side is *built from the run*, so a payload cannot lie about it. |
-| `tested-bool` | `op ; is_bool` = `op` and `push true` side by side, for any `op` the instruction set promises answers a bool (`yields_bool`). The answer stays exported for its other readers. |
+| `tested-bool` | `op ; is_T` = `op` and `push (T is Bool)` side by side, for any `op` the instruction set promises answers a bool (`yields_bool`) and any type test `is_T`. One row for the whole family, because one fact answers all of it: a codomain says which test succeeds *and* which fail, and the failures fold a shape guard that asked the wrong question. The answer stays exported for its other readers. |
 | `as-tuple-round-trip` | `as_tuple n ; untuple n ; tuple n = as_tuple n`: a value already coerced survives the round trip — the coercion's codomain *is* "a tuple of exactly `n`". Not derivable from `retuple`, which would leave two coercions and no idempotence row to collapse them; listed before `retuple` so the longer window wins. |
 | `retuple` | `untuple n ; tuple n = as_tuple n`: rebuilding what `untuple` took apart is the coercion, not the identity — the slots may have been junk-filled. Whole or not at all. |
 | `is-tuple-built` | `tuple m ; is_tuple n` = `tuple m ; push (m == n)`: a shape the window watched being built answers a test of that shape. This is the row the `type`/`enum` sugar's guard (`pick 0 ; is_tuple n`) needs. |
 | `not-not` | `not ; not = as_bool` — the coercion spelled the long way round. |
 | `and-literal` | `and` with a literal operand is decided by `truthy` alone — short-circuiting as an equation. A truthy literal contributes only the coercion: the answer is `as_bool` of the other operand. The one falsy value decides everything: `push false`, the other operand discarded. This is the row that lets a case split spend a **conjunction** one conjunct at a time. |
+| `or-literal` | the dual of `and-literal`, with the poles exchanged: the one **falsy** value contributes only the coercion — the answer is `as_bool` of the other operand — and a truthy literal decides everything: `push true`, the other operand discarded. This is what lets a case split spend a **disjunction** one disjunct at a time. |
+| `idem` | `op ; op = op`, for any `op` the instruction set says is `idempotent`. One row for a family, and the family is the three coercions: a coercion's whole content is its **codomain**, so what it leaves is already of the type it forces. The middle port is not exported, the side condition `not-not` states. Backwards it is the clone, which is what a proof wants when the shape it is heading for spells the coercion twice. |
 | `tuple-cancel` | `tuple n ; untuple n = id(n)`: taking apart what `tuple n` built answers the built elements. The tuple is kept for its other readers. |
 | `as-tuple-built` | `tuple n ; as_tuple n` answers the tuple itself: the coercion is a no-op on a value the window watched being built. |
 | `equal-refl` | `equal` on one wire read twice is `true`: `equal` is structural identity and the language is deterministic and pure. |
@@ -179,6 +197,24 @@ of a branch is shared by both arms as a matter of naming, and doing it
 twice is having it once; this is the same freedom at the other end. It duplicates the region it moves over, so no list drives
 it.
 
+**`comm`** — the other way round is the same answer, for any `op` the
+instruction set says is `commutative`:
+
+```text
+swap ; op  =  op
+```
+
+No `swap` appears in either graph and none could: a crossing is two names
+in the other order, so what this equation relates is one box reading
+`(a, b)` and one box reading `(b, a)`. That is also why it needs a row
+where the wiring laws do not — the operands are *recorded*, so their order
+is something the graph says, and only the instruction set can say it does
+not matter. The junk answer commutes too, which is what makes the fact
+total: `add` on a symbol and an int answers `0` whichever way round they
+arrive. Held off every list because it permutes rather than shrinking; the
+search also declines it on a box reading one wire twice, which already is
+what the other order would build.
+
 **`as-bool-branch`** — `as_bool` is the branch it is:
 
 ```text
@@ -216,19 +252,34 @@ split can spend it. Both grow a graph, and whether to unpack is a
 decision of the same kind `inline` is — so a strategy says which one, and
 where.
 
-## Rows not yet written
+## Rows that were not written
 
-True of the machine, verified against the junk semantics of
-[docs/totality.md](totality.md), but not stated as rows — a claim that
-needs one fails honestly, and each is a `sides` construction away:
+The table above used to end in a list of true equations that were not rows
+— held against the junk semantics of [docs/totality.md](totality.md),
+spendable by nothing, so a claim that needed one failed honestly. The list
+is empty, and where each of them landed is worth saying, because three of
+the five landed as *one* row rather than as the family they were described
+as:
 
-| law | in terms | why it is true |
-|---|---|---|
-| commutativity | `swap ; op = op` for commutative `op` | the instruction's own `commutative` fact |
-| coercion idempotence | `as_X ; as_X = as_X` | a coerced value is already the shape it coerces to |
-| `not-branch` | `not ; if { A } else { B } = if { B } else { A }` | `not v` is truthy iff `v = false`, the unique falsy value |
-| `or-literal` | the dual of `and-literal` | short-circuiting for `or` |
-| type-test family | `op ; is_int` = `op` and `push false` beside it, for a `yields_bool` op, per (codomain, test) pair | `tested-bool`'s siblings: the other tests of the same codomain fact, table-driven off `Instruction::yields_*` |
+| was listed as | landed as |
+|---|---|
+| commutativity | `comm`, one row over the instruction set's own `commutative` fact |
+| coercion idempotence | `idem`, one row over a new `idempotent` fact, measured by `vm` the way `commutative` is |
+| `not-branch` | a row of its own, in the branch layer |
+| `or-literal` | a row of its own, beside `and-literal` |
+| type-test family | `tested-bool`, which now carries *which* test and decides it — the family is the one row, not a row per (codomain, test) pair |
+
+The shape of the trade is the same in all three of the general ones: the
+fact lives on the instruction, `vm` measures it, and the row reads it. A
+row per coercion, or per commutative operator, or per (codomain, test)
+pair, would be several copies of one sentence and another to write
+whenever the instruction set grew a member.
+
+One equation named in this document is still not a row: `as_bool ; branch`
+is `branch`, the coercion a branch already applies to its condition
+([docs/totality.md](totality.md)). It is true, and it is not needed yet —
+`promised-bool` puts the coercion there on purpose, and
+`specialize-bool` is what reads it.
 
 ## Further reading
 

@@ -84,10 +84,11 @@ ordering an engine hardcodes.
   documents. The phases loop *together*: one law of the layer
   unlocks another, so one `repeat` over the ordered list is the fixpoint
   said plainly.
-- `decide` — the whole table: the branch layer and
-  the value layer. The closest thing to a normalizer, and still a
-  strategy: those laws, in that order, replaceable by any proof that
-  chooses differently.
+- `decide` — both driven lists: the branch layer and the value layer. Not
+  the whole table — the rows no list drives are the ones a driver could
+  not run to fixpoint, and a proof names those. The closest thing to a
+  normalizer, and still a strategy: those laws, in that order, replaceable
+  by any proof that chooses differently.
 
 ## The model underneath
 
