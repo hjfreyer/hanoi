@@ -1,63 +1,76 @@
-//! Graphs, and rewriting one by another: boxes, the links between them,
-//! what can be asked of the pair, and how a piece of one is swapped for a
-//! piece of another.
+//! Values, and rewriting one graph of them by another: what a box is, what
+//! it reads, whether two graphs are the same program, and how an equation
+//! is spent against one.
 //!
 //! This is the layer [`crate::diagram2`] is an engine over, kept apart from
 //! it because the two are different things. A graph knows what a box takes
 //! and leaves, what reads what, whether it holds together, and whether
-//! another graph is the same diagram. It knows nothing about terms, laws,
-//! tactics or proofs; the traffic in that direction is all diagram2's, which
-//! [`build`](crate::diagram2::build)s one from a term and never turns one
-//! back.
+//! another graph is the same program. It knows nothing about terms, laws,
+//! tactics or proofs; the traffic in that direction is all diagram2's,
+//! which [`build`](crate::diagram2::build)s one from a term and never turns
+//! one back.
 //!
-//! Nothing here is generic, and that is deliberate. A [`NodeKind`] is a
-//! Hanoi [`Prim`], a call into a Hanoi library, or one of the structural
-//! boxes the term language has. The point of the split is that the graph is
-//! its own layer, not that it is anybody's graph.
+//! ## A box is what it computes
 //!
-//! ## Two invariants, and where they are kept
+//! **Identity is content.** A node is its kind and the sources its input
+//! ports read, and [`Graph::add`] hands back the node that already says
+//! that if one does. So two boxes computing the same thing on the same
+//! operands are not two boxes — there is no way to write that down — and
+//! the graph is maximally shared at every moment, by construction rather
+//! than by any rewrite.
 //!
-//! **A link is written at both ends**: a [`Source`] names the one producer
-//! an input port reads, a [`Sink`] names one reader of an output port, and
-//! both lists are kept. The constructors here write the two directions
-//! together, which is why they cannot be recorded apart; a rewriter that
-//! re-points one end and forgets the other is what [`Graph::check`] is for,
-//! and it is caught at the rewrite rather than surviving as a graph that
-//! reads back wrong.
+//! That one decision is why the wiring layer is not here. `id`, `copy` and
+//! `drop` were boxes when a graph was a picture of a *stack program*; a
+//! value read twice is now two references, a value read never is a node
+//! nothing reaches, and a crossing is two names in the other order. So
+//! `id-elim`, `swap-elim`, `copy-elim`, `dead-node` and `dedup` are not
+//! laws that fire — they are things the representation cannot say, which is
+//! the strongest form of "already done".
 //!
-//! **A rewrite is a [`Pair`], put down where a [`Match`] says.** A pair is
-//! two graphs offered as interchangeable; a match is the claim that one of
-//! them *is* some part of a host graph. [`Pair::apply`] takes both and does
-//! the swap — and it checks first, because a match is a claim anyone may
-//! state and [`check_match`] is what makes it true.
+//! **A node is immutable.** Its content is its name, so nothing edits one;
+//! a rewrite makes new nodes and re-roots. Which means links are recorded
+//! one way only — [`Graph::sources`] down, and no reader lists to keep in
+//! step. [`Graph::sinks`] answers by reading, and answers about the
+//! **reachable** graph: a node no boundary output reaches is not part of
+//! the program, and reachability is the whole of what deletion used to be.
 //!
-//! The check is **stricter than substitution**, and that strictness is the
-//! whole safety story. A pattern is a window with loose ends: the sources
-//! its boundary inputs stand for, the outside readers its boundary outputs
-//! serve. A splice re-points exactly those, so the match has to account for
-//! exactly those — every reader of every exported port, and no link from the
-//! window's own boundary back into the window. Anything unaccounted for
-//! would be left dangling, so nothing is spliced until all of it adds up.
-//! The splice itself is private, and [`Pair::apply`] is the only way to
-//! reach it.
+//! ## A rewrite replaces a value, not a subgraph
 //!
-//! What a pair *means* — which law it spells, whether anything proved its
-//! two sides equal — is not asked here. [`rules`](crate::diagram2::rules) is
-//! what produces pairs of equivalent graphs, and once it has, every rewrite
-//! in this crate is one of them applied somewhere.
+//! **A rewrite is a [`Pair`], spent where a [`Match`] says.** A pair is two
+//! graphs offered as interchangeable; a match is the claim that one of them
+//! *is* some part of a host graph — which boxes, and what its boundary
+//! inputs stand for. [`Pair::apply`] checks the claim and then does the one
+//! thing there is to do: it builds the other side, and **substitutes** its
+//! outputs for the ones the pattern exported, rebuilding everything that
+//! read them.
+//!
+//! Nothing is deleted, and that is why nothing has to be accounted for. The
+//! old splice had to know every reader of every port it was about to
+//! strand, so a law could not fire wherever its window was shared —
+//! `not-not` declined on a first `not` somebody else read, and the fix was
+//! to unshare first. Substitution has no such condition: a reader outside
+//! the window keeps reading the node it always read, because that node is
+//! still there and still means what it meant. The three conditions
+//! [`check_match`] is left with are that the boxes are the right boxes,
+//! that they read what the pattern says, and that the answer does not read
+//! itself.
+//!
+//! ## Two graphs are one program by looking
+//!
+//! Content addressing canonicalises, so [`isomorphic`] is not a search: the
+//! two graphs are walked from their boundary outputs and compared. Equality
+//! on [`Graph`] is that same reading, which is why a graph that rewrote and
+//! a graph that was built compare equal when they say the same thing, and
+//! why the boxes a rewrite left behind count for nothing.
 //!
 //! ## Embeddings compose
 //!
-//! A match is a map: this graph's boxes and boundary, read as another's. [`Embedding`] is that map kept in a form that outlives a
-//! rewrite, and [`Embedding::carry`] composes two of them — a match against
-//! an inner graph, said against the outer one.
-//!
-//! That is what lets a rewrite stated about one graph be spent inside
-//! another, and a whole *run* of them likewise: each step makes boxes on
-//! both sides, [`Embedding::extend`] pairs them up, and the next step can
-//! name them. [`transplant`](crate::diagram2::rules::transplant) is that
-//! loop, and what it answers with is the run said in the host's coordinates
-//! — a proof about the host, replayable on its own.
+//! A match is a map: this graph's boxes and boundary, read as another's.
+//! [`Embedding`] is that map kept in a form that outlives a rewrite, and
+//! [`Embedding::carry`] composes two of them — a match against an inner
+//! graph, said against the outer one. That is what lets a rewrite stated
+//! about one graph be spent inside another, and a whole *run* of them
+//! likewise.
 
 use std::collections::{HashMap, HashSet};
 use std::fmt;
@@ -70,8 +83,10 @@ use crate::term::{Arity, Prim};
 
 /// A box in a graph: an index into its [`Graph`]'s node list.
 ///
-/// Meaningful only against the graph that issued it, and only while that
-/// node is live — a rewrite deletes nodes, and an id is not reused.
+/// Meaningful only against the graph that issued it. An id is never reused
+/// and a node is never edited, so an id names the same computation for the
+/// life of the graph — what changes is whether the boundary still reaches
+/// it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct NodeId(u32);
 
@@ -81,8 +96,8 @@ impl NodeId {
     }
 
     /// The id at a position, for anything that indexes a graph's boxes by
-    /// their own order — [`rules`](crate::diagram2::rules) does, since a rule's side deletes
-    /// nothing and so has dense ids.
+    /// their own order — [`rules`](crate::diagram2::rules) does, since a
+    /// rule's side is built once and never rewritten.
     pub fn at(index: usize) -> NodeId {
         NodeId(u32::try_from(index).expect("a graph fits in u32"))
     }
@@ -93,7 +108,7 @@ impl NodeId {
 /// [`Source::Input`] is the graph's own boundary, which is the price of
 /// having no wire type: a link to the outside is a variant rather than just
 /// another port.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Source {
     /// Boundary input `i`, counted from the deepest.
     Input(usize),
@@ -103,10 +118,11 @@ pub enum Source {
 
 /// Where an output port is read — none, one, or many.
 ///
-/// The asymmetry against [`Source`] is the cartesian fact itself: a value is
-/// produced once and read freely. Before any rewriting every port has
-/// exactly one sink; `copy-elim` is what breaks that, and it is the point.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// The asymmetry against [`Source`] is the cartesian fact itself: a value
+/// is produced once and read freely. It is a *reading* rather than a
+/// record — [`Graph::sinks`] computes it — because a node holds only what
+/// it reads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Sink {
     /// Boundary output `i`, counted from the deepest.
     Output(usize),
@@ -114,26 +130,17 @@ pub enum Sink {
     Port { node: NodeId, port: usize },
 }
 
-/// What a box is — [`Term`](crate::term::Term)'s leaves, one for one.
+/// What a box is: an operation, a call, or a branch.
 ///
-/// The two operators are what the graph replaces; everything else survives
-/// the translation unchanged. `swap` in particular stays an
-/// [`Op`][NodeKind::Op]: it is a prim like any other, and the rewriter is
-/// where the fact that it is *structural* gets used, not the type.
-///
-/// `PartialEq` is the whole of what a match needs of two boxes: a kind is
-/// its own description, and holds nothing that means one thing in one
-/// graph and another in the next.
-#[derive(Debug, Clone, PartialEq)]
+/// Three, where there were six. `Id`, `Copy` and `Drop` were the stack
+/// program showing through — a graph of values reads a wire twice by naming
+/// it twice, and drops one by naming it nowhere — and `Op(Prim::Swap)` went
+/// with them, since a crossing is two sources in the other order.
+/// [`build`](crate::diagram2::build) is where that translation happens, and
+/// it is the only place that ever knew about the stack.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum NodeKind {
-    /// `id(n)`: `n` in, the same `n` out.
-    Id(usize),
-    /// `copy(n)`: block-wise, so output `i` and output `n + i` both stand
-    /// for input `i`.
-    Copy(usize),
-    /// `drop(n)`: `n` in, nothing out.
-    Drop(usize),
-    /// One prim, `push` and `swap` included.
+    /// One prim, `push` included.
     Op(Prim),
     /// A sentence called by name, left unopened; the arity is carried for
     /// the same reason [`Term::Call`](crate::term::Term::Call) carries it.
@@ -145,23 +152,12 @@ pub enum NodeKind {
     /// `n+1..=2n` the `else` block. Output `i` is input `1 + i` when the
     /// condition holds and input `1 + n + i` otherwise.
     ///
-    /// The condition sits at the *bottom* rather than on top, where the
-    /// term puts it, so a rule that wants it finds it at port 0. What the
-    /// term language spends a hoist on, the graph is free to say directly:
-    /// a port is named, not reached past.
-    ///
     /// The arms are not in here. They are ordinary boxes upstream of the
-    /// blocks, fed by a plain `copy(n)` that `copy-elim` deletes like any
-    /// other, so a rule reaches into an arm from outside and a value
-    /// reaches out of one. What makes a box an arm's own is that nothing
-    /// but that side's blocks reads it — a fact about the whole graph, not
-    /// something any box records.
-    ///
-    /// Both arms are computed, which is the single-arm hoist of
-    /// [docs/totality.md](../../../docs/totality.md) — sound because every
-    /// [`Prim`] is total, has no effect but the stack, and, unlike the
-    /// term-level rule, states its arity locally even when it is a
-    /// [`NodeKind::Call`].
+    /// blocks, and what makes a box an arm's own is that nothing but that
+    /// side's blocks reads it — a fact about the whole graph, not something
+    /// any box records. Both arms are computed, which is the single-arm
+    /// hoist of [docs/totality.md](../../../docs/totality.md) — sound
+    /// because every [`Prim`] is total and has no effect but the stack.
     Select { arity: usize },
 }
 
@@ -170,62 +166,60 @@ impl NodeKind {
     /// [`Context::arity`](crate::term::Context::arity) keeps for terms.
     pub fn arity(&self) -> Arity {
         match self {
-            NodeKind::Id(n) => Arity::new(*n, *n),
-            NodeKind::Copy(n) => Arity::new(*n, 2 * n),
-            NodeKind::Drop(n) => Arity::new(*n, 0),
             NodeKind::Op(prim) => prim.arity(),
             NodeKind::Call { arity, .. } => *arity,
-            NodeKind::Select { arity, .. } => Arity::new(2 * arity + 1, *arity),
+            NodeKind::Select { arity } => Arity::new(2 * arity + 1, *arity),
         }
-    }
-
-    /// Whether this is one of the boxes rewriting is here to delete.
-    ///
-    /// `drop` is not on the list: it goes by `dead-node`, which is about
-    /// having no readers rather than about being structural. Nor is
-    /// `select`: it is the one box a branch is, and taking a branch apart
-    /// is the branch layer's work, not structure's.
-    pub fn is_structural(&self) -> bool {
-        matches!(
-            self,
-            NodeKind::Id(_) | NodeKind::Copy(_) | NodeKind::Op(Prim::Swap)
-        )
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+/// A box, which is to say a value: what it computes and what it computes it
+/// from. Hashed and compared by exactly that, which is what makes it the
+/// key a graph interns on.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct Node {
     kind: NodeKind,
     /// One source per input port.
     inputs: Vec<Source>,
-    /// The readers of each output port.
-    outputs: Vec<Vec<Sink>>,
 }
 
-/// A program as boxes and the links between them.
+/// A program as values and what each is made of.
 ///
-/// Nodes are only ever deleted, never moved, so a [`NodeId`] stays valid
-/// (as a *dead* id, once its node is gone) for the life of the graph.
-#[derive(Debug, Clone, Default, PartialEq)]
+/// Nodes accumulate and are never removed; the program is what the boundary
+/// outputs reach. `intern` is what makes a node's content its name.
+#[derive(Debug, Clone, Default)]
 pub struct Graph {
-    nodes: Vec<Option<Node>>,
-    /// The readers of each boundary input, deepest first.
-    inputs: Vec<Vec<Sink>>,
+    nodes: Vec<Node>,
+    /// The one id each distinct box has.
+    intern: HashMap<Node, NodeId>,
+    /// How many boundary inputs.
+    inputs: usize,
     /// What each boundary output reads, deepest first.
     outputs: Vec<Source>,
+}
+
+/// Two graphs are equal when they are the same program: what the boundary
+/// reaches, read from the outputs down. Boxes nothing reaches — what a
+/// rewrite left behind — count for nothing, and neither do the numbers the
+/// ids happen to hold.
+impl PartialEq for Graph {
+    fn eq(&self, other: &Self) -> bool {
+        self.arity() == other.arity() && self.canon() == other.canon()
+    }
 }
 
 impl Graph {
     pub(crate) fn empty(inputs: usize) -> Graph {
         Graph {
             nodes: Vec::new(),
-            inputs: vec![Vec::new(); inputs],
+            intern: HashMap::new(),
+            inputs,
             outputs: Vec::new(),
         }
     }
 
-    /// The window one box fills: its input ports reading the boundary, every
-    /// output port exported in order.
+    /// The window one box fills: its input ports reading the boundary,
+    /// every output port exported in order.
     ///
     /// The pattern side of every one-box rewrite, and the shape a caller
     /// replacing a single box states its [`Match`] against.
@@ -239,34 +233,37 @@ impl Graph {
 
     /// What the whole graph takes and leaves.
     pub fn arity(&self) -> Arity {
-        Arity::new(self.inputs.len(), self.outputs.len())
+        Arity::new(self.inputs, self.outputs.len())
     }
 
-    /// Whether that node has not been rewritten away.
+    /// Whether the boundary reaches that node — which is the whole of what
+    /// being part of the program means here.
     pub fn is_live(&self, id: NodeId) -> bool {
-        self.nodes.get(id.index()).is_some_and(Option::is_some)
+        self.reachable().contains(&id)
     }
 
-    /// Every live node, in id order.
+    /// Every box the boundary reaches, in id order — which is producers
+    /// first, since a node is only ever made after what it reads.
     pub fn live(&self) -> impl Iterator<Item = (NodeId, &NodeKind)> {
-        self.nodes
-            .iter()
-            .enumerate()
-            .filter_map(|(i, n)| n.as_ref().map(|n| (NodeId(i as u32), &n.kind)))
+        let reachable = self.reachable();
+        (0..self.nodes.len())
+            .map(NodeId::at)
+            .filter(move |id| reachable.contains(id))
+            .map(|id| (id, &self.nodes[id.index()].kind))
     }
 
-    /// How many boxes are left.
+    /// How many boxes the program is.
     pub fn live_count(&self) -> usize {
-        self.nodes.iter().filter(|n| n.is_some()).count()
+        self.reachable().len()
     }
 
     pub fn kind(&self, id: NodeId) -> &NodeKind {
-        &self.node(id).kind
+        &self.nodes[id.index()].kind
     }
 
     /// What a node's input ports read, deepest first.
     pub fn sources(&self, id: NodeId) -> &[Source] {
-        &self.node(id).inputs
+        &self.nodes[id.index()].inputs
     }
 
     /// What the boundary outputs read, deepest first.
@@ -274,93 +271,268 @@ impl Graph {
         &self.outputs
     }
 
-    /// The readers of one port — the empty slice if the port does not
-    /// exist, which only a malformed graph can ask about.
-    pub fn sinks(&self, src: Source) -> &[Sink] {
-        match src {
-            Source::Input(i) => self.inputs.get(i).map(Vec::as_slice).unwrap_or(&[]),
-            Source::Port { node, port } => self
-                .nodes
-                .get(node.index())
-                .and_then(Option::as_ref)
-                .and_then(|n| n.outputs.get(port))
-                .map(Vec::as_slice)
-                .unwrap_or(&[]),
-        }
-    }
-
-    fn node(&self, id: NodeId) -> &Node {
-        self.nodes[id.index()]
-            .as_ref()
-            .expect("a live node was asked for")
-    }
-
-    fn node_mut(&mut self, id: NodeId) -> &mut Node {
-        self.nodes[id.index()]
-            .as_mut()
-            .expect("a live node was asked for")
-    }
-
-    fn sinks_mut(&mut self, src: Source) -> &mut Vec<Sink> {
-        match src {
-            Source::Input(i) => &mut self.inputs[i],
-            Source::Port { node, port } => &mut self.node_mut(node).outputs[port],
-        }
-    }
-
-    /// Writes one end of a link: what `sink` reads.
-    fn set_source(&mut self, sink: Sink, src: Source) {
-        match sink {
-            Sink::Output(i) => self.outputs[i] = src,
-            Sink::Port { node, port } => self.node_mut(node).inputs[port] = src,
-        }
-    }
-
-    /// A box, its input ports linked to the sources given. Returns a source
-    /// per output port.
+    /// Who reads that port, among the boxes the program reaches and the
+    /// boundary.
     ///
-    /// The link is written at both ends here and nowhere else, which is why
-    /// the two directions cannot be recorded apart.
+    /// Computed rather than kept: a node records what it reads and nothing
+    /// records what reads it, so this is a sweep. It is the one place the
+    /// distinction between a box and a box the boundary reaches is
+    /// load-bearing — a rewrite leaves its old boxes standing, and they
+    /// read what they always read, so counting them would be counting
+    /// ghosts.
+    pub fn sinks(&self, src: Source) -> Vec<Sink> {
+        let mut out: Vec<Sink> = self
+            .outputs
+            .iter()
+            .enumerate()
+            .filter(|&(_, &s)| s == src)
+            .map(|(i, _)| Sink::Output(i))
+            .collect();
+        for (id, _) in self.live() {
+            for (port, &s) in self.sources(id).iter().enumerate() {
+                if s == src {
+                    out.push(Sink::Port { node: id, port });
+                }
+            }
+        }
+        out
+    }
+
+    /// A box, its input ports reading the sources given — or the box that
+    /// already says that.
+    ///
+    /// The interning is the model: a value is named by what it is, so
+    /// asking for one twice asks for the same one. Everything the wiring
+    /// laws used to do happens here, before there is anything to rewrite.
     pub(crate) fn add(&mut self, kind: NodeKind, inputs: Vec<Source>) -> Vec<Source> {
         let arity = kind.arity();
         debug_assert_eq!(inputs.len(), arity.inputs, "the caller cuts by arity");
-        let id = NodeId(u32::try_from(self.nodes.len()).expect("a graph fits in u32"));
-        self.nodes.push(Some(Node {
-            kind,
-            inputs: inputs.clone(),
-            outputs: vec![Vec::new(); arity.outputs],
-        }));
-        for (port, src) in inputs.into_iter().enumerate() {
-            self.sinks_mut(src).push(Sink::Port { node: id, port });
-        }
+        let id = self.add_node(kind, inputs);
         (0..arity.outputs)
             .map(|port| Source::Port { node: id, port })
             .collect()
     }
 
-    /// A box, as [`Graph::add`], answering with the node rather than its
-    /// ports — which is what a caller that has to place a box of no outputs
-    /// needs.
+    /// [`Graph::add`], answering with the node rather than its ports.
     pub(crate) fn add_node(&mut self, kind: NodeKind, inputs: Vec<Source>) -> NodeId {
-        let id = NodeId(u32::try_from(self.nodes.len()).expect("a graph fits in u32"));
-        self.add(kind, inputs);
+        debug_assert!(
+            inputs.iter().all(|&src| self.valid(src)),
+            "a box reads what is already there"
+        );
+        let node = Node { kind, inputs };
+        if let Some(&id) = self.intern.get(&node) {
+            return id;
+        }
+        let id = NodeId::at(self.nodes.len());
+        self.intern.insert(node.clone(), id);
+        self.nodes.push(node);
         id
     }
 
     /// Closes the graph: these sources are what the boundary leaves.
     pub(crate) fn close(&mut self, sources: Vec<Source>) {
-        for (i, &src) in sources.iter().enumerate() {
-            self.sinks_mut(src).push(Sink::Output(i));
-        }
         self.outputs = sources;
     }
 
-    /// Forgets one recorded reader of a port.
-    fn unlink(&mut self, src: Source, sink: Sink) {
-        let readers = self.sinks_mut(src);
-        if let Some(at) = readers.iter().position(|&s| s == sink) {
-            readers.remove(at);
+    /// Every box the boundary reaches.
+    fn reachable(&self) -> HashSet<NodeId> {
+        let mut seen = HashSet::new();
+        let mut todo: Vec<Source> = self.outputs.clone();
+        while let Some(src) = todo.pop() {
+            if let Source::Port { node, .. } = src
+                && seen.insert(node)
+            {
+                todo.extend(self.nodes[node.index()].inputs.iter().copied());
+            }
         }
+        seen
+    }
+
+    /// The program, renumbered by a walk that reads only structure: the
+    /// boundary outputs in order, each one's producers before itself.
+    ///
+    /// Two graphs saying the same thing land on the same answer whatever
+    /// order they were built in, which is what makes both equality and
+    /// [`isomorphic`] a reading rather than a search.
+    fn canon(&self) -> (Vec<(NodeKind, Vec<Source>)>, Vec<Source>) {
+        let mut place: HashMap<NodeId, usize> = HashMap::new();
+        let mut order: Vec<NodeId> = Vec::new();
+        for &out in &self.outputs {
+            self.walk_canon(out, &mut place, &mut order);
+        }
+        let named = |src: Source| match src {
+            Source::Input(i) => Source::Input(i),
+            Source::Port { node, port } => Source::Port {
+                node: NodeId::at(place[&node]),
+                port,
+            },
+        };
+        let nodes = order
+            .iter()
+            .map(|&id| {
+                let node = &self.nodes[id.index()];
+                (
+                    node.kind.clone(),
+                    node.inputs.iter().map(|&s| named(s)).collect(),
+                )
+            })
+            .collect();
+        (nodes, self.outputs.iter().map(|&s| named(s)).collect())
+    }
+
+    fn walk_canon(&self, src: Source, place: &mut HashMap<NodeId, usize>, order: &mut Vec<NodeId>) {
+        let Source::Port { node, .. } = src else {
+            return;
+        };
+        if place.contains_key(&node) {
+            return;
+        }
+        // Marked before the descent would be wrong for a cycle and
+        // impossible without one: a node only ever reads what was already
+        // there.
+        for &input in &self.nodes[node.index()].inputs {
+            self.walk_canon(input, place, order);
+        }
+        place.insert(node, order.len());
+        order.push(node);
+    }
+
+    fn valid(&self, src: Source) -> bool {
+        match src {
+            Source::Input(i) => i < self.inputs,
+            Source::Port { node, port } => {
+                node.index() < self.nodes.len() && port < self.kind(node).arity().outputs
+            }
+        }
+    }
+
+    /// Whether every source names a port that is there.
+    ///
+    /// Short, because the representation has stopped admitting most of what
+    /// this used to check: there are no reader lists to fall out of step,
+    /// a node's ports are its kind's by construction, and nothing can reach
+    /// itself because a node is built after what it reads.
+    pub fn check(&self) -> Result<(), Error> {
+        for (i, node) in self.nodes.iter().enumerate() {
+            if node.inputs.len() != node.kind.arity().inputs {
+                return Err(Error::Width {
+                    node: NodeId::at(i),
+                    expected: node.kind.arity(),
+                    inputs: node.inputs.len(),
+                });
+            }
+            for (port, &src) in node.inputs.iter().enumerate() {
+                let ahead = matches!(src, Source::Port { node, .. } if node.index() >= i);
+                if !self.valid(src) || ahead {
+                    return Err(Error::Dangling {
+                        source: src,
+                        sink: Sink::Port {
+                            node: NodeId::at(i),
+                            port,
+                        },
+                    });
+                }
+            }
+        }
+        for (i, &src) in self.outputs.iter().enumerate() {
+            if !self.valid(src) {
+                return Err(Error::Dangling {
+                    source: src,
+                    sink: Sink::Output(i),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// Another graph's boxes added to this one, its boundary inputs
+    /// standing for the sources given, answering with the sources its
+    /// boundary outputs name.
+    ///
+    /// This is what lets a piece of a program be **carried** rather than
+    /// spelled out. A rule about a region cannot name what is in it — that
+    /// is whatever the program put there — so it carries it and implants it
+    /// where it goes. Interning means an implant of something already here
+    /// adds nothing at all.
+    pub(crate) fn implant(&mut self, arm: &Graph, inputs: &[Source]) -> Vec<Source> {
+        debug_assert_eq!(inputs.len(), arm.inputs, "one source per input");
+        let mut fresh: Vec<NodeId> = Vec::with_capacity(arm.nodes.len());
+        let carry = |src: Source, fresh: &[NodeId]| match src {
+            Source::Input(i) => inputs[i],
+            Source::Port { node, port } => Source::Port {
+                node: fresh[node.index()],
+                port,
+            },
+        };
+        for node in &arm.nodes {
+            let takes = node.inputs.iter().map(|&s| carry(s, &fresh)).collect();
+            fresh.push(self.add_node(node.kind.clone(), takes));
+        }
+        arm.outputs.iter().map(|&s| carry(s, &fresh)).collect()
+    }
+
+    /// Every reader of every key rebuilt to read the value instead, and the
+    /// boundary with them.
+    ///
+    /// The whole of what a rewrite does. Boxes are immutable, so "rebuilt"
+    /// means made afresh from mapped sources — and interning means a
+    /// rebuild that lands on something already here lands on the box
+    /// itself. Walking in id order is walking producers first, so every
+    /// source is already mapped when the box that reads it comes up; the
+    /// boxes made along the way get higher ids than anything in the sweep,
+    /// so the sweep never has to consider them.
+    fn substitute(&mut self, sigma: &HashMap<Source, Source>) {
+        let mut map = sigma.clone();
+        let mut here: Vec<NodeId> = self.reachable().into_iter().collect();
+        here.sort_unstable();
+        for id in here {
+            let node = &self.nodes[id.index()];
+            let takes: Vec<Source> = node
+                .inputs
+                .iter()
+                .map(|src| map.get(src).copied().unwrap_or(*src))
+                .collect();
+            if takes == node.inputs {
+                continue;
+            }
+            let kind = node.kind.clone();
+            let outs = kind.arity().outputs;
+            let made = self.add_node(kind, takes);
+            for port in 0..outs {
+                // A port `sigma` already speaks for keeps what it said:
+                // the replacement is the answer for that one, and this
+                // rebuild is only for the ports it left alone.
+                map.entry(Source::Port { node: id, port })
+                    .or_insert(Source::Port { node: made, port });
+            }
+        }
+        self.outputs = self
+            .outputs
+            .iter()
+            .map(|src| map.get(src).copied().unwrap_or(*src))
+            .collect();
+    }
+
+    /// Everything a source reads, transitively.
+    fn upstream(&self, src: Source) -> HashSet<Source> {
+        let mut seen = HashSet::new();
+        let mut todo = vec![src];
+        while let Some(src) = todo.pop() {
+            if !seen.insert(src) {
+                continue;
+            }
+            if let Source::Port { node, .. } = src {
+                for &input in &self.nodes[node.index()].inputs {
+                    todo.push(input);
+                }
+                // Every port of a box is upstream of anything the box is,
+                // since replacing one is replacing what the box computes.
+                for port in 0..self.kind(node).arity().outputs {
+                    todo.push(Source::Port { node, port });
+                }
+            }
+        }
+        seen
     }
 }
 
@@ -369,374 +541,50 @@ impl Graph {
 /// The graph as `id(k) * itself` reads: `k` fresh boundary wires passed
 /// straight through beneath it.
 ///
-/// This is the graph-side spelling of [`Context::under`](crate::term::Context::under), and it exists for
-/// the same reason: a goal pads its narrower side until the arities agree,
-/// and once a side is a graph the padding has to be said on the graph.
+/// This is the graph-side spelling of
+/// [`Context::under`](crate::term::Context::under), and it exists for the
+/// same reason: a goal pads its narrower side until the arities agree, and
+/// once a side is a graph the padding has to be said on the graph. Every
+/// box is rebuilt, since a box that reads `Input(i)` is a different box
+/// once that input is `Input(i + k)`.
 pub fn under(graph: &Graph, k: usize) -> Graph {
     if k == 0 {
         return graph.clone();
     }
-    let mut out = graph.clone();
-    let bump_src = |src: Source| match src {
-        Source::Input(i) => Source::Input(i + k),
-        port => port,
-    };
-    let bump_sink = |sink: Sink| match sink {
-        Sink::Output(j) => Sink::Output(j + k),
-        port => port,
-    };
-    for node in out.nodes.iter_mut().flatten() {
-        for src in &mut node.inputs {
-            *src = bump_src(*src);
-        }
-        for readers in &mut node.outputs {
-            for sink in readers.iter_mut() {
-                *sink = bump_sink(*sink);
-            }
-        }
-    }
-    let mut inputs: Vec<Vec<Sink>> = (0..k).map(|i| vec![Sink::Output(i)]).collect();
-    inputs.extend(
-        std::mem::take(&mut out.inputs)
-            .into_iter()
-            .map(|readers| readers.into_iter().map(bump_sink).collect::<Vec<_>>()),
-    );
-    out.inputs = inputs;
+    let mut out = Graph::empty(graph.inputs + k);
+    let shifted: Vec<Source> = (0..graph.inputs).map(|i| Source::Input(i + k)).collect();
     let mut outputs: Vec<Source> = (0..k).map(Source::Input).collect();
-    outputs.extend(std::mem::take(&mut out.outputs).into_iter().map(bump_src));
-    out.outputs = outputs;
-    debug_assert!(out.check().is_ok(), "padding moved no box and broke a link");
+    outputs.extend(out.implant(graph, &shifted));
+    out.close(outputs);
+    debug_assert!(out.check().is_ok(), "padding rebuilt every box");
     out
 }
 
-// ---- whether two graphs are one diagram ------------------------------------------
+// ---- whether two graphs are one program ------------------------------------------
 
-/// Whether the two graphs are the same diagram: a bijection of live boxes
-/// preserving every kind and every link, with both boundaries pinned —
-/// input `i` to input `i`, output `j` to output `j`.
+/// Whether the two graphs are the same program.
 ///
-/// Whole-graph equality, not [`find`]'s embedding: no window, no
-/// reader-split, nothing left to a choice. Dead slots and the numbers ids
-/// happen to hold do not count — a graph that rewrote and a graph that was
-/// built are one diagram if their live boxes wire up alike.
-///
-/// Search, held to account the way the matcher is: a candidate bijection is
-/// verified link by link before `true` is answered, so a bug here costs a
-/// wrong `false` — a goal that fails to close — never a wrong `true`.
+/// Not a search. Content addressing has already canonicalised each side, so
+/// the answer is a walk from the boundary outputs comparing what it finds —
+/// which is what [`Graph::canon`] does, and what `==` is.
 pub fn isomorphic(a: &Graph, b: &Graph) -> bool {
-    if a.arity() != b.arity() || a.live_count() != b.live_count() {
-        return false;
-    }
-    // The multiset of box shapes must agree before any search is worth
-    // running — and this is what keeps the common "no" cheap.
-    let census = |g: &Graph| {
-        let mut kinds: Vec<String> = g.live().map(|(_, kind)| format!("{:?}", kind)).collect();
-        kinds.sort_unstable();
-        kinds
-    };
-    if census(a) != census(b) {
-        return false;
-    }
-    let mut iso = Iso {
-        a,
-        b,
-        map: vec![None; a.nodes.len()],
-        used: HashSet::new(),
-    };
-    iso.walk()
+    a == b
 }
 
-struct Iso<'g> {
-    a: &'g Graph,
-    b: &'g Graph,
-    /// Image of `a`'s boxes in `b`, by `a`'s own index.
-    map: Vec<Option<NodeId>>,
-    used: HashSet<NodeId>,
-}
+// ---- a graph that does not hold together -----------------------------------------
 
-impl Iso<'_> {
-    fn walk(&mut self) -> bool {
-        let Some(x) = self.pick() else {
-            return self.verify();
-        };
-        for y in self.candidates(x) {
-            if self.assign(x, y) {
-                if self.walk() {
-                    return true;
-                }
-                self.unassign(x, y);
-            }
-        }
-        false
-    }
-
-    /// The next box to place: one with a placed neighbour if there is one,
-    /// so the search rides the wiring instead of trying products — a box
-    /// with no anchor at all (a literal nothing placed reads yet) comes
-    /// last, when its readers have pinned it down.
-    fn pick(&self) -> Option<NodeId> {
-        let unassigned = || {
-            self.a
-                .live()
-                .map(|(id, _)| id)
-                .filter(|id| self.map[id.index()].is_none())
-        };
-        unassigned()
-            .find(|&x| self.has_placed_neighbour(x))
-            .or_else(|| unassigned().next())
-    }
-
-    fn has_placed_neighbour(&self, x: NodeId) -> bool {
-        let placed = |id: NodeId| self.map[id.index()].is_some();
-        let feeds = self
-            .a
-            .sources(x)
-            .iter()
-            .any(|src| matches!(*src, Source::Port { node, .. } if placed(node)));
-        let read = (0..self.a.kind(x).arity().outputs).any(|port| {
-            self.a
-                .sinks(Source::Port { node: x, port })
-                .iter()
-                .any(|sink| matches!(*sink, Sink::Port { node, .. } if placed(node)))
-        });
-        feeds || read
-    }
-
-    /// The `b` boxes worth trying for `x`: a placed producer narrows to its
-    /// image's readers, a placed reader pins the candidate outright, and
-    /// only a box touching nothing placed falls back on the sweep.
-    fn candidates(&self, x: NodeId) -> Vec<NodeId> {
-        for (port, src) in self.a.sources(x).iter().enumerate() {
-            if let Source::Port { node, port: q } = *src
-                && let Some(m) = self.map[node.index()]
-            {
-                let mut out: Vec<NodeId> = self
-                    .b
-                    .sinks(Source::Port { node: m, port: q })
-                    .iter()
-                    .filter_map(|sink| match *sink {
-                        Sink::Port { node, port: p } if p == port => Some(node),
-                        _ => None,
-                    })
-                    .collect();
-                out.sort_unstable();
-                out.dedup();
-                return out;
-            }
-        }
-        for port in 0..self.a.kind(x).arity().outputs {
-            for sink in self.a.sinks(Source::Port { node: x, port }) {
-                if let Sink::Port { node, port: r } = *sink
-                    && let Some(m) = self.map[node.index()]
-                {
-                    return match self.b.sources(m).get(r) {
-                        Some(&Source::Port { node, port: q }) if q == port => vec![node],
-                        _ => Vec::new(),
-                    };
-                }
-            }
-        }
-        self.b.live().map(|(id, _)| id).collect()
-    }
-
-    /// Pins `x` to `y`, or says they cannot correspond. Edges whose other
-    /// end is not yet placed defer to [`Iso::verify`].
-    fn assign(&mut self, x: NodeId, y: NodeId) -> bool {
-        if self.used.contains(&y) || self.a.kind(x) != self.b.kind(y) {
-            return false;
-        }
-        for (src, dst) in self.a.sources(x).iter().zip(self.b.sources(y)) {
-            let fits = match (*src, *dst) {
-                (Source::Input(i), Source::Input(j)) => i == j,
-                (Source::Port { node, port }, Source::Port { node: m, port: q }) => {
-                    port == q && self.map[node.index()].is_none_or(|held| held == m)
-                }
-                _ => false,
-            };
-            if !fits {
-                return false;
-            }
-        }
-        self.map[x.index()] = Some(y);
-        self.used.insert(y);
-        true
-    }
-
-    fn unassign(&mut self, x: NodeId, y: NodeId) {
-        self.map[x.index()] = None;
-        self.used.remove(&y);
-    }
-
-    /// Every box placed; hold the whole claim to agreeing — the deferred
-    /// edges, and the boundary.
-    fn verify(&self) -> bool {
-        let image = |src: Source| match src {
-            Source::Input(i) => Some(Source::Input(i)),
-            Source::Port { node, port } => {
-                self.map[node.index()].map(|m| Source::Port { node: m, port })
-            }
-        };
-        for (x, _) in self.a.live() {
-            let Some(y) = self.map[x.index()] else {
-                return false;
-            };
-            for (src, dst) in self.a.sources(x).iter().zip(self.b.sources(y)) {
-                if image(*src) != Some(*dst) {
-                    return false;
-                }
-            }
-        }
-        self.a
-            .outputs()
-            .iter()
-            .zip(self.b.outputs())
-            .all(|(src, dst)| image(*src) == Some(*dst))
-    }
-}
-
-// ---- well-formedness ------------------------------------------------------------
-
-#[derive(Clone, Copy, PartialEq)]
-enum Colour {
-    White,
-    Grey,
-    Black,
-}
-
-impl Graph {
-    /// Whether every node's ports match its kind, every link agrees at both
-    /// ends, and nothing feeds itself.
-    ///
-    /// The both-ends check is what the linked form buys: a rule that
-    /// re-points one end and forgets the other is caught here, where it
-    /// happened, rather than surviving as a graph that reads back wrong.
-    pub fn check(&self) -> Result<(), Error> {
-        for (id, kind) in self.live() {
-            let arity = kind.arity();
-            let node = self.node(id);
-            if node.inputs.len() != arity.inputs || node.outputs.len() != arity.outputs {
-                return Err(Error::Width {
-                    node: id,
-                    expected: arity,
-                    inputs: node.inputs.len(),
-                    outputs: node.outputs.len(),
-                });
-            }
-        }
-        // Every reader names a source that lists it back...
-        for (id, _) in self.live() {
-            for (port, &src) in self.node(id).inputs.iter().enumerate() {
-                self.listed(src, Sink::Port { node: id, port })?;
-            }
-        }
-        for (i, &src) in self.outputs.iter().enumerate() {
-            self.listed(src, Sink::Output(i))?;
-        }
-        // ...and every listed reader names that source back.
-        for i in 0..self.inputs.len() {
-            self.reads_back(Source::Input(i))?;
-        }
-        for (id, kind) in self.live() {
-            for port in 0..kind.arity().outputs {
-                self.reads_back(Source::Port { node: id, port })?;
-            }
-        }
-        self.acyclic()
-    }
-
-    /// Whether every port has exactly one reader — true of a freshly
-    /// [`build`](crate::diagram2::build)t graph, and false from the first `copy-elim` onwards.
-    pub fn is_monogamous(&self) -> bool {
-        let ports = self
-            .inputs
-            .iter()
-            .map(Vec::as_slice)
-            .chain(self.live().flat_map(|(id, kind)| {
-                (0..kind.arity().outputs)
-                    .map(move |port| self.sinks(Source::Port { node: id, port }))
-            }));
-        ports.into_iter().all(|readers| readers.len() == 1)
-    }
-
-    fn valid(&self, src: Source) -> bool {
-        match src {
-            Source::Input(i) => i < self.inputs.len(),
-            Source::Port { node, port } => {
-                self.is_live(node) && port < self.kind(node).arity().outputs
-            }
-        }
-    }
-
-    fn listed(&self, src: Source, sink: Sink) -> Result<(), Error> {
-        if !self.valid(src) {
-            return Err(Error::Dangling { source: src, sink });
-        }
-        if self.sinks(src).iter().filter(|&&s| s == sink).count() != 1 {
-            return Err(Error::Torn { source: src, sink });
-        }
-        Ok(())
-    }
-
-    fn reads_back(&self, src: Source) -> Result<(), Error> {
-        for &sink in self.sinks(src) {
-            let names = match sink {
-                Sink::Output(i) => self.outputs.get(i).copied(),
-                Sink::Port { node, port } => self
-                    .nodes
-                    .get(node.index())
-                    .and_then(Option::as_ref)
-                    .and_then(|n| n.inputs.get(port))
-                    .copied(),
-            };
-            if names != Some(src) {
-                return Err(Error::Torn { source: src, sink });
-            }
-        }
-        Ok(())
-    }
-
-    fn acyclic(&self) -> Result<(), Error> {
-        let mut colour = vec![Colour::White; self.nodes.len()];
-        for (id, _) in self.live() {
-            self.descend(id, &mut colour)?;
-        }
-        Ok(())
-    }
-
-    fn descend(&self, id: NodeId, colour: &mut Vec<Colour>) -> Result<(), Error> {
-        match colour[id.index()] {
-            Colour::Black => return Ok(()),
-            Colour::Grey => return Err(Error::Cyclic(id)),
-            Colour::White => {}
-        }
-        colour[id.index()] = Colour::Grey;
-        for port in 0..self.node(id).inputs.len() {
-            if let Source::Port { node, .. } = self.node(id).inputs[port] {
-                self.descend(node, colour)?;
-            }
-        }
-        colour[id.index()] = Colour::Black;
-        Ok(())
-    }
-}
-
-/// A graph that does not hold together.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Error {
-    /// A node's port counts disagree with its kind.
+    /// A node's port count disagrees with its kind.
     Width {
         node: NodeId,
         expected: Arity,
         inputs: usize,
-        outputs: usize,
     },
-    /// A reader naming a port that is not there.
+    /// A source naming a port that is not there — or one that is not there
+    /// *yet*, which is the same mistake: a box reads what was built before
+    /// it, and that is why nothing can reach itself.
     Dangling { source: Source, sink: Sink },
-    /// A link recorded at one end and not the other — the bug the
-    /// representation exists to make loud.
-    Torn { source: Source, sink: Sink },
-    /// A node that reaches itself.
-    Cyclic(NodeId),
 }
 
 impl fmt::Display for Error {
@@ -746,35 +594,32 @@ impl fmt::Display for Error {
                 node,
                 expected,
                 inputs,
-                outputs,
             } => write!(
                 f,
-                "node {} is {} -> {} where its kind is {}",
-                node, inputs, outputs, expected
+                "node {} takes {} where its kind takes {}",
+                node, inputs, expected
             ),
             Error::Dangling { source, sink } => {
-                write!(f, "{} reads {}, which is not a port", sink, source)
+                write!(
+                    f,
+                    "{} reads {}, which is not a port it may read",
+                    sink, source
+                )
             }
-            Error::Torn { source, sink } => write!(
-                f,
-                "the link between {} and {} is recorded at one end only",
-                source, sink
-            ),
-            Error::Cyclic(node) => write!(f, "node {} reaches itself", node),
         }
     }
 }
 
 impl std::error::Error for Error {}
 
-// ---- a pair, an embedding, and the splice ----------------------------------------
+// ---- pairs, matches, and spending one against the other --------------------------
 
-/// Which side of a [`Pair`] to match.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Which way round an equation is read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Direction {
-    /// Match the left-hand side, leave the right.
+    /// Left to right: the left side is the pattern.
     Forward,
-    /// Match the right-hand side, leave the left.
+    /// Right to left.
     Backward,
 }
 
@@ -787,14 +632,12 @@ impl Direction {
     }
 }
 
-/// Why two graphs are not a [`Pair`].
+/// Why two graphs are not an equation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Unpaired {
-    /// They do not take and leave the same thing, so no rewrite by them
-    /// could keep a graph's arity.
+    /// The two sides do not take and leave the same.
     Interface(Arity, Arity),
-    /// One of them is not a graph, and a side that is not a graph cannot be
-    /// looked for or put down.
+    /// A side that is not a graph.
     Broken(Error),
 }
 
@@ -816,16 +659,9 @@ impl std::error::Error for Unpaired {}
 /// Two graphs offered as interchangeable: wherever one is found, the other
 /// may stand in its place.
 ///
-/// This is the whole of what a rewrite needs. Where the pair *came from* —
-/// which law it spells, whether anything proved the two sides equal — is
-/// [`crate::diagram2::rules`]'s business and none of this module's: a
-/// `Pair` is checked for being splice-able and nothing more, so the one
-/// thing it guarantees is that a rewrite by it leaves a graph that still
-/// holds together and still takes and leaves what it did.
-///
-/// Both sides pass [`Graph::check`] and they share an arity, both settled
-/// once at construction so that [`Pair::apply`] can index either side
-/// without asking again.
+/// Where the pair *came from* — which law it spells, whether anything
+/// proved the two sides equal — is [`crate::diagram2::rules`]'s business
+/// and none of this module's.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Pair {
     lhs: Graph,
@@ -870,95 +706,142 @@ impl Pair {
         find(graph, self.pattern(dir))
     }
 
-    /// Whether `at` really points at a subgraph this direction may replace.
+    /// Whether `at` really points at a part of the graph this direction may
+    /// replace.
     pub fn check(&self, graph: &Graph, dir: Direction, at: &Match) -> Result<(), Mismatch> {
         check_match(graph, self.pattern(dir), at)
     }
 
-    /// One rewrite: the subgraph `at` points at, replaced by the other
-    /// side.
+    /// One rewrite: what the pattern's boundary outputs stand for, replaced
+    /// by what the other side's do.
     ///
-    /// The whole of the checking is here, and none of it searches. The match
-    /// is held to being an isomorphism onto an **induced** subgraph with
-    /// every loose end accounted for — [`check_match`] is what that means,
-    /// and it is stricter than a substitution needs to be, because a
-    /// substitution that is not induced strands a link. Only then is the
-    /// subgraph deleted and the other side put in its place.
+    /// Three moves, and no deletion among them. The replacement is
+    /// **built** on what the match says the pattern's inputs stand for —
+    /// interning, so a replacement the graph already contains costs
+    /// nothing. Its outputs are then paired with the ones the pattern
+    /// exports, which is the equation said in the host's own values. And
+    /// everything that read the one is rebuilt to read the other.
+    ///
+    /// What used to be five conditions is now three, and the two that went
+    /// were the same condition twice: a splice had to account for every
+    /// reader it was about to strand, so a law could not fire in a window
+    /// anything else read into. Substitution stands nothing up: a reader
+    /// the pattern never mentioned goes on reading the box it always read,
+    /// which is still there and still means what it meant. The one thing
+    /// left to refuse is a replacement that is *already* part of what it
+    /// replaces — an equation spent on its own answer, which says nothing
+    /// and would only grow the graph.
     ///
     /// The answer is the **embedding of what went in**, which is where the
-    /// way back lands. This is the one place a graph cannot copy a term: a
-    /// path survived a rewrite unchanged, but a [`Match`] names host
-    /// [`NodeId`]s and the replacement's boxes are freshly allocated, so the
-    /// inverse has to be handed over rather than derived by flipping a bit.
+    /// way back lands: a [`Match`] names host [`NodeId`]s, so the inverse
+    /// has to be handed over rather than derived by flipping a bit.
     ///
-    /// A refusal changes nothing: the check runs to completion before the
-    /// first box is deleted.
+    /// A refusal changes nothing: everything is checked before the first
+    /// box is made.
     pub fn apply(&self, graph: &mut Graph, dir: Direction, at: &Match) -> Result<Match, Mismatch> {
         let (pattern, replacement) = self.sides(dir);
         check_match(graph, pattern, at)?;
-        Ok(splice(graph, replacement, at))
+
+        let image = |src: Source| match src {
+            Source::Input(i) => at.inputs[i],
+            Source::Port { node, port } => Source::Port {
+                node: at.nodes[node.index()],
+                port,
+            },
+        };
+        let before = graph.reachable();
+
+        // The other side, built where the match says it goes.
+        let mut fresh: Vec<NodeId> = Vec::with_capacity(replacement.nodes.len());
+        let carry = |src: Source, fresh: &[NodeId]| match src {
+            Source::Input(i) => at.inputs[i],
+            Source::Port { node, port } => Source::Port {
+                node: fresh[node.index()],
+                port,
+            },
+        };
+        for node in &replacement.nodes {
+            let takes = node.inputs.iter().map(|&s| carry(s, &fresh)).collect();
+            fresh.push(graph.add_node(node.kind.clone(), takes));
+        }
+        let leaves: Vec<Source> = replacement
+            .outputs
+            .iter()
+            .map(|&s| carry(s, &fresh))
+            .collect();
+
+        // The equation, in the host's values: this source is that one.
+        let mut sigma: HashMap<Source, Source> = HashMap::new();
+        for (j, &src) in pattern.outputs.iter().enumerate() {
+            let key = image(src);
+            if key == leaves[j] {
+                continue;
+            }
+            match sigma.insert(key, leaves[j]) {
+                Some(other) if other != leaves[j] => return Err(Mismatch::Conflict(key)),
+                _ => {}
+            }
+        }
+        // A replacement the graph already held, and that reads what it is
+        // standing in for, would be rebuilt into a reading of itself.
+        for (&key, &val) in &sigma {
+            let standing = matches!(val, Source::Port { node, .. } if before.contains(&node));
+            if standing && graph.upstream(val).iter().any(|s| sigma.contains_key(s)) {
+                return Err(Mismatch::Circular(key));
+            }
+        }
+        graph.substitute(&sigma);
+
+        Ok(Match {
+            nodes: fresh,
+            inputs: at.inputs.clone(),
+        })
     }
 }
 
-/// A subgraph, pointed at: the claim that this part of a host graph *is*
-/// some pattern graph.
+/// A part of a host graph, pointed at: the claim that some pattern graph
+/// *is* these boxes, reading these sources.
 ///
-/// Not a path. A term's subterm has a name in the term; a graph's subgraph
-/// has none, so the embedding itself is the name — which box is which, what
-/// the pattern's boundary stands for outside, and who reads what it leaves.
+/// Not a path. A term's subterm has a name in the term; a graph's does not,
+/// so the embedding itself is the name — which box is which, and what the
+/// pattern's boundary inputs stand for outside.
 ///
 /// It is a **claim**, not a proof: nothing about a `Match` is true until
 /// [`check_match`] has said so, which is why every field is public and
-/// anyone may state one. [`Pair::apply`] checks before it splices, so a
+/// anyone may state one. [`Pair::apply`] checks before it builds, so a
 /// wrong claim costs a [`Mismatch`] rather than a wrong graph.
 ///
-/// [`outputs`](Match::outputs) is the one field that is a **choice** rather
-/// than a reading. When two of a pattern's boundary outputs name one port,
-/// nothing in the host says which of that port's outside readers belong to
-/// which; the split is whoever states the match's business, and the check
-/// only holds it to being consistent.
+/// There is no third field. A match used to have to say which of a port's
+/// outside readers belonged to the window, because a splice re-pointed
+/// them; substitution re-points *every* reader of a value it replaces, and
+/// leaves every reader of anything else alone. The one genuine choice a
+/// match ever carried is gone with the operation that needed it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Match {
     /// Image of the pattern's boxes, indexed by the pattern's own node
-    /// index. A pattern deletes nothing, so those indices are dense.
+    /// index, which is dense.
     pub nodes: Vec<NodeId>,
     /// What the pattern's boundary input `i` stands for in the host.
     pub inputs: Vec<Source>,
-    /// The host sinks the pattern's boundary output `j` serves.
-    pub outputs: Vec<Vec<Sink>>,
 }
 
 impl Match {
     /// This match said again in terms of the boxes that stand where its own
     /// used to.
-    ///
-    /// What undoing a run of rewrites needs: undoing a step puts boxes
-    /// **back**, and a box put back is a new box with a new [`NodeId`], so
-    /// every match still to be undone has to be said again in the ids the
-    /// undo before it handed out.
     pub fn rebase(&self, moved: &HashMap<NodeId, NodeId>) -> Match {
         let now = |id: NodeId| moved.get(&id).copied().unwrap_or(id);
-        let port = |src: Source| match src {
-            Source::Port { node, port } => Source::Port {
-                node: now(node),
-                port,
-            },
-            boundary => boundary,
-        };
-        let reader = |sink: Sink| match sink {
-            Sink::Port { node, port } => Sink::Port {
-                node: now(node),
-                port,
-            },
-            boundary => boundary,
-        };
         Match {
             nodes: self.nodes.iter().map(|&id| now(id)).collect(),
-            inputs: self.inputs.iter().map(|&src| port(src)).collect(),
-            outputs: self
-                .outputs
+            inputs: self
+                .inputs
                 .iter()
-                .map(|sinks| sinks.iter().map(|&sink| reader(sink)).collect())
+                .map(|&src| match src {
+                    Source::Port { node, port } => Source::Port {
+                        node: now(node),
+                        port,
+                    },
+                    boundary => boundary,
+                })
                 .collect(),
         }
     }
@@ -967,45 +850,21 @@ impl Match {
 /// One graph's names read in another, kept as a map so it can survive both
 /// of them being rewritten.
 ///
-/// A [`Match`] is a claim about one moment: its [`nodes`](Match::nodes) are
-/// indexed by the pattern's own dense box order, which stops being a reading
-/// the first time that pattern is itself rewritten. An `Embedding` is the
-/// same correspondence written so it can be **extended**, which is what
-/// carrying a whole run of rewrites across needs — every step makes boxes on
-/// both sides, and they have to be paired up before the next step can be
-/// said.
-///
-/// Composition is [`Embedding::carry`]. Given a match of `P` in `G` and an
+/// Composition is [`Embedding::carry`]: given a match of `P` in `G` and an
 /// embedding of `G` in `H`, it answers the match of `P` in `H`, which is
 /// what lets a rewrite stated about `G` be spent inside `H` instead. That
-/// the answer is still a *claim* is the usual discipline: it goes through
-/// [`Pair::apply`] like any other, so a wrongly carried match is refused
-/// rather than believed.
-///
-/// It carries the boundary too, and that is the part worth saying out loud.
-/// A boundary input of `G` is a source in `H` — whatever `G`'s window reads
-/// there — and a boundary *output* of `G` is a **list** of sinks in `H`,
-/// since one port of a window may be read by several boxes outside it. A
-/// match that hands one of its ports to `G`'s boundary therefore hands it,
-/// in `H`, to every reader that boundary stood for; anything less would
-/// strand a link, and [`check_match`] would refuse it.
+/// the answer is still a *claim* is the usual discipline — it goes through
+/// [`Pair::apply`] like any other.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Embedding {
     /// What the outer graph has where the inner one has this box.
     nodes: HashMap<NodeId, NodeId>,
     /// What the inner graph's boundary input `i` reads in the outer one.
     inputs: Vec<Source>,
-    /// The outer sinks the inner graph's boundary output `j` serves.
-    outputs: Vec<Vec<Sink>>,
 }
 
 impl Embedding {
     /// The correspondence a match states, in a form that outlives it.
-    ///
-    /// The match's pattern is the inner graph and its host the outer one, so
-    /// this is only as true as the match is — [`check_match`] is what says
-    /// so, and a caller that has not asked is carrying claims rather than
-    /// readings.
     pub fn of(at: &Match) -> Embedding {
         Embedding {
             nodes: at
@@ -1015,7 +874,6 @@ impl Embedding {
                 .map(|(i, &to)| (NodeId::at(i), to))
                 .collect(),
             inputs: at.inputs.clone(),
-            outputs: at.outputs.clone(),
         }
     }
 
@@ -1033,15 +891,6 @@ impl Embedding {
                 .get(&node)
                 .map(|&node| Source::Port { node, port }),
         };
-        // One inner sink is a *list* of outer ones: a boundary output stands
-        // for every reader outside the window.
-        let readers = |sink: Sink| match sink {
-            Sink::Output(j) => self.outputs.get(j).cloned(),
-            Sink::Port { node, port } => self
-                .nodes
-                .get(&node)
-                .map(|&node| vec![Sink::Port { node, port }]),
-        };
         Some(Match {
             nodes: at
                 .nodes
@@ -1053,29 +902,15 @@ impl Embedding {
                 .iter()
                 .map(|&src| source(src))
                 .collect::<Option<_>>()?,
-            outputs: at
-                .outputs
-                .iter()
-                .map(|sinks| {
-                    let carried: Option<Vec<Vec<Sink>>> =
-                        sinks.iter().map(|&sink| readers(sink)).collect();
-                    carried.map(|lists| lists.concat())
-                })
-                .collect::<Option<_>>()?,
         })
     }
 
     /// What one rewrite, run on both sides, added to the correspondence.
     ///
-    /// Both arguments are the answer [`Pair::apply`] gave — the embedding of
-    /// what it put down — `inner` from the run on the inner graph and
-    /// `outer` from the run on the outer one. The same replacement went down
-    /// in both, so its boxes line up in order, and that is the whole of the
-    /// pairing.
-    ///
-    /// Nothing is taken away. A box a rewrite deleted is a box no later
-    /// rewrite can name — an id is never reused — so a stale entry is
-    /// unreachable rather than wrong.
+    /// Both arguments are the answer [`Pair::apply`] gave — the embedding
+    /// of what it put down — `inner` from the run on the inner graph and
+    /// `outer` from the run on the outer one. The same replacement went
+    /// down in both, so its boxes line up in order.
     pub fn extend(&mut self, inner: &Match, outer: &Match) {
         debug_assert_eq!(
             inner.nodes.len(),
@@ -1093,32 +928,26 @@ impl Embedding {
     }
 }
 
-/// How a claimed embedding failed to be one. Every variant names the port
-/// that disagreed, because that is the whole content of the check.
+/// How a claimed embedding failed to be one.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Mismatch {
-    /// The match names a different number of boxes, inputs or outputs than
-    /// the pattern has, or names one box twice.
+    /// The match names a different number of boxes or inputs than the
+    /// pattern has.
     Shape,
-    /// A box the match names is not there.
+    /// A box the match names is not part of the program.
     Gone(NodeId),
-    /// The box at that node is not the one the pattern has in its place.
+    /// The box there is not the one the pattern has in its place.
     Kind(NodeId),
     /// That input port reads something other than what the pattern says.
     Edge(Sink),
-    /// That port's readers are not the ones the match accounts for — a
-    /// reader the pattern does not export, or one it claims twice, or one it
-    /// claims that reads something else.
-    Readers(Source),
-    /// A link the pattern does not have: the match sends a boundary of its
-    /// own into the very subgraph it is matching, so what it points at is
-    /// not isomorphic to the pattern but to the pattern plus an edge.
-    Induced(Source),
+    /// The pattern exports one value twice and the match sends it two
+    /// ways, which is two answers to one question.
+    Conflict(Source),
+    /// The replacement is already part of what it replaces, so putting it
+    /// in would be reading it out of itself.
+    Circular(Source),
 }
 
-/// Said without naming the pattern, since the pattern is whatever the caller
-/// was matching; [`crate::diagram2::rules`] puts the law's name in front of
-/// this when the pattern was a law's side.
 impl fmt::Display for Mismatch {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -1132,14 +961,12 @@ impl fmt::Display for Mismatch {
                 "{} reads something the pattern does not say it reads",
                 sink
             ),
-            Mismatch::Readers(src) => write!(
+            Mismatch::Conflict(src) => {
+                write!(f, "{} is answered two ways by one match", src)
+            }
+            Mismatch::Circular(src) => write!(
                 f,
-                "the readers of {} are not the ones the match claims",
-                src
-            ),
-            Mismatch::Induced(src) => write!(
-                f,
-                "{} is inside the match, so what it points at is the pattern plus a link",
+                "what would stand for {} already reads it, so the step says nothing",
                 src
             ),
         }
@@ -1148,49 +975,23 @@ impl fmt::Display for Mismatch {
 
 impl std::error::Error for Mismatch {}
 
-/// Whether the match points at a subgraph isomorphic to the pattern, and so
-/// whether replacing it is safe.
+/// Whether the match points at boxes that really are the pattern.
 ///
-/// This is **stricter than substitution**, and the strictness is the point.
-/// A pattern is a window with loose ends — the sources its boundary inputs
-/// stand for, the outside readers its boundary outputs serve — and a splice
-/// re-points exactly those. Anything the match does not account for would
-/// be left dangling, so the check accounts for all of it before a box is
-/// touched.
+/// Three conditions, where there were five, and the two that went were the
+/// price of destroying things:
 ///
-/// Five conditions, and between them they say "isomorphic onto an induced
-/// subgraph, with every loose end accounted for":
-///
-/// 1. **Shape** — one image per box, one source per boundary input, one
-///    reader list per boundary output, and no box named twice.
+/// 1. **Shape** — one image per box, one source per boundary input.
 /// 2. **Kinds** — the same box.
 /// 3. **Edges** — every input port of a matched box reads what the pattern
 ///    says it reads.
-/// 4. **Fullness** — every output port's readers in the host are *exactly*
-///    the pattern's own readers plus the ones the match hands to the
-///    boundary. A port the pattern does not export therefore has no reader
-///    at all, which is what makes `dead-node` a rule rather than a test, and
-///    a reader nobody claimed is a loose end the rewrite would strand.
-/// 5. **Inducedness** — no boundary of the match points back inside it.
 ///
-/// The indexing here is unchecked on purpose: a pattern comes from a
-/// [`Pair`], which holds it to [`Graph::check`], so every source it names is
-/// a source it has. What is *not* trusted is the match, and every field of
-/// it is measured against the pattern before it is used to index anything.
+/// *Fullness* — every reader of every exported port accounted for — and
+/// *inducedness* were about a splice's loose ends, and a substitution has
+/// none. Their going is why a law fires in a window other things read into,
+/// which is what it always meant.
 pub fn check_match(graph: &Graph, pattern: &Graph, at: &Match) -> Result<(), Mismatch> {
-    debug_assert!(
-        pattern.nodes.iter().all(Option::is_some),
-        "a pattern deletes nothing, so its boxes are dense"
-    );
     let boxes = pattern.nodes.len();
-    if at.nodes.len() != boxes
-        || at.inputs.len() != pattern.inputs.len()
-        || at.outputs.len() != pattern.outputs.len()
-    {
-        return Err(Mismatch::Shape);
-    }
-    let inside: HashSet<NodeId> = at.nodes.iter().copied().collect();
-    if inside.len() != at.nodes.len() {
+    if at.nodes.len() != boxes || at.inputs.len() != pattern.inputs {
         return Err(Mismatch::Shape);
     }
     for &id in &at.nodes {
@@ -1198,7 +999,11 @@ pub fn check_match(graph: &Graph, pattern: &Graph, at: &Match) -> Result<(), Mis
             return Err(Mismatch::Gone(id));
         }
     }
-    // A pattern source, read in the host.
+    for &src in &at.inputs {
+        if !graph.valid(src) {
+            return Err(Mismatch::Shape);
+        }
+    }
     let image = |src: Source| match src {
         Source::Input(i) => at.inputs[i],
         Source::Port { node, port } => Source::Port {
@@ -1206,225 +1011,39 @@ pub fn check_match(graph: &Graph, pattern: &Graph, at: &Match) -> Result<(), Mis
             port,
         },
     };
-
     for i in 0..boxes {
-        let here = NodeId::at(i);
         let host = at.nodes[i];
-        if pattern.kind(here) != graph.kind(host) {
+        if pattern.nodes[i].kind != *graph.kind(host) {
             return Err(Mismatch::Kind(host));
         }
-        // Edges.
-        for (port, &src) in pattern.sources(here).iter().enumerate() {
-            let sink = Sink::Port { node: host, port };
+        for (port, &src) in pattern.nodes[i].inputs.iter().enumerate() {
             if graph.sources(host).get(port) != Some(&image(src)) {
-                return Err(Mismatch::Edge(sink));
+                return Err(Mismatch::Edge(Sink::Port { node: host, port }));
             }
-        }
-        // Fullness.
-        for port in 0..pattern.kind(here).arity().outputs {
-            let mine = Source::Port { node: here, port };
-            let theirs = Source::Port { node: host, port };
-            let mut want: Vec<Sink> = Vec::new();
-            for &sink in pattern.sinks(mine) {
-                match sink {
-                    Sink::Port { node, port } => want.push(Sink::Port {
-                        node: at.nodes[node.index()],
-                        port,
-                    }),
-                    Sink::Output(j) => want.extend(at.outputs[j].iter().copied()),
-                }
-            }
-            if !same_readers(&want, graph.sinks(theirs)) {
-                return Err(Mismatch::Readers(theirs));
-            }
-        }
-    }
-
-    // Every reader the match hands to a boundary output really does read
-    // what that output names — which is the whole check for an output that
-    // names a boundary *input*, since no box's port covers those.
-    for (j, &src) in pattern.outputs().iter().enumerate() {
-        let want = image(src);
-        for &sink in &at.outputs[j] {
-            if reads(graph, sink) != Some(want) {
-                return Err(Mismatch::Readers(want));
-            }
-            if let Sink::Port { node, .. } = sink
-                && inside.contains(&node)
-            {
-                return Err(Mismatch::Induced(want));
-            }
-        }
-    }
-    for &src in &at.inputs {
-        if let Source::Port { node, .. } = src
-            && inside.contains(&node)
-        {
-            return Err(Mismatch::Induced(src));
         }
     }
     Ok(())
 }
 
-/// The subgraph out, the replacement in, and the embedding of what went in —
-/// which is where the way back lands.
+// ---- finding one -----------------------------------------------------------------
+
+/// Every embedding of `pattern` in `graph`, in a deterministic order.
 ///
-/// Unchecked: [`check_match`] is what makes this safe, and [`Pair::apply`]
-/// is where the two are put together. Nothing else calls it.
-fn splice(graph: &mut Graph, replacement: &Graph, at: &Match) -> Match {
-    let inside: HashSet<NodeId> = at.nodes.iter().copied().collect();
-
-    // Out. A link to a box that is also going away needs no unlinking: the
-    // list it would be removed from goes with it.
-    for &id in &at.nodes {
-        let sources = graph.node(id).inputs.clone();
-        for (port, &src) in sources.iter().enumerate() {
-            let doomed = matches!(src, Source::Port { node, .. } if inside.contains(&node));
-            if !doomed {
-                graph.unlink(src, Sink::Port { node: id, port });
-            }
-        }
-    }
-    for &id in &at.nodes {
-        graph.nodes[id.index()] = None;
-    }
-
-    // In. A pattern builds its boxes producers-first, so its own order is
-    // one the host can add them in.
-    let mut fresh: Vec<NodeId> = Vec::with_capacity(replacement.nodes.len());
-    let carry = |src: Source, at: &Match, fresh: &[NodeId]| match src {
-        Source::Input(i) => at.inputs[i],
-        Source::Port { node, port } => Source::Port {
-            node: fresh[node.index()],
-            port,
-        },
-    };
-    for slot in &replacement.nodes {
-        let node = slot.as_ref().expect("a pattern deletes nothing");
-        let inputs = node.inputs.iter().map(|&s| carry(s, at, &fresh)).collect();
-        fresh.push(graph.add_node(node.kind.clone(), inputs));
-    }
-
-    // And the loose ends, re-pointed: everything the match handed to a
-    // boundary output now names what the replacement leaves there. This is
-    // the one move that grows a port's readers, and where `copy-elim` turns
-    // a wiring diagram into a cartesian one.
-    for (j, &src) in replacement.outputs().iter().enumerate() {
-        let target = carry(src, at, &fresh);
-        for &sink in &at.outputs[j] {
-            // Whatever the reader named before has to be told it is no
-            // longer read there — unless it was one of the boxes that just
-            // went away, which took its reader list with it. A rule whose
-            // side exports a boundary *input* is where this bites: the
-            // source survives the rewrite, so the stale link would too.
-            if let Some(old) = reads(graph, sink)
-                && graph.valid(old)
-            {
-                graph.unlink(old, sink);
-            }
-            graph.set_source(sink, target);
-            graph.sinks_mut(target).push(sink);
-        }
-    }
-
-    Match {
-        nodes: fresh,
-        // The pattern's boundary was outside the match and is untouched, and
-        // the readers that were handed to output `j` now read the
-        // replacement's output `j` — so the way back is the same embedding
-        // over the other side.
-        inputs: at.inputs.clone(),
-        outputs: at.outputs.clone(),
-    }
-}
-
-/// Two reader lists holding the same sinks the same number of times. Order
-/// is not part of what a port's readers are.
-fn same_readers(want: &[Sink], have: &[Sink]) -> bool {
-    if want.len() != have.len() {
-        return false;
-    }
-    let mut tally: HashMap<Sink, isize> = HashMap::new();
-    for &s in want {
-        *tally.entry(s).or_default() += 1;
-    }
-    for &s in have {
-        *tally.entry(s).or_default() -= 1;
-    }
-    tally.values().all(|&n| n == 0)
-}
-
-/// What one sink reads, or `None` if it is not a port of this graph.
-fn reads(graph: &Graph, sink: Sink) -> Option<Source> {
-    match sink {
-        Sink::Output(i) => graph.outputs().get(i).copied(),
-        Sink::Port { node, port } => {
-            if !graph.is_live(node) {
-                return None;
-            }
-            graph.sources(node).get(port).copied()
-        }
-    }
-}
-
-impl Graph {
-    /// Another graph's boxes added to this one, its boundary inputs standing
-    /// for the sources given, answering with the sources its boundary
-    /// outputs name.
-    ///
-    /// This is what lets a piece of a program be **carried** rather than
-    /// spelled out. A rule about a region cannot name what is in it — that
-    /// is whatever the program put there — so it carries it, exactly as the
-    /// term version carried subterms, and implants it where it goes.
-    pub(crate) fn implant(&mut self, arm: &Graph, inputs: &[Source]) -> Vec<Source> {
-        debug_assert_eq!(inputs.len(), arm.inputs.len(), "one source per input");
-        let mut fresh: Vec<NodeId> = Vec::with_capacity(arm.nodes.len());
-        let carry = |src: Source, fresh: &[NodeId]| match src {
-            Source::Input(i) => inputs[i],
-            Source::Port { node, port } => Source::Port {
-                node: fresh[node.index()],
-                port,
-            },
-        };
-        for slot in &arm.nodes {
-            let node = slot
-                .as_ref()
-                .expect("an implanted graph keeps every box it builds");
-            let takes = node.inputs.iter().map(|&s| carry(s, &fresh)).collect();
-            fresh.push(self.add_node(node.kind.clone(), takes));
-        }
-        arm.outputs.iter().map(|&s| carry(s, &fresh)).collect()
-    }
-}
-
-// ---- finding one, which is not the checker's business ----------------------------
-
-/// Every embedding of `pattern` in `graph`.
-///
-/// Search, and wrong the way a guess is wrong: everything it does is checked
-/// by [`check_match`] anyway, so a matcher with a bug makes a rewrite that
-/// is refused rather than one that changes what a program means.
-///
-/// It **declines** — answers with nothing, for every graph — where a pattern
-/// does not pin its own match:
-///
-/// - a pattern with no boxes has nothing to anchor on, which is most of the
-///   right-hand sides in [`rules`](crate::diagram2::rules)' table;
-/// - a pattern that exports one port twice, or that exports a boundary
-///   input, leaves the split of that source's outside readers a choice.
-///
-/// Those are the matches a caller has to *state* rather than read, and
-/// [`Match`] is where it states them.
+/// Search, and untrusted like all search: what it answers goes through
+/// [`check_match`] before anything is done with it.
 pub fn find(graph: &Graph, pattern: &Graph) -> Vec<Match> {
-    graph
-        .live()
-        .map(|(id, _)| id)
-        .flat_map(|seed| find_at(graph, pattern, seed))
-        .collect()
+    let mut out: Vec<Match> = Vec::new();
+    for (seed, _) in graph.live() {
+        for at in find_at(graph, pattern, seed) {
+            if !out.contains(&at) {
+                out.push(at);
+            }
+        }
+    }
+    out
 }
 
-/// [`find`], with the pattern's first box pinned to one node — what a
-/// caller that read its pattern off that very box wants.
+/// [`find`], with the pattern's first box pinned to one node.
 pub fn find_at(graph: &Graph, pattern: &Graph, seed: NodeId) -> Vec<Match> {
     find_pinned(graph, pattern, 0, seed)
 }
@@ -1433,11 +1052,7 @@ pub fn find_at(graph: &Graph, pattern: &Graph, seed: NodeId) -> Vec<Match> {
 /// pinned to `host`.
 ///
 /// This is what lets a driver anchor a pattern at the box its *query* bound
-/// rather than the box the pattern happens to begin with: a pattern is
-/// built producers-first, so the box it is naturally *about* need not be
-/// its first. The walk starts at `pat` and the answer is unchanged —
-/// a [`Match`] is indexed by the pattern's own order whatever order the
-/// search visited it in.
+/// rather than the box the pattern happens to begin with.
 pub fn find_pinned(graph: &Graph, pattern: &Graph, pat: usize, host: NodeId) -> Vec<Match> {
     if !pins_itself(pattern) || pat >= pattern.nodes.len() || !graph.is_live(host) {
         return Vec::new();
@@ -1450,8 +1065,7 @@ pub fn find_pinned(graph: &Graph, pattern: &Graph, pat: usize, host: NodeId) -> 
         pattern,
         order,
         nodes: vec![None; pattern.nodes.len()],
-        inputs: vec![None; pattern.inputs.len()],
-        used: HashSet::new(),
+        inputs: vec![None; pattern.inputs],
         seed: host,
         found: Vec::new(),
     };
@@ -1459,37 +1073,50 @@ pub fn find_pinned(graph: &Graph, pattern: &Graph, pat: usize, host: NodeId) -> 
     search.found
 }
 
-/// Whether a pattern says enough about itself to be looked for — what
-/// [`find`] and its kin answer nothing for.
+/// Every embedding of `pattern` that puts *some* box of it at `host`.
+pub fn find_over(graph: &Graph, pattern: &Graph, host: NodeId) -> Vec<Match> {
+    let mut out: Vec<Match> = Vec::new();
+    for pat in 0..pattern.nodes.len() {
+        for at in find_pinned(graph, pattern, pat, host) {
+            if !out.contains(&at) {
+                out.push(at);
+            }
+        }
+    }
+    out
+}
+
+/// Whether a pattern says enough about itself to be looked for.
 ///
-/// The conditions: at least one box to anchor on, no source exported twice
-/// or exported straight from the boundary, and no boundary input nothing in
-/// the pattern reads — a window that stands for a wire it never touches
-/// cannot say which wire that is.
+/// Two conditions now: at least one box to anchor on, and no boundary input
+/// that nothing in the pattern reads — a window standing for a wire it
+/// never touches cannot say which wire that is.
+///
+/// The third is gone with the reader-split. A pattern that exported one
+/// port twice used to be unsearchable, because nothing in the host said
+/// which of that port's readers belonged to which export; a substitution
+/// asks no such question, so most right-hand sides can now be looked for,
+/// and a backward step is a step like any other.
 pub fn pins_itself(pattern: &Graph) -> bool {
     if pattern.nodes.is_empty() {
         return false;
     }
-    if pattern.inputs.iter().any(|readers| readers.is_empty()) {
-        return false;
-    }
-    let mut seen = HashSet::new();
-    pattern
-        .outputs()
-        .iter()
-        .all(|src| matches!(src, Source::Port { .. }) && seen.insert(*src))
+    (0..pattern.inputs).all(|i| {
+        pattern
+            .nodes
+            .iter()
+            .any(|node| node.inputs.contains(&Source::Input(i)))
+    })
 }
 
 struct Search<'g> {
     graph: &'g Graph,
     pattern: &'g Graph,
     /// The order the walk visits pattern boxes in — the pinned box first,
-    /// the rest in index order. [`Match::nodes`](Match) stays in pattern order;
-    /// only the visiting changes.
+    /// the rest in index order. [`Match::nodes`] stays in pattern order.
     order: Vec<usize>,
     nodes: Vec<Option<NodeId>>,
     inputs: Vec<Option<Source>>,
-    used: HashSet<NodeId>,
     seed: NodeId,
     found: Vec<Match>,
 }
@@ -1502,38 +1129,55 @@ impl Search<'_> {
         }
         let i = self.order[pos];
         for host in self.candidates(pos) {
-            let undo = self.assign(i, host);
-            if let Some(undo) = undo {
+            if let Some(undo) = self.assign(i, host) {
                 self.walk(pos + 1);
-                self.undo(i, host, undo);
+                self.undo(i, undo);
             }
         }
     }
 
     /// The host boxes worth trying for the box visited at `pos`.
     ///
-    /// Once one box is fixed, its neighbours are: a port whose source is
-    /// already known has only that source's readers to offer. Only a box
-    /// nothing so far touches falls back on the whole graph, which is why
-    /// two unconnected boxes still cost one sweep rather than a product.
+    /// Content addressing makes this nearly a lookup: once every source a
+    /// pattern box reads is known, the host box that reads them is the one
+    /// the intern table holds, or there is none. Only a box some of whose
+    /// sources are still open falls back on the neighbours — the readers of
+    /// a source already placed — and only one touching nothing placed at
+    /// all costs a sweep.
     fn candidates(&self, pos: usize) -> Vec<NodeId> {
         if pos == 0 {
             return vec![self.seed];
         }
         let here = NodeId::at(self.order[pos]);
-        for (port, &src) in self.pattern.sources(here).iter().enumerate() {
-            let known = match src {
-                Source::Input(l) => self.inputs[l],
-                Source::Port { node, port } => {
-                    self.nodes[node.index()].map(|n| Source::Port { node: n, port })
-                }
+        let known = |src: Source| match src {
+            Source::Input(l) => self.inputs[l],
+            Source::Port { node, port } => {
+                self.nodes[node.index()].map(|n| Source::Port { node: n, port })
+            }
+        };
+        let sources = &self.pattern.nodes[here.index()].inputs;
+        let settled: Option<Vec<Source>> = sources.iter().map(|&src| known(src)).collect();
+        if let Some(inputs) = settled {
+            let node = Node {
+                kind: self.pattern.nodes[here.index()].kind.clone(),
+                inputs,
             };
-            if let Some(known) = known {
+            return self
+                .graph
+                .intern
+                .get(&node)
+                .copied()
+                .filter(|&id| self.graph.is_live(id))
+                .into_iter()
+                .collect();
+        }
+        for (port, &src) in sources.iter().enumerate() {
+            if let Some(src) = known(src) {
                 return self
                     .graph
-                    .sinks(known)
-                    .iter()
-                    .filter_map(|&sink| match sink {
+                    .sinks(src)
+                    .into_iter()
+                    .filter_map(|sink| match sink {
                         Sink::Port { node, port: p } if p == port => Some(node),
                         _ => None,
                     })
@@ -1543,19 +1187,15 @@ impl Search<'_> {
         self.graph.live().map(|(id, _)| id).collect()
     }
 
-    /// Pins the pattern's box `i` to a host box, answering with the boundary
-    /// inputs the assignment bound — the undo log, since a search that took
-    /// them back by recomputing would be a second copy of this.
+    /// Pins the pattern's box `i` to a host box, answering with the
+    /// boundary inputs the assignment bound — the undo log.
     fn assign(&mut self, i: usize, host: NodeId) -> Option<Vec<usize>> {
-        if self.used.contains(&host) {
-            return None;
-        }
-        let here = NodeId::at(i);
-        if self.pattern.kind(here) != self.graph.kind(host) {
+        let here = &self.pattern.nodes[i];
+        if here.kind != *self.graph.kind(host) {
             return None;
         }
         let mut fixed = Vec::new();
-        for (port, &src) in self.pattern.sources(here).iter().enumerate() {
+        for (port, &src) in here.inputs.iter().enumerate() {
             let Some(&hsrc) = self.graph.sources(host).get(port) else {
                 self.rollback(&fixed);
                 return None;
@@ -1572,25 +1212,21 @@ impl Search<'_> {
                         fixed.push(l);
                     }
                 },
-                Source::Port { node, port } => {
-                    // A producer not yet placed is not a mismatch: the walk
-                    // visits the pinned box first, so a consumer can come
-                    // before what feeds it, and `check_match` holds every
-                    // edge at the end either way. In pattern order this arm
-                    // never defers — a pattern is built producers-first.
-                    match self.nodes[node.index()] {
-                        None => {}
-                        Some(n) if hsrc == (Source::Port { node: n, port }) => {}
-                        Some(_) => {
-                            self.rollback(&fixed);
-                            return None;
-                        }
+                // A producer not yet placed is not a mismatch: the walk
+                // visits the pinned box first, so a consumer can come
+                // before what feeds it, and `check_match` holds every edge
+                // at the end either way.
+                Source::Port { node, port } => match self.nodes[node.index()] {
+                    None => {}
+                    Some(n) if hsrc == (Source::Port { node: n, port }) => {}
+                    Some(_) => {
+                        self.rollback(&fixed);
+                        return None;
                     }
-                }
+                },
             }
         }
         self.nodes[i] = Some(host);
-        self.used.insert(host);
         Some(fixed)
     }
 
@@ -1600,130 +1236,36 @@ impl Search<'_> {
         }
     }
 
-    fn undo(&mut self, i: usize, host: NodeId, fixed: Vec<usize>) {
+    fn undo(&mut self, i: usize, fixed: Vec<usize>) {
         self.nodes[i] = None;
-        self.used.remove(&host);
         self.rollback(&fixed);
     }
 
-    /// Every box placed. What is left is to read off who reads what the
-    /// pattern leaves, and to hold the whole thing to the checker.
+    /// Every box placed; hold the whole claim to the checker.
     fn finish(&mut self) {
-        let nodes: Vec<NodeId> = match self.nodes.iter().copied().collect() {
-            Some(nodes) => nodes,
-            None => return,
+        let Some(nodes): Option<Vec<NodeId>> = self.nodes.iter().copied().collect() else {
+            return;
         };
-        let inputs: Vec<Source> = match self.inputs.iter().copied().collect() {
-            Some(inputs) => inputs,
-            None => return,
+        let Some(inputs): Option<Vec<Source>> = self.inputs.iter().copied().collect() else {
+            return;
         };
-        let mut outputs = Vec::with_capacity(self.pattern.outputs().len());
-        for &src in self.pattern.outputs() {
-            let Source::Port { node, port } = src else {
-                return;
-            };
-            let host = Source::Port {
-                node: nodes[node.index()],
-                port,
-            };
-            // Whoever reads that port and is not one of the pattern's own
-            // readers is reading it from outside, and that is what the
-            // boundary output stands for.
-            let mut left: Vec<Sink> = self.graph.sinks(host).to_vec();
-            for &sink in self.pattern.sinks(src) {
-                let Sink::Port { node, port } = sink else {
-                    continue;
-                };
-                let theirs = Sink::Port {
-                    node: nodes[node.index()],
-                    port,
-                };
-                match left.iter().position(|&s| s == theirs) {
-                    Some(k) => {
-                        left.remove(k);
-                    }
-                    None => return,
-                }
-            }
-            outputs.push(left);
-        }
-        let found = Match {
-            nodes,
-            inputs,
-            outputs,
-        };
-        if check_match(self.graph, self.pattern, &found).is_ok() {
+        let found = Match { nodes, inputs };
+        if check_match(self.graph, self.pattern, &found).is_ok() && !self.found.contains(&found) {
             self.found.push(found);
         }
     }
 }
 
-/// Every embedding of `pattern` that puts *some* box of it at `host`.
-///
-/// [`find_pinned`] over each of the pattern's boxes in turn, deduplicated —
-/// what a driver anchoring a rewrite at one box wants, since which box of
-/// the pattern lands there is the pattern's business and not the driver's.
-pub fn find_over(graph: &Graph, pattern: &Graph, host: NodeId) -> Vec<Match> {
-    let mut out: Vec<Match> = Vec::new();
-    for pat in 0..pattern.nodes.len() {
-        for at in find_pinned(graph, pattern, pat, host) {
-            if !out.contains(&at) {
-                out.push(at);
-            }
-        }
-    }
-    out
-}
-
 // ---- an order to run them in -----------------------------------------------------
 
-/// The live nodes in an order that runs producers first, smallest id first
-/// among those ready — which is roughly the order they were built in.
+/// The live nodes in an order that runs producers first.
 ///
 /// Only an evaluator wants this: a graph says what depends on what and
-/// nothing about when, so running one means picking an order, and any
-/// topological one gives the same answers. Nothing in the engine needs it
-/// — rewriting is local — which is why this is test-only.
+/// nothing about when. Ids are handed out producers-first and never
+/// reordered, so the order is the ids' own.
 #[cfg(test)]
 pub(crate) fn schedule(graph: &Graph) -> Vec<NodeId> {
-    use std::cmp::Reverse;
-    use std::collections::BinaryHeap;
-
-    let mut waiting: HashMap<NodeId, usize> = graph
-        .live()
-        .map(|(id, _)| {
-            let unmet = graph
-                .node(id)
-                .inputs
-                .iter()
-                .filter(|src| matches!(src, Source::Port { .. }))
-                .count();
-            (id, unmet)
-        })
-        .collect();
-    let mut ready: BinaryHeap<Reverse<u32>> = waiting
-        .iter()
-        .filter(|&(_, &unmet)| unmet == 0)
-        .map(|(id, _)| Reverse(id.0))
-        .collect();
-    let mut order = Vec::with_capacity(waiting.len());
-    while let Some(Reverse(raw)) = ready.pop() {
-        let id = NodeId(raw);
-        order.push(id);
-        for port in 0..graph.kind(id).arity().outputs {
-            for &sink in graph.sinks(Source::Port { node: id, port }) {
-                if let Sink::Port { node, .. } = sink {
-                    let unmet = waiting.get_mut(&node).expect("a live reader");
-                    *unmet -= 1;
-                    if *unmet == 0 {
-                        ready.push(Reverse(node.0));
-                    }
-                }
-            }
-        }
-    }
-    debug_assert_eq!(order.len(), waiting.len(), "the graph is acyclic");
-    order
+    graph.live().map(|(id, _)| id).collect()
 }
 
 // ---- printing --------------------------------------------------------------------
@@ -1734,7 +1276,6 @@ impl fmt::Display for NodeId {
     }
 }
 
-/// `in2` for the boundary, `#3.1` for output port 1 of node 3.
 impl fmt::Display for Source {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -1744,8 +1285,6 @@ impl fmt::Display for Source {
     }
 }
 
-/// `out2` for the boundary, `#3:1` for *input* port 1 of node 3 — the colon
-/// is what says which side of a box the port is on.
 impl fmt::Display for Sink {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -1758,9 +1297,6 @@ impl fmt::Display for Sink {
 impl fmt::Display for NodeKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            NodeKind::Id(n) => write!(f, "id({})", n),
-            NodeKind::Copy(n) => write!(f, "copy({})", n),
-            NodeKind::Drop(n) => write!(f, "drop({})", n),
             NodeKind::Op(prim) => write!(f, "{}", prim),
             NodeKind::Call { target, .. } => write!(f, "call #{}", usize::from(*target)),
             NodeKind::Select { arity } => write!(f, "select({})", arity),
@@ -1768,30 +1304,24 @@ impl fmt::Display for NodeKind {
     }
 }
 
-/// A graph as a box per line: what each one reads, and what reads it.
-///
-/// One flat listing, however many branches it holds — there is no longer
-/// anything nested to indent.
+/// A graph as a box per line: what each one reads, and how many read it.
 impl fmt::Display for Graph {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        writeln!(f, "inputs {}", self.inputs.len())?;
+        writeln!(f, "inputs {}", self.inputs)?;
         for (id, kind) in self.live() {
             write!(f, "  {} {} <-", id, kind)?;
-            if self.node(id).inputs.is_empty() {
+            if self.nodes[id.index()].inputs.is_empty() {
                 write!(f, " ()")?;
             }
-            for src in &self.node(id).inputs {
+            for src in &self.nodes[id.index()].inputs {
                 write!(f, " {}", src)?;
             }
-            let readers: usize = (0..kind.arity().outputs)
+            let readers = (0..kind.arity().outputs)
                 .map(|port| self.sinks(Source::Port { node: id, port }).len())
-                .sum();
+                .sum::<usize>();
             writeln!(f, "   [{} reader(s)]", readers)?;
         }
         write!(f, "outputs")?;
-        if self.outputs.is_empty() {
-            write!(f, " ()")?;
-        }
         for src in &self.outputs {
             write!(f, " {}", src)?;
         }
@@ -1802,7 +1332,6 @@ impl fmt::Display for Graph {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::diagram2::rules;
     use crate::diagram2::tests::built;
 
     #[test]
@@ -1821,7 +1350,7 @@ mod tests {
     }
 
     #[test]
-    fn two_graphs_are_one_diagram_or_they_are_not() {
+    fn two_graphs_are_one_program_or_they_are_not() {
         let (_t, a) = built("push 1 push 2 add");
         let (_t, b) = built("push 1 push 2 add");
         assert!(isomorphic(&a, &b));
@@ -1834,38 +1363,68 @@ mod tests {
         assert!(!isomorphic(&a, &d));
         let (_t, e) = built("branch { add } { add }");
         let (_t, f) = built("branch { add } { add }");
-        assert!(isomorphic(&e, &f), "one term built twice is one diagram");
-        let (_t, g) = built("branch { add } { sub }");
+        assert!(isomorphic(&e, &f), "one term built twice is one program");
+        let (_t, g) = built("branch { add } { subtract }");
         assert!(!isomorphic(&e, &g));
     }
 
-    /// Dead slots and the numbers ids hold are not part of what a graph
-    /// says: a graph that rewrote its boxes away is the wires it left.
+    /// A box is its kind and what it reads, so asking for one twice asks
+    /// for the same one — before anything has had a chance to rewrite.
+    #[test]
+    fn a_value_said_twice_is_said_once() {
+        let mut g = Graph::empty(1);
+        let a = g.add(NodeKind::Op(Prim::Not), vec![Source::Input(0)]);
+        let b = g.add(NodeKind::Op(Prim::Not), vec![Source::Input(0)]);
+        assert_eq!(a, b, "one `not` of one wire is one box");
+        g.close(vec![a[0], b[0]]);
+        assert_eq!(g.live_count(), 1);
+        assert_eq!(g.sinks(a[0]), [Sink::Output(0), Sink::Output(1)]);
+
+        // A different operand is a different box.
+        let mut h = Graph::empty(2);
+        let x = h.add(NodeKind::Op(Prim::Not), vec![Source::Input(0)]);
+        let y = h.add(NodeKind::Op(Prim::Not), vec![Source::Input(1)]);
+        assert_ne!(x, y);
+        h.close(vec![x[0], y[0]]);
+        assert_eq!(h.live_count(), 2);
+    }
+
+    /// What a rewrite leaves behind is not part of the program: the
+    /// boundary stops naming it, and that is the whole of being deleted.
     #[test]
     fn sameness_ignores_the_graveyard() {
-        let (_t, mut rewritten) = built("swap swap");
-        for _ in 0..2 {
-            let (id, _) = rewritten.live().next().expect("a swap to spend");
-            let step = rules::propose(&rewritten, &[rules::Law::SwapElim], id)
-                .into_iter()
-                .next()
-                .expect("swap-elim fires");
-            rules::apply(&mut rewritten, &step).unwrap();
-        }
-        assert_eq!(rewritten.live_count(), 0);
-        let mut wires = Graph::empty(2);
-        wires.close(vec![Source::Input(0), Source::Input(1)]);
-        assert!(isomorphic(&rewritten, &wires));
-        let mut crossed = Graph::empty(2);
-        crossed.close(vec![Source::Input(1), Source::Input(0)]);
-        assert!(!isomorphic(&rewritten, &crossed), "the boundary is pinned");
+        let (_t, mut host) = built("not not");
+        assert_eq!(host.live_count(), 2);
+        let pair = Pair::new(
+            {
+                let mut g = Graph::empty(1);
+                let first = g.add(NodeKind::Op(Prim::Not), vec![Source::Input(0)]);
+                let second = g.add(NodeKind::Op(Prim::Not), first);
+                g.close(second);
+                g
+            },
+            Graph::of_box(NodeKind::Op(Prim::AsBool)),
+        )
+        .unwrap();
+        let found = pair.find(&host, Direction::Forward);
+        pair.apply(&mut host, Direction::Forward, &found[0])
+            .unwrap();
+        host.check().unwrap();
+
+        let (_t, want) = built("as_bool");
+        assert!(
+            isomorphic(&host, &want),
+            "the two `not`s are still in the arena and count for nothing:\n{}",
+            host
+        );
+        assert_eq!(host.live_count(), 1);
     }
 
     // ---- a pair, put down somewhere ----
 
     /// The whole of what this module offers a rewriter, with no law in
-    /// sight: a graph, a pair of graphs, and a match saying where the first
-    /// of the pair sits.
+    /// sight: a graph, a pair of graphs, and a match saying where the
+    /// first of the pair sits.
     #[test]
     fn a_pair_replaces_what_it_is_found_at() {
         let (_t, mut host) = built("push 1 push 2 add");
@@ -1883,18 +1442,70 @@ mod tests {
             .expect("the match is the one the search just read");
         host.check().unwrap_or_else(|e| panic!("{}\n{}", e, host));
 
-        let (_t, want) = built("push 1 push 2 sub");
+        let (_t, want) = built("push 1 push 2 subtract");
         assert!(isomorphic(&host, &want), "\n{}\n{}", host, want);
 
         // And the way back is the embedding it handed over, not a bit
-        // flipped: the `sub` it put down is a box the host had never seen.
+        // flipped: the `subtract` it put down is a box the host had never
+        // seen.
         pair.apply(&mut host, Direction::Backward, &back)
             .expect("the answer names where the replacement landed");
         let (_t, again) = built("push 1 push 2 add");
         assert!(isomorphic(&host, &again));
     }
 
-    /// A pair is held to the one thing a splice needs of it.
+    /// A rewrite replaces a **value**, so every reader of it is rebuilt —
+    /// including ones the window never mentioned.
+    ///
+    /// This is the condition that went with the splice. The old checker
+    /// refused a match whose boxes had readers it did not account for,
+    /// because deleting those boxes would have stranded them; nothing is
+    /// deleted, so nothing is stranded, and a law fires in a window other
+    /// things read into.
+    #[test]
+    fn a_reader_the_window_never_named_is_no_obstacle() {
+        // `not(x)` read by a second `not` *and* by the boundary.
+        let mut host = Graph::empty(1);
+        let inner = host.add(NodeKind::Op(Prim::Not), vec![Source::Input(0)]);
+        let outer = host.add(NodeKind::Op(Prim::Not), inner.clone());
+        host.close(vec![outer[0], inner[0]]);
+        host.check().unwrap();
+
+        let pair = Pair::new(
+            {
+                let mut g = Graph::empty(1);
+                let first = g.add(NodeKind::Op(Prim::Not), vec![Source::Input(0)]);
+                let second = g.add(NodeKind::Op(Prim::Not), first);
+                // The middle port is not exported, and that used to be the
+                // whole side condition.
+                g.close(second);
+                g
+            },
+            Graph::of_box(NodeKind::Op(Prim::AsBool)),
+        )
+        .unwrap();
+
+        let found = pair.find(&host, Direction::Forward);
+        assert_eq!(found.len(), 1, "the shared window is still a window");
+        pair.apply(&mut host, Direction::Forward, &found[0])
+            .expect("a shared window is a window");
+        host.check().unwrap();
+        assert_eq!(host.live_count(), 2, "\n{}", host);
+        assert!(
+            host.live()
+                .any(|(_, kind)| matches!(kind, NodeKind::Op(Prim::AsBool))),
+            "the coercion landed:\n{}",
+            host
+        );
+        assert!(
+            host.live()
+                .any(|(_, kind)| matches!(kind, NodeKind::Op(Prim::Not))),
+            "and the `not` the boundary still reads is still there:\n{}",
+            host
+        );
+    }
+
+    /// A pair is held to the one thing a rewrite needs of it.
     #[test]
     fn two_graphs_of_different_arities_are_no_pair() {
         let why = Pair::new(
@@ -1906,8 +1517,8 @@ mod tests {
     }
 
     /// A match is a claim, and a wrong claim costs a refusal rather than a
-    /// torn graph. The check runs to completion before a box is touched, so
-    /// what it refuses it also leaves alone.
+    /// torn graph. Everything is checked before a box is made, so what it
+    /// refuses it also leaves alone.
     #[test]
     fn a_stated_match_that_is_not_one_is_refused() {
         let (_t, host) = built("push 1 push 2 add");
@@ -1929,7 +1540,6 @@ mod tests {
         let wrong = Match {
             nodes: vec![push],
             inputs: host.sources(add).to_vec(),
-            outputs: vec![Vec::new()],
         };
         let mut spoiled = host.clone();
         assert_eq!(
@@ -1938,26 +1548,10 @@ mod tests {
         );
         assert_eq!(spoiled, host, "a refusal changes nothing");
 
-        // The right box, with a reader left unaccounted for. This is the
-        // condition a plain substitution would not ask about, and the one
-        // that would strand a link.
-        let stranded = Match {
-            nodes: vec![add],
-            inputs: host.sources(add).to_vec(),
-            outputs: vec![Vec::new()],
-        };
-        let mut spoiled = host.clone();
-        assert!(matches!(
-            pair.apply(&mut spoiled, Direction::Forward, &stranded),
-            Err(Mismatch::Readers(_))
-        ));
-        assert_eq!(spoiled, host, "a refusal changes nothing");
-
         // The right box, named twice.
         let doubled = Match {
             nodes: vec![add, add],
             inputs: host.sources(add).to_vec(),
-            outputs: vec![vec![Sink::Output(0)]],
         };
         let mut spoiled = host.clone();
         assert_eq!(
@@ -1967,6 +1561,46 @@ mod tests {
         assert_eq!(spoiled, host, "a refusal changes nothing");
     }
 
+    /// The one refusal substitution has of its own: a replacement the
+    /// graph already holds, that reads the very value it would stand for.
+    ///
+    /// `promised-bool` says `op = op ; as_bool`, and where the `as_bool`
+    /// is already standing the step says nothing — putting it in would
+    /// rebuild it into a reading of itself.
+    #[test]
+    fn a_replacement_that_reads_what_it_replaces_is_refused() {
+        let mut host = Graph::empty(1);
+        let test = host.add(NodeKind::Op(Prim::IsBool), vec![Source::Input(0)]);
+        let coerced = host.add(NodeKind::Op(Prim::AsBool), test.clone());
+        host.close(coerced);
+        host.check().unwrap();
+
+        let pair = Pair::new(Graph::of_box(NodeKind::Op(Prim::IsBool)), {
+            let mut g = Graph::empty(1);
+            let answer = g.add(NodeKind::Op(Prim::IsBool), vec![Source::Input(0)]);
+            let promised = g.add(NodeKind::Op(Prim::AsBool), answer);
+            g.close(promised);
+            g
+        })
+        .unwrap();
+
+        let at = Match {
+            nodes: vec![
+                host.live()
+                    .find(|(_, kind)| matches!(kind, NodeKind::Op(Prim::IsBool)))
+                    .expect("the test")
+                    .0,
+            ],
+            inputs: vec![Source::Input(0)],
+        };
+        let before = host.clone();
+        assert_eq!(
+            pair.apply(&mut host, Direction::Forward, &at),
+            Err(Mismatch::Circular(test[0]))
+        );
+        assert_eq!(host, before, "a refusal changes nothing");
+    }
+
     // ---- one embedding read through another ----
 
     /// Composition, on its own: a match of `P` in `G` and an embedding of
@@ -1974,17 +1608,17 @@ mod tests {
     /// match, which is to say the checker takes it.
     #[test]
     fn a_match_read_through_an_embedding_is_a_match() {
-        // `H`: `not ; not ; not`. `G`: the deepest two of them.
+        // `H`: `not ; negate ; not`. `G`: the deepest two of them.
         let mut host = Graph::empty(1);
         let a = host.add(NodeKind::Op(Prim::Not), vec![Source::Input(0)]);
-        let b = host.add(NodeKind::Op(Prim::Not), a.clone());
+        let b = host.add(NodeKind::Op(Prim::Negate), a.clone());
         let c = host.add(NodeKind::Op(Prim::Not), b);
         host.close(c);
         host.check().unwrap();
 
         let mut inner = Graph::empty(1);
         let first = inner.add(NodeKind::Op(Prim::Not), vec![Source::Input(0)]);
-        let second = inner.add(NodeKind::Op(Prim::Not), first);
+        let second = inner.add(NodeKind::Op(Prim::Negate), first);
         inner.close(second);
 
         let outer = find(&host, &inner)
@@ -1993,40 +1627,22 @@ mod tests {
             .expect("the deepest pair");
         let carried = Embedding::of(&outer);
 
-        // `P`: one `not`, matched at the *second* box of `G`. Its port is
-        // exported, and in `G` the only thing reading it is `G`'s boundary.
-        let one = Graph::of_box(NodeKind::Op(Prim::Not));
-        let there = find(&inner, &one)
-            .into_iter()
-            .find(|at| at.outputs[0] == [Sink::Output(0)])
-            .expect("the shallower of the two");
+        // `P`: one `negate`, matched at the second box of `G`.
+        let one = Graph::of_box(NodeKind::Op(Prim::Negate));
+        let there = find(&inner, &one).into_iter().next().expect("the negate");
 
         let here = carried.carry(&there).expect("the embedding covers it");
         assert_eq!(here.nodes, vec![NodeId::at(1)]);
-        // The boundary is where the composition earns its keep: `G`'s output
-        // stood for the third `not`, so that is who reads this one now.
         assert_eq!(here.inputs, [a[0]], "the deepest `not` feeds it");
-        assert_eq!(
-            here.outputs,
-            vec![vec![Sink::Port {
-                node: NodeId::at(2),
-                port: 0
-            }]],
-            "and the shallowest reads it"
-        );
         check_match(&host, &one, &here).expect("a composed match is a match");
     }
 
     /// An embedding says nothing about what it does not cover.
     #[test]
     fn an_embedding_carries_only_what_it_holds() {
-        let mut inner = Graph::empty(1);
-        let only = inner.add(NodeKind::Op(Prim::Not), vec![Source::Input(0)]);
-        inner.close(only);
         let carried = Embedding::of(&Match {
             nodes: vec![NodeId::at(7)],
             inputs: vec![Source::Input(3)],
-            outputs: vec![vec![Sink::Output(2)]],
         });
         assert_eq!(carried.node(NodeId::at(0)), Some(NodeId::at(7)));
         assert_eq!(carried.node(NodeId::at(1)), None);
@@ -2034,7 +1650,6 @@ mod tests {
         let stranger = Match {
             nodes: vec![NodeId::at(1)],
             inputs: vec![Source::Input(0)],
-            outputs: vec![vec![Sink::Output(0)]],
         };
         assert_eq!(carried.carry(&stranger), None, "box 1 is not covered");
     }

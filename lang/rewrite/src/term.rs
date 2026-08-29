@@ -87,7 +87,7 @@ impl fmt::Display for Arity {
 /// nothing else — [`Instruction::commutative`] and [`Instruction::yields_bool`]
 /// are two that already exist — without a call variant coming along that they
 /// would have to answer for.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Prim {
     Push(Value),
     Swap,

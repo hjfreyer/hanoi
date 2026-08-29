@@ -6,7 +6,7 @@
 //! *in what order* is a strategy, and a strategy belongs to whoever is
 //! proving something. This module is where a strategy is **written**: a
 //! [`Tactic`] is a plain value, an interpreter runs it, and the deleted
-//! driver comes back as one program among many ([`saturate_structural`]).
+//! driver comes back as one program among many ([`decide`]).
 //!
 //! Everything here is untrusted, and holding that line is the design. A
 //! tactic mutates a graph through [`Derivation::push`] and nothing else, so
@@ -47,7 +47,8 @@
 //! comes back, [`Pick`] says whose decision that is: the canonical first
 //! (query order is part of [`query::eval`]'s meaning), every one until
 //! dry, or exactly one on pain of [`TacticError::Ambiguous`]. Automorphic
-//! duplicates — `dedup`'s two boxes swapped — are *counted*, not detected:
+//! duplicates — a symmetric pattern's two boxes swapped — are *counted*,
+//! not detected:
 //! the deterministic order picks one and the derivation records which.
 //!
 //! [`Tactic::At`] is the exception that keeps the rule honest. It holds an
@@ -86,9 +87,7 @@ use std::fmt;
 
 use super::query::{self, Bindings, Query, Var};
 use super::rules::{self, Derivation, Law, Rule, Step};
-use crate::graph::{
-    Direction, Graph, Match, NodeId, NodeKind, Sink, Source, find_over, find_pinned,
-};
+use crate::graph::{Direction, Graph, Match, NodeId, NodeKind, Source, find_over, find_pinned};
 
 // ---- what a step says ------------------------------------------------------------
 
@@ -214,7 +213,7 @@ pub enum Tactic {
     /// So the address is exact and the brittleness is the author's: an id
     /// is a fact about one graph at one moment, and it survives only as
     /// long as the steps in front of it do. What it buys is precision
-    /// nothing else offers — not "the first `dedup` that fires", but *that
+    /// nothing else offers — not "the first `fold` that fires", but *that
     /// one*.
     ///
     /// The search is the mirror of [`rules::propose`]'s. Every equation
@@ -646,7 +645,8 @@ impl Runner<'_> {
         b: &Bindings,
     ) -> Result<Step, TacticError> {
         let pair = rules::sides(rule).map_err(TacticError::Refused)?;
-        let at = resolve(self.graph, pair.pattern(dir), b, spec)?;
+        let _ = &pair;
+        let at = resolve(self.graph, b, spec)?;
         Ok(Step {
             rule: rule.clone(),
             dir,
@@ -866,12 +866,7 @@ pub fn branch_on(graph: &Graph, cond: Source) -> Option<NodeId> {
 /// [`MatchSpec`] × [`Bindings`] × the current graph → a concrete
 /// [`Match`](rules::Match). Pure reading, and untrusted: the answer is
 /// judged whole by [`rules::apply`], so a wrong resolution costs a refusal.
-fn resolve(
-    graph: &Graph,
-    pattern: &Graph,
-    b: &Bindings,
-    spec: &MatchSpec,
-) -> Result<Match, TacticError> {
+fn resolve(graph: &Graph, b: &Bindings, spec: &MatchSpec) -> Result<Match, TacticError> {
     if spec
         .outputs
         .iter()
@@ -907,59 +902,7 @@ fn resolve(
         });
     }
 
-    // The host source each pattern boundary output stands for, read the
-    // way the checker will read it — which is what `ReadersAt` and `Rest`
-    // select the readers of.
-    let image = |src: Source| match src {
-        Source::Input(i) => inputs.get(i).copied(),
-        Source::Port { node, port } => nodes
-            .get(node.index())
-            .map(|&n| Source::Port { node: n, port }),
-    };
-    let mut outputs = Vec::with_capacity(spec.outputs.len());
-    let mut claimed: Vec<Sink> = Vec::new();
-    for (j, selectors) in spec.outputs.iter().enumerate() {
-        let readers: Vec<Sink> = pattern
-            .outputs()
-            .get(j)
-            .and_then(|&src| image(src))
-            .map(|host| graph.sinks(host).to_vec())
-            .unwrap_or_default();
-        let mut list: Vec<Sink> = Vec::new();
-        for selector in selectors {
-            match *selector {
-                SinkSel::PortOf(v, port) => list.push(Sink::Port {
-                    node: node_of(v)?,
-                    port,
-                }),
-                SinkSel::Output(i) => list.push(Sink::Output(i)),
-                SinkSel::ReadersAt(v) => {
-                    let node = node_of(v)?;
-                    list.extend(
-                        readers.iter().copied().filter(
-                            |sink| matches!(sink, Sink::Port { node: n, .. } if *n == node),
-                        ),
-                    );
-                }
-                SinkSel::Rest => {
-                    let rest: Vec<Sink> = readers
-                        .iter()
-                        .copied()
-                        .filter(|sink| !claimed.contains(sink) && !list.contains(sink))
-                        .collect();
-                    list.extend(rest);
-                }
-            }
-        }
-        claimed.extend(list.iter().copied());
-        outputs.push(list);
-    }
-
-    Ok(Match {
-        nodes,
-        inputs,
-        outputs,
-    })
+    Ok(Match { nodes, inputs })
 }
 
 // ---- the library -----------------------------------------------------------------
@@ -978,7 +921,7 @@ pub fn fire_first(laws: Vec<Law>) -> Tactic {
 }
 
 /// One law, one box, one direction — [`Tactic::At`] with the canonical
-/// pick, which is what the `.hant` surface `at(#7, dedup, backward)`
+/// pick, which is what the `.hant` surface `at(#7, not-not, backward)`
 /// builds.
 pub fn fire_at(node: NodeId, law: Law, dir: Direction) -> Tactic {
     Tactic::At {
@@ -989,43 +932,30 @@ pub fn fire_at(node: NodeId, law: Law, dir: Direction) -> Tactic {
     }
 }
 
-/// The deleted driver, as a program: the structural laws to fixpoint.
-///
-/// Terminates without fuel because every structural law strictly shrinks
-/// the live box count — the argument the old worklist's doc made, now the
-/// author's claim in the one place a strategy states its claims.
-pub fn saturate_structural() -> Tactic {
-    Tactic::Repeat(Box::new(fire_first(rules::structural())), None)
-}
-
 /// The whole table to fixpoint: the branch layer in its documented order,
-/// the structural laws behind it, the value layer behind those.
+/// the value layer behind it.
+///
+/// Shorter than it was by one list. The wiring laws were the third of it,
+/// and there is no wiring left to spend — a value read twice is one box
+/// with two readers the moment it is built, and a value read never is a
+/// box the boundary does not reach.
 ///
 /// This is the closest thing the tactic road has to a normalizer, and it
 /// is still a strategy: those laws, in that order, everywhere they fire,
 /// chosen here and replaceable by any proof that chooses differently.
 pub fn decide() -> Tactic {
     Tactic::Repeat(
-        Box::new(fire_first(
-            [rules::branching(), rules::structural(), rules::folding()].concat(),
-        )),
+        Box::new(fire_first([rules::branching(), rules::folding()].concat())),
         None,
     )
 }
 
-/// The branch layer, spent to fixpoint with the structural cleanup it
-/// needs.
+/// The branch layer, spent to fixpoint.
 ///
-/// The laws are tried in the order [`rules::branching`] documents, with
-/// [`rules::structural`] behind them to spend what a branch rewrite
-/// leaves. What was advice in a doc comment is a program here.
+/// The laws are tried in the order [`rules::branching`] documents. What
+/// was advice in a doc comment is a program here.
 pub fn branch_pass() -> Tactic {
-    Tactic::Repeat(
-        Box::new(fire_first(
-            [rules::branching(), rules::structural()].concat(),
-        )),
-        None,
-    )
+    Tactic::Repeat(Box::new(fire_first(rules::branching())), None)
 }
 
 #[cfg(test)]
@@ -1068,42 +998,56 @@ mod tests {
         );
     }
 
-    /// The coverage the deleted driver took with it, restored against the
-    /// driver's replacement: meaning preserved across a run, the
-    /// structural layer gone, idempotence, a whole graph at every end,
-    /// the recorded derivation replaying to the same place, and the undo
-    /// closing the valley.
+    /// What the deleted wiring driver used to be for, asked of `build`
+    /// instead: a graph arrives with nothing to sweep.
+    ///
+    /// Every one of these bodies was a wiring exercise — two crossings
+    /// that cancel, a `pick` that copies, a `drop` that discards — and
+    /// every one of them now lands as the values it computes and no
+    /// boxes besides. There is no run to make, which is the strongest
+    /// form of the run always terminating.
     #[test]
-    fn the_deleted_driver_is_a_program() {
+    fn a_built_graph_has_no_wiring_to_sweep() {
+        for (body, boxes) in [
+            ("swap swap", 0),
+            ("dip { swap } swap dip { swap }", 0),
+            ("push 9 pick 0", 1),
+            // The comparison is computed and then dropped, so the
+            // boundary names nothing of it and nothing of it is there.
+            ("pick 1 pick 1 equal drop 0", 0),
+        ] {
+            let graph = built(body);
+            graph.check().unwrap_or_else(|e| panic!("{}: {}", body, e));
+            assert_eq!(graph.live_count(), boxes, "{}:\n{}", body, graph);
+        }
+        // The crossings cancel by never having been written: what the
+        // boundary leaves is what it was handed, in the order it was
+        // handed it.
+        let graph = built("swap swap");
+        assert_eq!(graph.outputs(), [Source::Input(0), Source::Input(1)]);
+    }
+
+    /// Meaning survives a run of the whole table, the run is its own
+    /// derivation, and a second run has nothing left to do.
+    #[test]
+    fn a_run_is_a_derivation_that_replays() {
         for body in [
-            "swap swap",
-            "dip { swap } swap dip { swap }",
-            "push 9 pick 0",
             "pick 1 pick 1 equal drop 0",
             "branch { pick 0 drop 0 not } { not }",
+            "push true branch { push 1 } { push 2 }",
+            "push 1 push 2 add",
         ] {
             let original = built(body);
             let mut graph = original.clone();
             let mut deriv = Derivation::default();
-            run(&mut graph, &mut deriv, &saturate_structural())
-                .unwrap_or_else(|e| panic!("{}: {}", body, e));
+            run(&mut graph, &mut deriv, &decide()).unwrap_or_else(|e| panic!("{}: {}", body, e));
             graph
                 .check()
                 .unwrap_or_else(|e| panic!("{}: left a torn graph: {}", body, e));
-            same_meaning(body, &original, &graph);
-            for (_, kind) in graph.live() {
-                assert!(
-                    !kind.is_structural(),
-                    "{}: the structural layer survived:\n{}",
-                    body,
-                    graph
-                );
-            }
 
-            // Idempotence: a second run has nothing to do.
             let mut again = Derivation::default();
             assert_eq!(
-                run(&mut graph, &mut again, &saturate_structural()),
+                run(&mut graph, &mut again, &decide()),
                 Ok(Progress::Unchanged),
                 "{}: not a fixpoint",
                 body
@@ -1115,76 +1059,34 @@ mod tests {
             let steps: Vec<Step> = deriv.steps().cloned().collect();
             replay(&mut fresh, &steps).unwrap_or_else(|e| panic!("{}: no replay: {}", body, e));
             assert_eq!(fresh, graph, "{}: the derivation lands elsewhere", body);
-
-            // And the undo closes the valley.
-            let mut back = graph.clone();
-            deriv
-                .undo(&mut back)
-                .unwrap_or_else(|e| panic!("{}: no undo: {}", body, e));
-            back.check().unwrap();
-            assert_eq!(back.live_count(), original.live_count());
-            same_meaning(body, &original, &back);
         }
     }
 
-    #[test]
-    fn the_two_spellings_of_swaps_settle_together() {
-        let mut graph = built("swap swap");
-        let mut deriv = Derivation::default();
-        run(&mut graph, &mut deriv, &saturate_structural()).unwrap();
-        assert_eq!(graph.live_count(), 0);
-        assert_eq!(graph.outputs(), [Source::Input(0), Source::Input(1)]);
-        assert_eq!(deriv.len(), 2);
-    }
-
-    /// The directed spelling: fold the literal condition — claiming there
-    /// is exactly one — then clean up inside the image of that one step
-    /// and nowhere else.
+    /// The directed spelling: fold the literal condition, claiming there
+    /// is exactly one.
+    ///
+    /// And what a fold leaves, which is the change: the untaken arm's
+    /// literal is not *deleted*, it is simply no longer reached. There is
+    /// no cleanup pass, focused or otherwise — the boundary stops naming
+    /// it and it stops being part of the program in the same move.
     #[test]
     fn a_literal_condition_keeps_its_arm() {
         let mut graph = built("push true branch { push 1 } { push 2 }");
         let mut deriv = Derivation::default();
-        let tactic = Tactic::Seq(vec![
-            Tactic::Fire {
-                at: Query::new()
-                    .is("sel", NodePred::Kind(KindPat::Select))
-                    .is("lit", NodePred::Kind(KindPat::AnyPush))
-                    .feeds("lit", 0, "sel", 0),
-                rule: RuleSpec::ReadOff {
-                    laws: vec![Law::SelectLiteral],
-                    anchor: Var("sel"),
-                },
-                pick: Pick::Unique,
+        let tactic = Tactic::Fire {
+            at: Query::new()
+                .is("sel", NodePred::Kind(KindPat::Select))
+                .is("lit", NodePred::Kind(KindPat::AnyPush))
+                .feeds("lit", 0, "sel", 0),
+            rule: RuleSpec::ReadOff {
+                laws: vec![Law::SelectLiteral],
+                anchor: Var("sel"),
             },
-            Tactic::Within(Region::LastImage, Box::new(saturate_structural())),
-        ]);
+            pick: Pick::Unique,
+        };
         run(&mut graph, &mut deriv, &tactic).unwrap();
         graph.check().unwrap();
-        // The arms take nothing, so each arm is a *wire*: the two
-        // literals sit outside the window and survive the fold. The image of the step is the fresh boxes it left — the
-        // re-spent condition, which dead-node collects — and the focus is
-        // exactly what makes the untaken `push 2`, dead but **outside**
-        // the image, survive this pass. A focus that collected it would
-        // not be a focus.
-        assert_eq!(deriv.len(), 2, "the fold, and one dead-node inside it");
-        assert_eq!(graph.live_count(), 2, "\n{}", graph);
-        let dead = graph
-            .live()
-            .find(|(_, k)| *k == &NodeKind::Op(Prim::Push(Value::Int(2))))
-            .map(|(id, _)| id)
-            .expect("the untaken arm's literal is still there");
-        assert!(
-            graph
-                .sinks(Source::Port {
-                    node: dead,
-                    port: 0
-                })
-                .is_empty()
-        );
-
-        // Unfocused, the cleanup reaches it.
-        run(&mut graph, &mut deriv, &saturate_structural()).unwrap();
-        graph.check().unwrap();
+        assert_eq!(deriv.len(), 1, "one fold and no sweeping after it");
         assert_eq!(graph.live_count(), 1, "\n{}", graph);
         let (kept, kind) = graph.live().next().unwrap();
         assert_eq!(kind, &NodeKind::Op(Prim::Push(Value::Int(1))));
@@ -1292,7 +1194,7 @@ mod tests {
         let before = graph.clone();
         let scoped = Tactic::Within(
             Region::Arm { cond, side: true },
-            Box::new(fire_first(vec![Law::DeadNode])),
+            Box::new(fire_first(vec![Law::SelectLiteral])),
         );
         assert!(matches!(
             run(&mut graph, &mut deriv, &scoped),
@@ -1301,111 +1203,32 @@ mod tests {
         assert_eq!(graph, before, "a scoped miss lands nothing");
     }
 
-    /// A backward step, stated: the matcher rightly declines copy-elim's
-    /// right side, and the spec is the vocabulary that states it — the
-    /// reader-split said selector by selector, `Rest` included.
-    #[test]
-    fn a_stated_step_says_the_split() {
-        let mut graph = Graph::empty(0);
-        let nine = graph.add(NodeKind::Op(Prim::Push(Value::Int(9))), Vec::new());
-        let not = graph.add(NodeKind::Op(Prim::Not), nine.clone());
-        let negate = graph.add(NodeKind::Op(Prim::Negate), nine.clone());
-        graph.close(vec![not[0], negate[0]]);
-        graph.check().unwrap();
-
-        let mut deriv = Derivation::default();
-        let tactic = Tactic::State {
-            at: Query::new()
-                .is("nine", NodePred::Kind(KindPat::Push(Value::Int(9))))
-                .is("n", NodePred::Kind(KindPat::Op(Some(Prim::Not))))
-                .is("g", NodePred::Kind(KindPat::Op(Some(Prim::Negate))))
-                .feeds("nine", 0, "n", 0)
-                .feeds("nine", 0, "g", 0),
-            rule: Rule::CopyElim { n: 1 },
-            dir: Direction::Backward,
-            with: MatchSpec {
-                nodes: Vec::new(),
-                inputs: vec![SrcExpr::FeedOf(Var("n"), 0)],
-                // The split, stated: the `not` reads one leg, and whoever
-                // is left — the `negate` — keeps the other.
-                outputs: vec![vec![SinkSel::PortOf(Var("n"), 0)], vec![SinkSel::Rest]],
-            },
-            pick: Pick::Unique,
-        };
-        run(&mut graph, &mut deriv, &tactic).unwrap();
-        graph.check().unwrap();
-
-        let (copy, _) = graph
-            .live()
-            .find(|(_, k)| matches!(k, NodeKind::Copy(1)))
-            .expect("the copy came back");
-        let nine = graph
-            .live()
-            .find(|(_, k)| matches!(k, NodeKind::Op(Prim::Push(_))))
-            .map(|(id, _)| id)
-            .unwrap();
-        let not = graph
-            .live()
-            .find(|(_, k)| matches!(k, NodeKind::Op(Prim::Not)))
-            .map(|(id, _)| id)
-            .unwrap();
-        let negate = graph
-            .live()
-            .find(|(_, k)| matches!(k, NodeKind::Op(Prim::Negate)))
-            .map(|(id, _)| id)
-            .unwrap();
-        assert_eq!(
-            graph.sources(copy),
-            [Source::Port {
-                node: nine,
-                port: 0
-            }]
-        );
-        assert_eq!(
-            graph.sources(not),
-            [Source::Port {
-                node: copy,
-                port: 0
-            }]
-        );
-        assert_eq!(
-            graph.sources(negate),
-            [Source::Port {
-                node: copy,
-                port: 1
-            }]
-        );
-
-        // And the saturation takes the copy straight back out.
-        run(&mut graph, &mut deriv, &saturate_structural()).unwrap();
-        assert_eq!(graph.live_count(), 3);
-    }
-
     /// A failed alternative leaves no trace, and — the point of cloning
     /// rather than undoing — what the run records still replays from the
     /// original graph, first try to last step.
     #[test]
     fn speculation_leaves_no_trace() {
-        let original = built("swap swap");
+        let original = built("push 1 push 2 add push 3 add");
         let mut graph = original.clone();
         let mut deriv = Derivation::default();
         // The first alternative advances one step and then dies looking
         // for a branch that is not there.
         let doomed = Tactic::Seq(vec![
-            fire_first(vec![Law::SwapElim]),
+            fire_first(vec![Law::Fold]),
             Tactic::Fire {
                 at: Query::new().is("f", NodePred::Kind(KindPat::Select)),
                 rule: RuleSpec::ReadOff {
-                    laws: vec![Law::DeadNode],
+                    laws: vec![Law::SelectSame],
                     anchor: Var("f"),
                 },
                 pick: Pick::First,
             },
         ]);
-        let tactic = Tactic::First(vec![doomed, saturate_structural()]);
+        let winner = Tactic::Repeat(Box::new(fire_first(vec![Law::Fold])), None);
+        let tactic = Tactic::First(vec![doomed, winner]);
         run(&mut graph, &mut deriv, &tactic).unwrap();
         graph.check().unwrap();
-        assert_eq!(graph.live_count(), 0);
+        assert_eq!(graph.live_count(), 1, "one literal left:\n{}", graph);
         assert_eq!(deriv.len(), 2, "only the winning alternative's steps");
         let mut fresh = original.clone();
         let steps: Vec<Step> = deriv.steps().cloned().collect();
@@ -1420,7 +1243,7 @@ mod tests {
         let hopeless = Tactic::Fire {
             at: Query::new().is("f", NodePred::Kind(KindPat::Select)),
             rule: RuleSpec::ReadOff {
-                laws: vec![Law::DeadNode],
+                laws: vec![Law::SelectSame],
                 anchor: Var("f"),
             },
             pick: Pick::First,
@@ -1442,15 +1265,15 @@ mod tests {
     /// the graph is whole, and the derivation says exactly what happened.
     #[test]
     fn out_of_fuel_leaves_the_graph_standing() {
-        let original = built("swap swap");
+        let original = built("push 1 push 2 add push 3 add");
         let mut graph = original.clone();
         let mut deriv = Derivation::default();
-        let tactic = Tactic::Repeat(Box::new(fire_first(vec![Law::SwapElim])), Some(1));
+        let tactic = Tactic::Repeat(Box::new(fire_first(vec![Law::Fold])), Some(1));
         assert_eq!(
             run(&mut graph, &mut deriv, &tactic),
             Err(TacticError::OutOfFuel { after: 1 })
         );
-        // Both steps landed before the wire tripped, and both stand.
+        // Both folds landed before the wire tripped, and both stand.
         graph.check().unwrap();
         assert_eq!(deriv.len(), 2);
         let mut fresh = original.clone();
@@ -1459,41 +1282,32 @@ mod tests {
         assert_eq!(fresh, graph);
     }
 
-    /// `Unique` counts what `First` orders: two automorphic offers are
-    /// two, on purpose — the deterministic order is the tie-break, and
-    /// claiming uniqueness where there is symmetry is refused loudly.
+    /// `Unique` counts what `First` orders: two offers are two, and
+    /// claiming uniqueness where there is a choice is refused loudly.
     #[test]
     fn unique_counts_what_first_orders() {
-        let graph = built("push 1 push 1 add");
-        let ambiguous = Tactic::Fire {
-            at: Query::new().is("p", NodePred::Kind(KindPat::AnyPush)),
+        let graph = built("push 1 push 2 add push 3 push 4 add");
+        let folds = |pick| Tactic::Fire {
+            at: Query::new().is("a", NodePred::Kind(KindPat::Op(Some(Prim::Add)))),
             rule: RuleSpec::ReadOff {
-                laws: vec![Law::Dedup],
-                anchor: Var("p"),
+                laws: vec![Law::Fold],
+                anchor: Var("a"),
             },
-            pick: Pick::Unique,
+            pick,
         };
         let mut probe = graph.clone();
         let mut deriv = Derivation::default();
         assert_eq!(
-            run(&mut probe, &mut deriv, &ambiguous),
+            run(&mut probe, &mut deriv, &folds(Pick::Unique)),
             Err(TacticError::Ambiguous { found: 2 })
         );
         assert!(deriv.is_empty(), "a refused pick lands nothing");
         assert_eq!(probe, graph);
 
-        let first = Tactic::Fire {
-            at: Query::new().is("p", NodePred::Kind(KindPat::AnyPush)),
-            rule: RuleSpec::ReadOff {
-                laws: vec![Law::Dedup],
-                anchor: Var("p"),
-            },
-            pick: Pick::First,
-        };
         let mut probe = graph.clone();
         let mut deriv = Derivation::default();
         assert_eq!(
-            run(&mut probe, &mut deriv, &first),
+            run(&mut probe, &mut deriv, &folds(Pick::First)),
             Ok(Progress::Advanced(1))
         );
         probe.check().unwrap();
@@ -1505,15 +1319,16 @@ mod tests {
     /// whatever box the pattern begins with.
     #[test]
     fn a_concrete_rule_pins_where_the_query_points() {
-        let mut graph = built("push 1 push 1 add");
+        let mut graph = built("not not");
         let mut deriv = Derivation::default();
+        // Pattern box 1 is `not-not`'s *second* `not`, so the only box
+        // this can be pinned to is the outer one — the inner `not` is
+        // bound first and offers nothing.
         let tactic = Tactic::Fire {
-            at: Query::new().is("p", NodePred::Kind(KindPat::Push(Value::Int(1)))),
+            at: Query::new().is("n", NodePred::Kind(KindPat::Op(Some(Prim::Not)))),
             rule: RuleSpec::Concrete {
-                rule: Rule::Dedup {
-                    kind: NodeKind::Op(Prim::Push(Value::Int(1))),
-                },
-                anchor: Var("p"),
+                rule: Rule::NotNot,
+                anchor: Var("n"),
                 pin: 1,
             },
             pick: Pick::First,
@@ -1521,12 +1336,11 @@ mod tests {
         run(&mut graph, &mut deriv, &tactic).unwrap();
         graph.check().unwrap();
         assert_eq!(deriv.len(), 1);
-        // One literal left, read twice.
-        let pushes = graph
-            .live()
-            .filter(|(_, k)| matches!(k, NodeKind::Op(Prim::Push(_))))
-            .count();
-        assert_eq!(pushes, 1, "\n{}", graph);
+        assert_eq!(graph.live_count(), 1, "the coercion, alone:\n{}", graph);
+        assert!(matches!(
+            graph.live().next().unwrap().1,
+            NodeKind::Op(Prim::AsBool)
+        ));
     }
 
     /// The branch layer, spent as a program: a branch whose arms answer
@@ -1534,9 +1348,10 @@ mod tests {
     /// own.
     #[test]
     fn the_branch_layer_is_a_pass() {
-        // `branch { add } { add }` is copy-elim, dedup, select-same and
-        // then dead-node all the way down — wiring laws throughout, so
-        // the opaque oracle can hold the run to meaning.
+        // `branch { add } { add }` arrives with one `add` in it — both
+        // arms were handed the same sources — so the pass is one
+        // `select-same`. Pure wiring, so the opaque oracle can hold the
+        // run to meaning.
         let original = built("branch { add } { add }");
         let mut graph = original.clone();
         let mut deriv = Derivation::default();
@@ -1565,26 +1380,26 @@ mod tests {
     /// anything else.
     #[test]
     fn a_named_box_is_where_the_step_lands() {
-        let graph = built("pick 1 pick 1 equal drop 0");
-        let copies: Vec<NodeId> = graph
+        let graph = built("push 1 push 2 add push 3 push 4 add");
+        let adds: Vec<NodeId> = graph
             .live()
-            .filter(|(_, kind)| matches!(kind, NodeKind::Copy(_)))
+            .filter(|(_, kind)| matches!(kind, NodeKind::Op(Prim::Add)))
             .map(|(id, _)| id)
             .collect();
-        assert_eq!(copies.len(), 2, "two copies to choose between:\n{}", graph);
+        assert_eq!(adds.len(), 2, "two folds to choose between:\n{}", graph);
 
-        for &target in &copies {
+        for &target in &adds {
             let mut g = graph.clone();
             let mut deriv = Derivation::default();
             let fired = run(
                 &mut g,
                 &mut deriv,
-                &fire_at(target, Law::CopyElim, Direction::Forward),
+                &fire_at(target, Law::Fold, Direction::Forward),
             )
             .unwrap();
             assert_eq!(fired, Progress::Advanced(1));
-            assert!(!g.is_live(target), "the named copy went:\n{}", g);
-            for &other in &copies {
+            assert!(!g.is_live(target), "the named `add` went:\n{}", g);
+            for &other in &adds {
                 assert!(
                     other == target || g.is_live(other),
                     "and only the named one:\n{}",
@@ -1602,8 +1417,8 @@ mod tests {
         // What the un-addressed spelling does instead.
         let mut g = graph.clone();
         let mut deriv = Derivation::default();
-        run(&mut g, &mut deriv, &fire_first(vec![Law::CopyElim])).unwrap();
-        assert!(!g.is_live(copies[0]), "the first, always:\n{}", g);
+        run(&mut g, &mut deriv, &fire_first(vec![Law::Fold])).unwrap();
+        assert!(!g.is_live(adds[0]), "the first, always:\n{}", g);
     }
 
     /// A match counts when it holds the named box **anywhere** in its
@@ -1615,12 +1430,6 @@ mod tests {
     #[test]
     fn the_named_box_need_not_be_where_the_pattern_anchors() {
         let mut graph = built("not not");
-        run(
-            &mut graph,
-            &mut Derivation::default(),
-            &saturate_structural(),
-        )
-        .unwrap();
         let nots: Vec<NodeId> = graph
             .live()
             .filter(|(_, kind)| matches!(kind, NodeKind::Op(Prim::Not)))
@@ -1650,23 +1459,30 @@ mod tests {
     }
 
     /// The direction is the author's, and `backward` reads the law's
-    /// equation right to left. It finds something wherever the right-hand
-    /// side names enough boxes to pin its own match: `dedup`'s does — one
-    /// box, read twice — so a box can be split back into two.
+    /// equation right to left.
+    ///
+    /// It used to find something only where a right-hand side pinned its
+    /// own match, which most did not: a side exporting one port twice
+    /// left the split of that port's readers a choice, so those steps had
+    /// to be stated. Nothing splits readers any more, so a right-hand side
+    /// is looked for like anything else — here `as_bool`, read back as the
+    /// two `not`s it is.
     #[test]
     fn a_named_box_can_be_rewritten_backward() {
-        let graph = built("pick 1 pick 1 equal drop 0");
-        let (drop, _) = graph
+        // A `not` for the payload to be read off, and the `as_bool` the
+        // law's right side is, standing apart from it.
+        let graph = built("pick 0 not swap as_bool tuple 2");
+        let (coercion, _) = graph
             .live()
-            .find(|(_, kind)| matches!(kind, NodeKind::Drop(_)))
-            .expect("the `drop 0`");
+            .find(|(_, kind)| matches!(kind, NodeKind::Op(Prim::AsBool)))
+            .expect("the coercion");
 
         let mut g = graph.clone();
         let mut deriv = Derivation::default();
         run(
             &mut g,
             &mut deriv,
-            &fire_at(drop, Law::Dedup, Direction::Backward),
+            &fire_at(coercion, Law::NotNot, Direction::Backward),
         )
         .unwrap();
         let landed: Vec<Step> = deriv.steps().cloned().collect();
@@ -1674,17 +1490,17 @@ mod tests {
             panic!("one step")
         };
         assert_eq!(step.dir, Direction::Backward);
-        assert_eq!(step.rule.law(), Law::Dedup);
+        assert_eq!(step.rule.law(), Law::NotNot);
         assert_eq!(
             g.live()
-                .filter(|(_, kind)| matches!(kind, NodeKind::Drop(_)))
+                .filter(|(_, kind)| matches!(kind, NodeKind::Op(Prim::Not)))
                 .count(),
             2,
-            "one box read twice became two:\n{}",
+            // Two, not three: the inner `not` the law puts back is the
+            // `not` this graph already had, because that is what it is.
+            "the coercion came back as the two `not`s it is:\n{}",
             g
         );
-        // `dedup` is wiring, so the oracle can judge the whole run.
-        same_meaning("dedup, backward", &graph, &g);
         replay(&mut graph.clone(), &landed).unwrap();
     }
 
@@ -1734,24 +1550,22 @@ mod tests {
     /// outside the region finds nothing, the same answer a query gets.
     #[test]
     fn a_focus_scopes_a_named_box_too() {
-        let graph = built("pick 1 pick 1 equal drop 0");
-        let copies: Vec<NodeId> = graph
+        let graph = built("push 1 push 2 add push 3 push 4 add");
+        let adds: Vec<NodeId> = graph
             .live()
-            .filter(|(_, kind)| matches!(kind, NodeKind::Copy(_)))
+            .filter(|(_, kind)| matches!(kind, NodeKind::Op(Prim::Add)))
             .map(|(id, _)| id)
             .collect();
-        let [inside, outside] = copies[..] else {
-            panic!("two copies:\n{}", graph)
+        let [inside, outside] = adds[..] else {
+            panic!("two adds:\n{}", graph)
         };
-        // A region holding the first copy and nothing else. `LastImage`
-        // with an empty derivation is the empty region, so this is built
-        // the way a real focus is — from what a step landed — by firing
-        // one and focusing its image.
+        // `LastImage` with an empty derivation is the empty region, so
+        // this is built the way a real focus is — from what a step landed.
         let mut g = graph.clone();
         let mut deriv = Derivation::default();
         let focused = Tactic::Within(
             Region::LastImage,
-            Box::new(fire_at(outside, Law::CopyElim, Direction::Forward)),
+            Box::new(fire_at(outside, Law::Fold, Direction::Forward)),
         );
         // Nothing has landed, so the focus is empty and the box is out of
         // it — even though it is a live box the tactic could otherwise
@@ -1760,7 +1574,7 @@ mod tests {
             run(&mut g, &mut deriv, &focused),
             Err(TacticError::NoMatchAt {
                 node: outside,
-                law: Law::CopyElim,
+                law: Law::Fold,
                 dir: Direction::Forward,
             })
         );

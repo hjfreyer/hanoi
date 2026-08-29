@@ -231,13 +231,6 @@ pub(super) fn eval_graph(m: &mut Meaning, graph: &Graph, inputs: &[SymId]) -> Ve
             .map(|&src| read(&ports, src))
             .collect();
         let outs = match graph.kind(id) {
-            NodeKind::Id(_) => args,
-            NodeKind::Drop(_) => Vec::new(),
-            NodeKind::Copy(_) => {
-                let mut out = args.clone();
-                out.extend(args);
-                out
-            }
             NodeKind::Op(prim) => match opaque(prim) {
                 None => vec![args[1], args[0]],
                 Some(name) => m.apply(name, args, prim.arity().outputs),

@@ -68,7 +68,7 @@
       "name": "support.function.tactic.hant"
     },
     "law-list": {
-      "match": "\\b(structural|branching)\\b",
+      "match": "\\b(branching)\\b",
       "name": "support.constant.law-list.hant"
     },
     "primitive": {

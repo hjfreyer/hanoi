@@ -58,9 +58,6 @@ impl std::fmt::Display for Var {
 /// and [`KindPat::Push`] one literal in particular.
 #[derive(Debug, Clone, PartialEq)]
 pub enum KindPat {
-    Id(Option<usize>),
-    Copy(Option<usize>),
-    Drop(Option<usize>),
     Op(Option<Prim>),
     AnyPush,
     Push(Value),
@@ -72,9 +69,6 @@ impl KindPat {
     /// Whether a box is what the pattern says, blanks matching anything.
     pub fn fits(&self, kind: &NodeKind) -> bool {
         match (self, kind) {
-            (KindPat::Id(want), NodeKind::Id(n)) => want.is_none_or(|w| w == *n),
-            (KindPat::Copy(want), NodeKind::Copy(n)) => want.is_none_or(|w| w == *n),
-            (KindPat::Drop(want), NodeKind::Drop(n)) => want.is_none_or(|w| w == *n),
             (KindPat::Op(None), NodeKind::Op(_)) => true,
             (KindPat::Op(Some(p)), NodeKind::Op(q)) => p == q,
             (KindPat::AnyPush, NodeKind::Op(Prim::Push(_))) => true,
@@ -94,11 +88,9 @@ pub enum NodePred {
     /// Any live box.
     Any,
     Kind(KindPat),
-    /// One of the boxes rewriting deletes —
-    /// [`NodeKind::is_structural`].
-    Structural,
-    /// Every output port unread. `drop(n)` is dead vacuously, having no
-    /// output ports at all — the same reading `dead-node` gives it.
+    /// Every output port unread — a box the program does not reach through
+    /// any port it has. Nothing but a box with no ports at all can be one
+    /// now: an unread value is not in the graph to be bound.
     Dead,
 }
 
@@ -108,7 +100,6 @@ impl NodePred {
         match self {
             NodePred::Any => true,
             NodePred::Kind(pat) => pat.fits(kind),
-            NodePred::Structural => kind.is_structural(),
             NodePred::Dead => (0..kind.arity().outputs)
                 .all(|port| graph.sinks(Source::Port { node: id, port }).is_empty()),
         }
@@ -364,7 +355,7 @@ impl Eval<'_> {
                     let mut cands = Vec::new();
                     for port in 0..self.graph.kind(maker).arity().outputs {
                         if from_port.is_none_or(|want| want == port) {
-                            for &sink in self.graph.sinks(Source::Port { node: maker, port }) {
+                            for sink in self.graph.sinks(Source::Port { node: maker, port }) {
                                 if let Sink::Port { node, .. } = sink {
                                     cands.push(node);
                                 }
@@ -476,7 +467,7 @@ mod tests {
     /// id — stated as semantics, so a driver's "first" is reproducible.
     #[test]
     fn answers_come_in_id_order() {
-        let graph = built("push 1 push 1 add");
+        let graph = built("push 1 push 2 add");
         let q = Query::new().is("p", NodePred::Kind(KindPat::AnyPush));
         let found = eval(&graph, &q);
         assert_eq!(found.len(), 2);
@@ -485,44 +476,31 @@ mod tests {
 
     #[test]
     fn relations_read_what_the_graph_records() {
-        let graph = built("branch { add } { add }");
+        let graph = built("branch { add } { subtract }");
         // One select, the whole of the branch.
         let ends = eval(
             &graph,
             &Query::new().is("s", NodePred::Kind(KindPat::Select)),
         );
         assert_eq!(ends.len(), 1, "one branch, one select:\n{}", graph);
-        // Two adds, distinct, both reading the copy that hands out the
-        // stack.
-        let adds = eval(
+        // Both arms read the very sources the branch was handed — there is
+        // nothing between them and the stack, because there is no copy to
+        // be.
+        let arms = eval(
             &graph,
             &Query::new()
+                .is("s", NodePred::Kind(KindPat::Select))
                 .is("a", NodePred::Kind(KindPat::Op(Some(Prim::Add))))
-                .is("b", NodePred::Kind(KindPat::Op(Some(Prim::Add))))
-                .ne("a", "b")
-                .feeds("c", None, "a", None)
-                .feeds("c", None, "b", None)
-                .is("c", NodePred::Kind(KindPat::Copy(None))),
+                .is("b", NodePred::Kind(KindPat::Op(Some(Prim::Subtract))))
+                .feeds("a", None, "s", None)
+                .feeds("b", None, "s", None),
         );
-        assert_eq!(adds.len(), 2, "two adds, two orders:\n{}", graph);
-    }
-
-    #[test]
-    fn a_drop_is_dead_vacuously() {
-        let graph = built("pick 1 pick 1 equal drop 0");
-        let dead = eval(&graph, &Query::new().is("d", NodePred::Dead));
-        // The `drop` has no output ports at all — dead the way `dead-node`
-        // reads it. Everything else is read by something.
-        assert_eq!(dead.len(), 1, "\n{}", graph);
-        assert!(matches!(
-            graph.kind(dead[0].node(Var("d"))),
-            NodeKind::Drop(_)
-        ));
+        assert_eq!(arms.len(), 1, "one of each, one branch:\n{}", graph);
     }
 
     #[test]
     fn a_region_holds_every_variable_to_itself() {
-        let graph = built("push 1 push 1 add");
+        let graph = built("push 1 push 2 add");
         let q = Query::new().is("p", NodePred::Kind(KindPat::AnyPush));
         let all = eval(&graph, &q);
         assert_eq!(all.len(), 2);

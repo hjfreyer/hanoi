@@ -108,9 +108,10 @@
 //! | `repeat(t …)` | the sequence until it stops advancing |
 //! | `try(t …)` | the sequence, or nothing — failure becomes no progress |
 //!
-//! A law is named as the docs name it — `copy-elim`, `select-same`,
-//! `dead-node`, the spellings [`Law::name`] holds — and `structural` and
-//! `branching` name the two lists of [`crate::diagram2::rules`]. This
+//! A law is named as the docs name it — `fold`, `select-same`,
+//! `not-not`, the spellings [`Law::name`] holds — and `branching` names
+//! the one driven list of [`crate::diagram2::rules`] with a name of its
+//! own. This
 //! surface is deliberately smaller than the language underneath: queries
 //! and stated backward steps exist as data first, and grow a spelling here
 //! when a proof needs one.
@@ -121,12 +122,12 @@
 //! is for when that is the wrong one: it names the box, by the id the
 //! **residual listing** printed beside it, and fires the law in a match
 //! that holds that box — anywhere in the match, not only where the law's
-//! pattern happens to anchor. A goal with nine `dedup`s available and one
+//! pattern happens to anchor. A goal with nine `fold`s available and one
 //! that matters is what it is for.
 //!
 //! ```text
 //! proof identities::the_awkward_one =
-//!     lhs(decide) lhs(at(#41, dedup)) lhs(decide) diagram;
+//!     lhs(decide) lhs(at(#41, select-same)) lhs(decide) diagram;
 //! ```
 //!
 //! The third field is the direction, `forward` when it is left out:
@@ -606,11 +607,14 @@ fn parse_tactic(input: &str) -> Result<(Tactic, &str), String> {
         .unwrap_or(input.len());
     let (word, rest) = input.split_at(word_len);
     match word {
-        // The resurrected driver, and its law-directed generalization.
+        // Named laws to fixpoint. There is no bare `saturate` any more:
+        // it stood for the wiring list, and wiring is not a list of laws
+        // now but a thing the representation cannot say.
         "saturate" => {
-            let Some(after) = rest.trim_start().strip_prefix('(') else {
-                return Ok((tactic::saturate_structural(), rest));
-            };
+            let after = rest
+                .trim_start()
+                .strip_prefix('(')
+                .ok_or("`saturate` expects `(law, …)`")?;
             let (inside, after) = after.split_once(')').ok_or("`saturate(` never closes")?;
             let laws = parse_laws(inside)?;
             Ok((
@@ -658,7 +662,7 @@ fn parse_tactic(input: &str) -> Result<(Tactic, &str), String> {
     }
 }
 
-/// `at(#7, dedup)`, `at(#7, dedup, backward)`: a box named by the id the
+/// `at(#7, fold)`, `at(#7, not-not, backward)`: a box named by the id the
 /// residual printed, one law, and which way round to read its equation.
 ///
 /// The `#` is the listing's own spelling and is optional here, so a
@@ -714,7 +718,7 @@ fn one_law(name: &str) -> Result<Law, String> {
     }
 }
 
-/// Law names as the docs spell them, and the two lists by their names.
+/// Law names as the docs spell them, and the driven list by its name.
 ///
 /// The spellings are [`Law::name`]'s, scanned rather than restated, so the
 /// surface gains a law the moment the table names one and a message that
@@ -724,7 +728,6 @@ fn parse_laws(inside: &str) -> Result<Vec<Law>, String> {
     for name in inside.split(',') {
         let name = name.trim();
         out.extend(match name {
-            "structural" => rules::structural(),
             "branching" => rules::branching(),
             "" => return Err("a law list names no law".to_string()),
             _ => match Law::every().into_iter().find(|law| law.name() == name) {
@@ -979,15 +982,18 @@ mod tests {
     fn a_tactic_block_reads_as_the_language_it_embeds() {
         use crate::diagram2::tactic::{Pick, RuleSpec, Tactic};
 
-        let entries = parse_hant("proof p = lhs(saturate) exact;").unwrap();
+        let entries = parse_hant("proof p = lhs(saturate(not-not)) exact;").unwrap();
         let [Step::Rewrite { side, tactic }, Step::Exact] = &entries[0].strategy[..] else {
             panic!("{:?}", entries[0].strategy);
         };
         assert_eq!(*side, OnSide::Lhs);
-        assert_eq!(tactic.as_ref(), &tactic::saturate_structural());
+        assert_eq!(
+            tactic.as_ref(),
+            &Tactic::Repeat(Box::new(tactic::fire_first(vec![Law::NotNot])), None)
+        );
 
         let entries =
-            parse_hant("proof p = both(saturate branches try(fire(not-not))) diagram;").unwrap();
+            parse_hant("proof p = both(decide branches try(fire(not-not))) diagram;").unwrap();
         let [Step::Rewrite { side, tactic }, Step::Diagram] = &entries[0].strategy[..] else {
             panic!("{:?}", entries[0].strategy);
         };
@@ -995,16 +1001,15 @@ mod tests {
         let Tactic::Seq(steps) = tactic.as_ref() else {
             panic!("{:?}", tactic);
         };
-        assert_eq!(steps[0], tactic::saturate_structural());
+        assert_eq!(steps[0], tactic::decide());
         assert_eq!(steps[1], tactic::branch_pass());
         assert_eq!(
             steps[2],
             Tactic::Try(Box::new(tactic::fire_first(vec![Law::NotNot])))
         );
 
-        // A law list spells the docs' names, and the two lists by theirs.
-        let entries =
-            parse_hant("proof p = rhs(saturate(select-same, structural)) exact;").unwrap();
+        // A law list spells the docs' names, and the driven list by its.
+        let entries = parse_hant("proof p = rhs(saturate(select-same, branching)) exact;").unwrap();
         let [Step::Rewrite { tactic, .. }, _] = &entries[0].strategy[..] else {
             panic!();
         };
@@ -1019,7 +1024,7 @@ mod tests {
         else {
             panic!("{:?}", body);
         };
-        assert_eq!(laws, &[vec![Law::SelectSame], rules::structural()].concat());
+        assert_eq!(laws, &[vec![Law::SelectSame], rules::branching()].concat());
     }
 
     #[test]
@@ -1187,11 +1192,11 @@ mod tests {
     fn a_tactic_that_is_not_one_is_refused_where_it_is_written() {
         let err = parse_hant("proof p = lhs(flatten) exact;").unwrap_err();
         assert!(err.contains("no tactic is called `flatten`"), "{}", err);
-        let err = parse_hant("proof p = lhs(fire(copy-elim, upside-down)) exact;").unwrap_err();
+        let err = parse_hant("proof p = lhs(fire(fold, upside-down)) exact;").unwrap_err();
         assert!(err.contains("no law is called `upside-down`"), "{}", err);
         let err = parse_hant("proof p = lhs() exact;").unwrap_err();
         assert!(err.contains("empty tactic"), "{}", err);
-        let err = parse_hant("proof p = lhs(saturate exact;").unwrap_err();
+        let err = parse_hant("proof p = lhs(saturate(fold) exact;").unwrap_err();
         assert!(err.contains("parenthesized tactic"), "{}", err);
     }
 
@@ -1279,25 +1284,25 @@ mod tests {
     fn a_box_can_be_named_by_the_id_the_report_printed() {
         use crate::graph::NodeId;
 
-        let entries = parse_hant("proof p = lhs(at(#41, dedup)) diagram;").unwrap();
+        let entries = parse_hant("proof p = lhs(at(#41, select-same)) diagram;").unwrap();
         let [Step::Rewrite { side, tactic }, Step::Diagram] = &entries[0].strategy[..] else {
             panic!("{:?}", entries[0].strategy);
         };
         assert_eq!(*side, OnSide::Lhs);
         assert_eq!(
             tactic.as_ref(),
-            &tactic::fire_at(NodeId::at(41), Law::Dedup, Direction::Forward)
+            &tactic::fire_at(NodeId::at(41), Law::SelectSame, Direction::Forward)
         );
 
         // The `#` is the listing's spelling, and optional here, so a
         // pasted id and a typed one are the same box.
-        let entries = parse_hant("proof p = rhs(at(41, dedup)) diagram;").unwrap();
+        let entries = parse_hant("proof p = rhs(at(41, select-same)) diagram;").unwrap();
         let [Step::Rewrite { tactic, .. }, _] = &entries[0].strategy[..] else {
             panic!()
         };
         assert_eq!(
             tactic.as_ref(),
-            &tactic::fire_at(NodeId::at(41), Law::Dedup, Direction::Forward)
+            &tactic::fire_at(NodeId::at(41), Law::SelectSame, Direction::Forward)
         );
 
         // The third field is the direction, `forward` when it is left out.
@@ -1312,7 +1317,7 @@ mod tests {
 
         // And it composes like any other tactic.
         let entries =
-            parse_hant("proof p = both(decide try(at(#3, dedup, backward)) decide) diagram;")
+            parse_hant("proof p = both(decide try(at(#3, not-not, backward)) decide) diagram;")
                 .unwrap();
         let [Step::Rewrite { tactic, .. }, _] = &entries[0].strategy[..] else {
             panic!()
@@ -1324,7 +1329,7 @@ mod tests {
             steps[1],
             Tactic::Try(Box::new(tactic::fire_at(
                 NodeId::at(3),
-                Law::Dedup,
+                Law::NotNot,
                 Direction::Backward
             )))
         );
@@ -1341,7 +1346,7 @@ mod tests {
             ("proof p = lhs(at()) diagram;", "names no box"),
             ("proof p = lhs(at(#41)) diagram;", "names no law"),
             (
-                "proof p = lhs(at(the third one, dedup)) diagram;",
+                "proof p = lhs(at(the third one, select-same)) diagram;",
                 "not a box id",
             ),
             (
@@ -1349,15 +1354,15 @@ mod tests {
                 "no law is called",
             ),
             (
-                "proof p = lhs(at(#41, structural)) diagram;",
+                "proof p = lhs(at(#41, branching)) diagram;",
                 "is a list of them",
             ),
             (
-                "proof p = lhs(at(#41, dedup, sideways)) diagram;",
+                "proof p = lhs(at(#41, select-same, sideways)) diagram;",
                 "forward",
             ),
             (
-                "proof p = lhs(at(#41, dedup, backward, 9)) diagram;",
+                "proof p = lhs(at(#41, select-same, backward, 9)) diagram;",
                 "and found",
             ),
         ] {
@@ -1373,9 +1378,9 @@ mod tests {
         for law in Law::every() {
             assert_eq!(parse_laws(law.name()).unwrap(), vec![law], "{}", law);
         }
-        for group in ["structural", "branching"] {
-            assert!(parse_laws(group).unwrap().len() > 1, "{}", group);
-            assert!(one_law(group).is_err(), "{}", group);
-        }
+        // The one list left with a name of its own.
+        let group = "branching";
+        assert!(parse_laws(group).unwrap().len() > 1, "{}", group);
+        assert!(one_law(group).is_err(), "{}", group);
     }
 }

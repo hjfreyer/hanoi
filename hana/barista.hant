@@ -7,6 +7,14 @@
 // hypotheses, written as structured `cases` (docs/proving.md) and
 // compiled to one checked derivation per side.
 //
+// The two `is_symbol` splits are written as *arms* and the state split is
+// not, and that is the whole of what the shape says: an unaddressed
+// `cases` takes the first wire it is offered, and both tag tests are
+// `is_symbol` on one `untuple`'s answers, so the second split has to be
+// written inside the first's true arm — where the first wire is a literal
+// and no longer on offer — or it picks the same one twice and stands
+// still.
+//
 // One state decides everything: `emit` dispatches on `equal(x.2,
 // state::thirsty)`, and the driver has already identified that test with
 // the precondition disjunction's own — one wire, two readers — so the
@@ -22,11 +30,10 @@
 // folding the conjunction shut.
 proof barista::customer_impl::emit_does_pre_and_post_is_constant =
     inline both(decide)
-    cases(equal(state::thirsty)) (
+    cases(equal(state::thirsty)) both(decide)
+    cases(is_symbol) (
         true: both(decide) cases(is_symbol) (
-            true: both(decide) cases(is_symbol) (
-                true: both(decide),
-                false: both(decide)),
+            true: both(decide),
             false: both(decide)),
         false: both(decide))
     diagram;

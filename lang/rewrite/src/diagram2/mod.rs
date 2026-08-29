@@ -1,103 +1,85 @@
-//! The literal diagram: a term as a graph of boxes, rewritten until the
-//! connections are direct.
+//! A term as a graph of values, and the table that rewrites one.
 //!
-//! A term becomes a graph **one leaf at a time**, `id`, `swap`, `copy` and
-//! `drop` each getting a box of their own, and only then does anything get
-//! simplified — by rewriting, against the table in [`rules`]. Nothing is
-//! simplified by representation beyond what the wiring cannot say
-//! ([docs/rules.md](../../../../docs/rules.md) opens with that list): the
-//! point of the literal reading is that every other identification is a
-//! *step*, named, checked, and on the record.
+//! A term becomes a graph **one operation at a time**, and only the
+//! operations: `id`, `swap`, `copy` and `drop` are how a stack program
+//! spells things a graph says by naming — a wire is nothing, a crossing
+//! is two names in the other order, a fan-out is one source named twice,
+//! and a discard is a source named nowhere. [`build`] is where that
+//! translation happens and the only place that ever knew about the
+//! stack.
 //!
-//! The graph itself is [`crate::graph`] — boxes, the links between them,
-//! well-formedness, and whether two of them are the same diagram. What is
+//! The graph itself is [`crate::graph`] — values, what each is made of,
+//! well-formedness, and whether two graphs are the same program. What is
 //! here is everything that knows a graph came from a *term*: [`build`]
 //! writes one, [`inline`] opens a call in place, and [`rules`] and
 //! [`tactic`] are the table and the driving of it. The translation runs
 //! one way only — a graph is read by [`render`], not turned back into a
 //! term.
 //!
-//! A branch is one box, and its arms are not inside it. A `copy(n)` hands
-//! both arms the stack, both arms are emitted as ordinary boxes, and the
-//! `select(n)` keeps one of the two answers. That `copy` is exactly the
-//! `(pick (n-1))^n` of the single-arm hoist in
-//! [docs/totality.md](../../../../docs/totality.md), and the hoist is why the
-//! translation is allowed: every prim is total and has no effect but the
-//! stack, so work on the path not taken costs an answer nobody reads
-//! rather than a failure.
+//! ## What the representation already says
 //!
-//! So an arm is not opaque: a rule reaches into one from outside, and a
-//! value reaches out. `copy-elim` deletes that copy like any other, after
-//! which both arms read the one port — which is what makes the branch
-//! layer short. A block that *is* the value the condition tested is that
-//! value, and a rule can say so by naming one source twice.
+//! A box is its kind and the sources its input ports read, and asking for
+//! one twice answers with the one that is already there. So a family of
+//! laws that used to be rows here are not rows, and could not be: there
+//! is no graph for either side of them to be.
+//!
+//! - **`id-elim`, `swap-elim`** — a wire and a crossing are not boxes.
+//!   σ involutive, σ-natural and Yang–Baxter all fall out of nothing
+//!   having recorded a crossing in the first place.
+//! - **`copy-elim`** — a value read twice is two references. The
+//!   cartesian structure is not something a rewrite introduces; it is
+//!   what a source having many readers *is*.
+//! - **`dead-node`** — a box the boundary does not reach is not part of
+//!   the program. Discarding is licensed by totality and purity, exactly
+//!   as before; what changed is that there is nothing to fire.
+//! - **`dedup`** — δ-naturality. `push 9 ; push 9` and `push 9 ; copy(1)`
+//!   do not *settle* in the same place; they are written in the same
+//!   place, because a value is named by what it is.
+//!
+//! A branch is one box and its arms are not inside it. Both arms are
+//! handed the **same sources** — not a copy of them — so an operation
+//! both arms do is one box, and a block that *is* the value the condition
+//! tested is that value outright. That both arms are computed is the
+//! single-arm hoist of
+//! [docs/totality.md](../../../../docs/totality.md), and the hoist is why
+//! the translation is allowed: every prim is total and has no effect but
+//! the stack, so work on the path not taken costs an answer nobody reads
+//! rather than a failure. An arm is not opaque either: a rule reaches
+//! into one from outside, and a value reaches out.
 //!
 //! ## The rules
 //!
 //! Each one is a **pair of graphs** [`rules::sides`] builds from a payload
-//! — the whole of what a rule *is* — and a rewrite is pointing at a
-//! subgraph isomorphic to the first and putting the second in its place.
-//! Four of them delete a box and join what it was standing between:
-//!
-//! - `id-elim` — the readers of an `id`'s output read its input instead.
-//! - `swap-elim` — the two lines cross by being re-pointed, and the
-//!   crossing stops existing. σ involutive, σ-natural and Yang–Baxter all
-//!   fall out of the fact that nothing recorded the crossing afterwards.
-//! - `copy-elim` — both of a `copy`'s outputs come to name the port it was
-//!   reading, and that port acquires a *second reader*. This is the one
-//!   rule that changes the shape of the data rather than shrinking it, and
-//!   it is where the cartesian structure enters: a value is produced once
-//!   and read freely.
-//! - `dead-node` — a node nothing reads is deleted, and its own producers
-//!   are asked the same question. `drop(n)` has no outputs at all, so it is
-//!   this rule's base case rather than a rule of its own; the language is
-//!   total and pure, which is what licenses deleting the work underneath —
-//!   the same license that lets both arms of a branch run. Its side
-//!   condition is not tested but *stated*: the left side of the pair
-//!   exports no port at all, so a box with a reader is not that graph.
-//!
-//! One does not, and it is the reason a table is worth having over a
-//! `match`:
-//!
-//! - `dedup` — δ-naturality. Two boxes of one kind reading one set of
-//!   sources are one box read twice, so `push 9 ; push 9` and `push 9 ;
-//!   copy(1)` settle in the same place.
-//!
-//! What the rules leave is a DAG of `Op`s, `Call`s and `Select`s whose
-//! ports fan out where a `copy` used to be — the same shape `diagram`
-//! arrives at by construction, reached instead by named rewrites over data
-//! that existed the whole way.
+//! — the whole of what a rule *is* — and a rewrite is pointing at part of
+//! a graph that is the first and putting the second in its place. What is
+//! left in the table is the two things a representation cannot decide:
+//! what a branch means, and what an operation computes.
 //!
 //! ## Nothing here spends them
 //!
-//! There was a `rewrite` in this module — a worklist that ran
-//! [`rules::structural`] to fixpoint, and the only way a graph ever got
-//! smaller. It is gone, and the rules and the laws it spent are untouched.
-//! What it decided was fixed: *those* laws, in *that* order, everywhere
-//! they fired, chosen here rather than by whoever is proving something. A
-//! choice of laws and of where to spend them is a strategy, and strategies
-//! are written in [`crate::hant`]; this is a table and the operations that
-//! read it, and the driver comes back as a tactic over both.
+//! There was a `rewrite` in this module — a worklist that ran the wiring
+//! laws to fixpoint, and the only way a graph ever got smaller. It is
+//! gone twice over: first because *which* laws and *where* is a strategy,
+//! written in [`crate::hant`], and then because the laws it spent stopped
+//! existing.
 //!
-//! So a graph out of [`build`] is the literal translation and stays that
-//! way until something applies a rule to it. [`rules`] is where that
-//! happens: [`rules::sides`] turns a payload into the [`Pair`] of graphs it
+//! So a graph out of [`build`] is the translation and stays that way
+//! until something applies a rule to it. [`rules`] is where that happens:
+//! [`rules::sides`] turns a payload into the [`Pair`] of graphs it
 //! states, [`find`](crate::graph::find) and [`rules::propose`] say where a
 //! law could fire, [`rules::apply`] fires one and hands back its inverse,
 //! and [`rules::replay`] runs a list of them. Only the first of those is
 //! this module's own work — the rest is [`Pair::apply`] wearing a law's
 //! name.
 //!
-//! **Ports link to ports; there is no wire** — [`crate::graph`]'s doing, and
-//! what makes a rewrite here a re-pointing rather than a declaration that
-//! two names are equivalent. An input names the one output port it reads
-//! ([`Source`]) and an output names the input ports that read it
-//! ([`Sink`](crate::graph::Sink)),
-//! so nothing accumulates: after each step the graph is already in its final
-//! state, which is what makes `dead-node` an O(1) test and lets
-//! [`Graph::check`] hold every link to agreeing at both ends — a
-//! half-updated link is caught where it happens rather than surviving as a
-//! wrong answer.
+//! **A box reads; nothing records being read.** An input port names the
+//! one source it reads ([`Source`]) and that is the whole of the
+//! structure, so a rewrite cannot half-update a link: a box is immutable,
+//! and replacing a value means building the boxes that read it afresh.
+//! Who reads a port is a *reading* ([`Graph::sinks`](crate::graph::Graph::sinks)),
+//! computed over the boxes the boundary reaches — which is why a box a
+//! rewrite left behind counts for nothing without anything having to
+//! collect it.
 //!
 //! **Two boundaries are drawn on purpose**, and they moved when the old
 //! `diagram` engine retired and this module became the prover's:
@@ -108,28 +90,17 @@
 //!   Nothing here saturates toward a canonical form by decree: `push 1 ;
 //!   push 2 ; add` and `push 2 ; push 1 ; add` are related exactly when a
 //!   strategy spends the laws that relate them. The tests still hold the
-//!   *wiring* laws to the `meaning` oracle, which evaluates a program with
-//!   **every operation left opaque** — `add` on two wires stays `add(x,
-//!   y)` — so the oracle judges the wiring and nothing else.
-//! - **The value folds live in [`rules::folding`], not in
-//!   [`rules::structural`].** A literal window runs on the machine itself
-//!   (`rules::Rule::Fold` and its kin), but only when a strategy fires it:
-//!   the structural list still spends no value, so a graph shrinks by
-//!   wiring alone until whoever is proving something asks for more.
-//!
-//!   Layer 2 **is** in the table — [`rules::branching`] folds a literal
-//!   condition into its arm, deletes a branch whose arms answer alike,
-//!   lifts work both arms do out in front, and writes what a test decided
-//!   into the block that tested it. It is not in [`rules::structural`]
-//!   either, for two reasons worth keeping apart: three of those
-//!   laws turn on what an operation *computes*, which the opaque oracle
-//!   cannot judge and `vm` can; and the other three take a branch apart,
-//!   which is a strategy, and this module decides no strategy.
-//!
-//!   Every one of those rows is stated at the `select`, which is the whole
-//!   of a branch: `select-literal` reads a literal condition and answers
-//!   with the blocks it chooses, leaving the untaken arm to `dead-node`.
-//!   `rules` says what each row can say and why.
+//!   pure-wiring laws to the `meaning` oracle, which evaluates a program
+//!   with **every operation left opaque** — `add` on two wires stays
+//!   `add(x, y)` — so the oracle judges the shape and nothing else.
+//! - **The value folds live in [`rules::folding`], and the branch layer
+//!   in [`rules::branching`].** A literal window runs on the machine
+//!   itself (`rules::Rule::Fold` and its kin), but only when a strategy
+//!   fires it. Every row of the branch layer is stated at the `select`,
+//!   which is the whole of a branch: `select-literal` reads a literal
+//!   condition and answers with the blocks it chooses, and the untaken
+//!   arm stops being reached. `rules` says what each row can say and
+//!   why.
 //!
 //! Nothing translates the other way. A graph is *read* as a graph — see
 //! [`render`], which lays one out as a listing whose lines name the boxes
@@ -141,8 +112,8 @@
 
 use bytecode::{Library, SentenceIndex};
 
-use crate::graph::{Direction, Graph, Match, NodeId, NodeKind, Pair, Source};
-use crate::term::{Context, Term, TermIndex, lower};
+use crate::graph::{Direction, Graph, Match, NodeKind, Pair, Source};
+use crate::term::{Context, Prim, Term, TermIndex, lower};
 
 #[cfg(test)]
 mod meaning;
@@ -176,9 +147,25 @@ fn emit(graph: &mut Graph, terms: &Context, term: TermIndex, inputs: Vec<Source>
         "the caller cuts by arity"
     );
     match terms.get(term) {
-        Term::Id(n) => graph.add(NodeKind::Id(*n), inputs),
-        Term::Copy(n) => graph.add(NodeKind::Copy(*n), inputs),
-        Term::Drop(n) => graph.add(NodeKind::Drop(*n), inputs),
+        // The four the stack needed and a graph of values does not. `id`
+        // is the sources themselves; `copy` is naming them twice, since a
+        // value read twice is two references to one box; `drop` is naming
+        // them nowhere, which is what makes a discarded computation a box
+        // the boundary does not reach; and `swap` is the other order.
+        // None of them is a box, so none of them is ever a rewrite.
+        Term::Id(_) => inputs,
+        Term::Copy(n) => {
+            debug_assert_eq!(inputs.len(), *n, "the caller cuts by arity");
+            let mut out = inputs.clone();
+            out.extend(inputs);
+            out
+        }
+        Term::Drop(_) => Vec::new(),
+        Term::Op(Prim::Swap) => {
+            let mut out = inputs;
+            out.reverse();
+            out
+        }
         Term::Op(prim) => graph.add(NodeKind::Op(prim.clone()), inputs),
         Term::Call { target, arity } => graph.add(
             NodeKind::Call {
@@ -202,29 +189,16 @@ fn emit(graph: &mut Graph, terms: &Context, term: TermIndex, inputs: Vec<Source>
             outputs.extend(emit(graph, terms, *top, above));
             outputs
         }
-        // A branch is not a node either, and this is the change from the
-        // arms-in-a-box it used to be: the condition is set aside, a `copy`
-        // hands each arm the stack, both arms are emitted into this same
-        // graph, and the `select` keeps one of the two answers. What was a
-        // boundary is a box with the arms in front of it, so every rule
-        // reaches through it.
+        // A branch is a `select` and the arms in front of it. Both arms are
+        // handed the same stack — not a copy of it, the same sources — and
+        // whatever each computes from it are the blocks the select keeps
+        // one of. Work on the path not taken is a value nobody reads.
         Term::Branch { if_true, if_false } => {
             let mut inputs = inputs;
             let cond = inputs.pop().expect("a branch reads its condition");
-            // Block-wise, exactly the `(pick (n-1))^n` the hoist rule spells
-            // out. Arms that take nothing have nothing to be handed, and
-            // then there is no copy at all.
-            let (if_true_in, if_false_in) = if inputs.is_empty() {
-                (Vec::new(), Vec::new())
-            } else {
-                let arity = inputs.len();
-                let mut blocks = graph.add(NodeKind::Copy(arity), inputs);
-                let above = blocks.split_off(arity);
-                (blocks, above)
-            };
             let mut ports = vec![cond];
-            ports.extend(emit(graph, terms, *if_true, if_true_in));
-            ports.extend(emit(graph, terms, *if_false, if_false_in));
+            ports.extend(emit(graph, terms, *if_true, inputs.clone()));
+            ports.extend(emit(graph, terms, *if_false, inputs));
             let arity = terms.arity(*if_true).outputs;
             graph.add(NodeKind::Select { arity }, ports)
         }
@@ -258,41 +232,39 @@ pub fn inline(
     only: Option<SentenceIndex>,
 ) -> Result<usize, crate::term::Error> {
     let mut opened = 0;
+    // One at a time, asked again each time round. A rewrite rebuilds
+    // everything downstream of what it replaced, so a call that sat under
+    // an opened one is a *new* box afterwards and the id that named it is
+    // stale — which is why the calls are looked for rather than listed.
+    //
+    // Draining is one pass either way: a sentence may not reach itself, so
+    // a call to `target` never appears inside `target`'s own body, and
+    // `only` opening until none is left opens exactly the ones that were
+    // there.
     loop {
-        let calls: Vec<(NodeId, SentenceIndex)> = graph
-            .live()
-            .filter_map(|(id, kind)| match kind {
-                NodeKind::Call { target, .. } if only.is_none_or(|t| t == *target) => {
-                    Some((id, *target))
-                }
-                _ => None,
-            })
-            .collect();
-        if calls.is_empty() {
+        let call = graph.live().find_map(|(id, kind)| match kind {
+            NodeKind::Call { target, .. } if only.is_none_or(|t| t == *target) => {
+                Some((id, *target))
+            }
+            _ => None,
+        });
+        let Some((id, target)) = call else {
             return Ok(opened);
-        }
-        for (id, target) in calls {
-            let body = lower(terms, library, target)?;
-            let call = graph.kind(id).clone();
-            // The one thing the pair needs of the two sides is that they
-            // agree on what they take and leave, and a call carries its
-            // arity for exactly the reason the term does.
-            let pair = Pair::new(Graph::of_box(call), build(terms, body))
-                .expect("a call and its body agree by arity, and both are graphs");
-            let at = Match {
-                nodes: vec![id],
-                inputs: graph.sources(id).to_vec(),
-                outputs: (0..graph.kind(id).arity().outputs)
-                    .map(|port| graph.sinks(Source::Port { node: id, port }).to_vec())
-                    .collect(),
-            };
-            pair.apply(graph, Direction::Forward, &at)
-                .expect("a call is the window its own box fills");
-            opened += 1;
-        }
-        if only.is_some() {
-            return Ok(opened);
-        }
+        };
+        let body = lower(terms, library, target)?;
+        let call = graph.kind(id).clone();
+        // The one thing the pair needs of the two sides is that they agree
+        // on what they take and leave, and a call carries its arity for
+        // exactly the reason the term does.
+        let pair = Pair::new(Graph::of_box(call), build(terms, body))
+            .expect("a call and its body agree by arity, and both are graphs");
+        let at = Match {
+            nodes: vec![id],
+            inputs: graph.sources(id).to_vec(),
+        };
+        pair.apply(graph, Direction::Forward, &at)
+            .expect("a call is the window its own box fills");
+        opened += 1;
     }
 }
 
@@ -348,32 +320,39 @@ pub(crate) mod tests {
     // ---- the literal translation ----
 
     #[test]
-    fn a_term_is_one_box_per_leaf() {
-        // `push 1 ; id(1) * push 2 ; add`: four leaves, four boxes. The `;`
-        // and the `*` have no spelling — sequencing is one box's output
-        // port being another's input, side by side is two boxes sharing no
-        // ports — but the `id(1)` the padding introduced is right there as
-        // a box, which is the difference from `diagram`.
+    fn a_term_is_one_box_per_operation() {
+        // `push 1 ; id(1) * push 2 ; add`: four leaves, three boxes. The
+        // `;` and the `*` have no spelling — sequencing is one box's
+        // output port being another's input, side by side is two boxes
+        // sharing no ports — and neither has the `id(1)` the padding
+        // introduced, which is a wire and so is not a box at all.
         let (_terms, graph) = built("push 1 push 2 add");
-        assert_eq!(graph.live_count(), 4);
-        assert!(
-            graph
-                .live()
-                .any(|(_, kind)| matches!(kind, NodeKind::Id(1))),
-            "the padding is data here:\n{}",
-            graph
+        assert_eq!(graph.live_count(), 3, "\n{}", graph);
+
+        // And a value said twice is said once: the two literals are one
+        // box, read twice, before anything has had a chance to rewrite.
+        let (_terms, shared) = built("push 1 push 1 add");
+        assert_eq!(shared.live_count(), 2, "\n{}", shared);
+        let (lit, _) = shared
+            .live()
+            .find(|(_, kind)| matches!(kind, NodeKind::Op(Prim::Push(_))))
+            .expect("the literal");
+        assert_eq!(
+            shared.sinks(Source::Port { node: lit, port: 0 }).len(),
+            2,
+            "one literal, read twice:\n{}",
+            shared
         );
-        assert!(graph.is_monogamous());
     }
 
     #[test]
     fn a_branch_is_its_arms_and_a_select() {
-        // The arms are not inside anything: the four boxes of the `then`
-        // arm and the one of the `else` arm sit in this graph beside the
-        // `select` that picks between their answers. Both arms take
-        // nothing, so there is no `copy` handing out the stack either.
+        // The arms are not inside anything: the boxes of the `then` arm
+        // sit in this graph beside the `select` that picks between their
+        // answers. `push 2` is one box, written once and read by both the
+        // `add` and the `else` block.
         let (_terms, graph) = built("branch { push 1 push 2 add } { push 2 }");
-        assert_eq!(graph.live_count(), 6, "{}", graph);
+        assert_eq!(graph.live_count(), 4, "{}", graph);
 
         let (id, _) = graph
             .live()
@@ -405,11 +384,6 @@ pub(crate) mod tests {
             graph
                 .check()
                 .unwrap_or_else(|e| panic!("sentence {}: {}", library.names[idx], e));
-            assert!(
-                graph.is_monogamous(),
-                "sentence {} built with a shared port",
-                library.names[idx]
-            );
             assert_eq!(
                 graph.arity(),
                 arena.arity(term),

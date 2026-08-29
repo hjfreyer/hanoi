@@ -27,25 +27,27 @@ picture of it.
 - `*` is the tensor: `A * B` is A and B side by side, A on the deeper
   stack region. `dip { A }` is `A * id(1)`.
 - `id(n)`, `copy(n)`, `drop(n)`, `swap` — a wire, a fan-out, a discard, a
-  crossing.
+  crossing. **None of these is a box.** They are how a stack program
+  spells things a graph of values says by naming: a fan-out is one source
+  named twice, a discard is a source named nowhere, a crossing is two
+  names in the other order, and a wire is nothing at all.
 - `if c { T } else { E }` — a branch. In the graph that is one `select`
-  box: the condition at port 0, then the two blocks. What hands both arms
-  the stack is an ordinary `copy`, which `copy-elim` deletes like any
-  other, so after the wiring pass both arms simply read the one port.
+  box: the condition at port 0, then the two blocks. Both arms are handed
+  the same sources, so whatever they compute alike they compute *once*.
 
 Two facts about windows apply to every row. A law is stated in its
 minimal window and congruence is free: a match is an embedding, so every
 law fires in any context. And a box inside a window may have readers
-outside it — several rows below keep a box "for its other readers" for
-exactly this reason: the rewrite re-points the readers the window owns and
-leaves the box standing for anyone else, and `dead-node` collects it once
-nobody is left.
+outside it, in any row at all: a rewrite replaces the *value* the window
+exports and rebuilds whatever read it, so a reader the window never
+mentioned goes on reading the box it always read.
 
 ## What needs no rule
 
-The wiring representation already identifies programs up to the
-structural theory of sequencing and rearranging, so a whole family of
-familiar laws has no row — both sides are literally the same data:
+A box is its kind and the sources it reads, and asking for one twice
+answers with the one that is already there. So the wiring theory is not a
+set of laws that fire — it is a set of things the representation cannot
+say:
 
 - associativity and units of `;` and `*` — sequencing is one box's output
   wire being another's input; there is no `;` node to re-associate;
@@ -54,49 +56,35 @@ familiar laws has no row — both sides are literally the same data:
 - everything about `swap` — a crossing is not recorded, so
   `swap ; swap = id(2)`, naturality of the crossing, and the braid
   relation are all one wiring;
-- coassociativity and cocommutativity of `copy` — fan-out has no shape.
+- coassociativity and cocommutativity of `copy` — fan-out has no shape;
+- **δ-naturality** — `push c ; copy(1) = push c ; push c` is not a law
+  either way round, because both sides are the one box read twice;
+- **discarding** — work no boundary output reaches is not in the program,
+  so there is nothing to delete;
+- **`branch { A } { A } = drop-top ; A`** — the two arms are handed the
+  same sources, so they *are* one box, and `select-same` is the whole
+  of it.
 
-Don't look for rules for these; there is nothing to fire. Likewise some
-facts that look primitive are consequences: `push c ; copy(1) = push c ;
-push c` is `dedup` read backward, discarded work vanishes under
-`dead-node`, and `branch { A } { A } = drop-top ; A` is `dedup`, then
-`select-same`, then `dead-node`.
+There used to be five rows here — `id-elim`, `swap-elim`, `copy-elim`,
+`dead-node` and `dedup` — and a driver that spent them before the value
+layer could reach anything. They are gone, and the change is not that
+they became unnecessary but that they became **unstatable**: there is no
+graph for either side of them to be.
 
-## The three driven lists
+## The two driven lists
 
-Three lists group the rows a driver can run to fixpoint — every row on
-them **shrinks** a graph, which is what makes running dry safe:
+Two lists group the rows a driver can run to fixpoint:
 
 | list | rows | what they are |
 |---|---|---|
-| `structural` | `dead-node`, `id-elim`, `swap-elim`, `copy-elim`, `dedup` | wiring facts — they move boxes without asking what any box computes |
 | `branching` | `select-literal`, `select-same`, `specialize-equal`, `specialize-bool`, `specialize-choice` | the branch layer, every row stated at the `select` |
 | `folding` | `fold`, `tested-bool`, `as-tuple-round-trip`, `retuple`, `is-tuple-built`, `not-not`, `and-literal`, `tuple-cancel`, `as-tuple-built`, `equal-refl` | the value layer — what specific instructions compute, with the machine as the judge |
 
-The `decide` drive — what the `diagram` closer runs — spends all three
-lists to fixpoint. Five rows are on **no** list at all: `promised-bool`,
+The `decide` drive — what the `diagram` closer runs — spends both lists
+to fixpoint. Five rows are on **no** list at all: `promised-bool`,
 `shannon`, `select-hoist`, `as-bool-branch` and `coercion-guard`. Each is
 held out on purpose, and a proof names the one it wants — `fire(law)`,
 `at(#box, law)` — the way it names `inline`.
-
-## Structural laws (`structural`)
-
-| law | statement |
-|---|---|
-| `id-elim` | `id(n)` is a wire: its readers read what it read. |
-| `swap-elim` | a crossing is not recorded: the two lines cross by being re-pointed. |
-| `copy-elim` | `copy(n)` is a port read twice. The one structural rule that grows a port's readers; read backward, it is how a copy is introduced. |
-| `dead-node` | a box nothing reads is deleted, its input links with it. This is also `drop`-elimination: a `drop(n)` has no outputs, so it is always dead. |
-| `dedup` | two boxes of one kind reading one set of sources are one box read twice. Every kind, `select` included. This is also what makes "the same operation in both arms is one operation" nothing special: once `copy-elim` has run, both arms read the one port, so the two boxes are two boxes on one set of sources like any other pair. |
-
-Side conditions are carried by the interface rather than tested:
-`dead-node`'s pattern has no boundary outputs, so a match only exists
-where every port of the box is unread. Nothing asks "is this dead" — a
-match that is not one fails to be a match.
-
-`dead-node` (discarding work) is licensed by totality and purity;
-`dedup` (sharing work) by determinism and purity. See
-[docs/invariants.md](invariants.md) — these licenses are load-bearing.
 
 ## The branch layer (`branching`)
 
@@ -116,15 +104,15 @@ whole graph rather than about a window.
 
 | law | statement |
 |---|---|
-| `select-literal` | β: `push c ; if { T } else { E }` = the blocks `truthy(c)` chooses. Sound on **every** value, not only bools: `truthy` is total, `false` the one falsy value. The untaken arm is outside the window: its boxes lose their reader when the select goes, and `dead-node` collects them. |
+| `select-literal` | β: `push c ; if { T } else { E }` = the blocks `truthy(c)` chooses. Sound on **every** value, not only bools: `truthy` is total, `false` the one falsy value. The untaken arm is outside the window: its boxes lose their reader when the select goes, and a box the boundary no longer reaches is no longer in the program. |
 | `select-same` | `if c { x } else { x } = x`, one block at a time: a block the select answers with either way is what it answers. The select keeps its other blocks and narrows by one. |
 | `specialize-equal` | a value that tested `equal` to a literal **is** that literal, in the block the test chose: `equal` answers `Bool(a == b)`, so a truthy answer is `a == b` and nothing weaker. |
 | `specialize-bool` | the very value a branch tested, when it is a bool, is what the branch decided: `true` in the then block, `false` in the else block. The window holds the `as_bool` that made the condition — that coercion's presence is what says the condition is a bool at all (a condition of `5` is truthy, and its then block reads `5`, not `true`). `promised-bool` is the row that puts the coercion there. |
 | `specialize-choice` | a branch inside an arm whose condition is the very value the outer branch tested is already decided: its then blocks are read in the outer then arm, its else blocks in the outer else arm — the same value tested twice answers the same. |
 
-Lifting work both arms do out in front is not a row here: both arms read
-the one port once `copy-elim` has run, so two boxes doing the same work
-are two boxes on one set of sources, which is `dedup`.
+Lifting work both arms do out in front is not a row here, and it is not
+a rewrite either: both arms are handed the same sources, so the same
+work done in both is one box from the moment it is written.
 
 ## The value layer (`folding`)
 
@@ -188,9 +176,8 @@ never exporting the answers. `A` rides as payload. Unlike `shannon`,
 nothing is pinned: the condition reaches the moved select untouched, so
 this holds of **any** branch, whatever computed its condition. It is the
 row that lets a branch grow *forwards*. Backwards is free — work in front
-of a branch is shared by both arms as a matter of wiring, and two boxes
-doing it twice are one box by `dedup`; this is the same freedom at the
-other end. It duplicates the region it moves over, so no list drives
+of a branch is shared by both arms as a matter of naming, and doing it
+twice is having it once; this is the same freedom at the other end. It duplicates the region it moves over, so no list drives
 it.
 
 **`as-bool-branch`** — `as_bool` is the branch it is:

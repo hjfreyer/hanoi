@@ -432,7 +432,10 @@ reconstruction, no guard, no imaginary values.
 
 - ~~A way to discharge an `identity`.~~ `bin/prove` does, by checked
   rewriting over program graphs — see [docs/proving.md](proving.md). It
-  inherits the laws this document makes sound, and two of them precisely:
-  totality is what licenses discarding work (`dead-node`, and every
-  branch's untaken arm), and determinism is what licenses sharing it
-  (`dedup`). See [docs/invariants.md](invariants.md).
+  inherits the licenses this document makes sound, and two of them
+  precisely: totality is what lets a graph forget work nothing reads
+  (including every branch's untaken arm), and determinism is what lets
+  one box stand for a computation however many readers it has. Neither
+  is a law that fires — both are properties of the representation — and
+  that is exactly why the licenses have to be stated somewhere. See
+  [docs/invariants.md](invariants.md).

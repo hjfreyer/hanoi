@@ -23,6 +23,14 @@ impl PartialEq for Symbol {
     }
 }
 
+/// Hashed by what it is equal by, which is the id alone — `path` is
+/// carried for printing and takes no part in either.
+impl std::hash::Hash for Symbol {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.id.hash(state);
+    }
+}
+
 /// Represents any value that can be operated on or stored by the VM.
 ///
 /// Equality here is structural **identity**: two values compare equal exactly
@@ -30,7 +38,7 @@ impl PartialEq for Symbol {
 /// derivable, and it is what [`crate::opcode::Instruction::Equal`] means.
 /// Floats were the one exception — `0.0 == -0.0` on two values that stay
 /// distinguishable — and they are gone.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub enum Value {
     /// A boolean value (true or false).
     Bool(bool),

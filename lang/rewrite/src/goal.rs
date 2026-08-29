@@ -656,12 +656,11 @@ mod tests {
         use crate::diagram2::rules::Rule;
         use crate::graph::{Direction, Match};
         Step {
-            rule: Rule::SwapElim,
+            rule: Rule::EqualRefl,
             dir: Direction::Forward,
             at: Match {
                 nodes: Vec::new(),
                 inputs: Vec::new(),
-                outputs: Vec::new(),
             },
         }
     }

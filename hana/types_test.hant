@@ -10,4 +10,7 @@
 // leaf folds on the machine. All the proof has left to say is the one thing
 // the engine never does on its own — spend the definitions.
 proof types_test::number_does_pre_and_post_is_constant =
-    inline both(decide) cases(equal) both(decide) cases(equal) diagram;
+    inline both(decide)
+    cases(equal(types_test::t1)) both(decide)
+    cases(equal(types_test::t2)) both(decide)
+    diagram;
