@@ -31,7 +31,7 @@
 //! | `cases(op)` | **case analysis** on an intermediate result: an `op` answer is `true` or `false` and nothing else, so everything depending on it becomes a branch holding one copy per case, the assumption pasted in as a literal — one checked rewrite per side, simplified under each assumption by the ordinary laws | no side computes `op`, or nothing depends on its answer |
 //! | `cases(is_tuple n)` | the same, on the one test that takes an operand: `is_tuple` asks whether a value is a tuple at all and `is_tuple n` whether it is one of exactly that width, and they are two questions | likewise |
 //! | `cases(op) (true: s, false: s)` | the same split, with a sub-strategy per case: each runs with its rewrites scoped to its side of the fresh branch — the hypothesis, spent as the structure it is. An arm holds side rewrites and nested `cases`; either is omissible, and a side whose branch is already gone skips its arm quietly | the split fails, or an arm's tactic does — and the residual names whose case it stood in |
-//! | `diagram` | rewrites both sides by the whole table to fixpoint; they land on one diagram — isomorphic — or they do not | they do not — and the residual is both sides read back, narrowed to the difference |
+//! | `diagram` | rewrites both sides by the whole table to fixpoint; they land on one diagram — isomorphic — or they do not | they do not — and the residual is both sides as the diagrams they came to |
 //!
 //! `diagram`, `exact` and `via` end a strategy — the goal is closed or
 //! split, and what follows a split is written *inside* it, since the
@@ -161,18 +161,19 @@
 //!
 //! `peel` and `descend` are retired, not aliased. Both read the goal as
 //! a term — a compose spine to strip, a branch node to descend into — and a graph
-//! goal has neither: what they narrowed for the report, the residual's own
-//! narrowing still does, and what `descend` proved arm by arm is the
-//! branch layer's to rewrite. A proof that names them fails loudly.
+//! goal has neither: what they narrowed for the report, the listing does
+//! by writing a branch as the block it is, and what `descend` proved arm
+//! by arm is the branch layer's to rewrite. A proof that names them fails
+//! loudly.
 //!
 //! Entries are checked both ways: an entry naming no stated identity is an
 //! error (a renamed identity must not silently shed its proof), and a claim
 //! discharged twice was discharged once too often.
 //!
 //! A body — a `via` waypoint — is a **term**, in the language
-//! [`crate::term`] prints and [`crate::parse`] reads: the same language a
-//! residual is reported in, so answering a stuck goal is copying and
-//! editing rather than translating. `call name` names a sentence, and
+//! [`crate::term`] prints and [`crate::parse`] reads, rather than in
+//! Hana's: it says what it means, and a residual's boxes are written in
+//! the same vocabulary. `call name` names a sentence, and
 //! nothing pads — `id(k) * A` is written where a Hana sentence would have
 //! inferred it.
 
@@ -253,7 +254,7 @@ pub enum Step<V> {
     /// Claim the two sides are one diagram — isomorphic. The auto-close
     /// tests exactly that before every step, so a reached `exact` is a
     /// failed claim, and its whole job is the report: the goal exactly as
-    /// it stands, un-normalized, un-narrowed — the way to *see* one.
+    /// it stands, with nothing normalized away — the way to *see* one.
     /// `exact` alone shows the identity as built and aligned, and after a
     /// manipulation it shows what the manipulation left.
     Exact,

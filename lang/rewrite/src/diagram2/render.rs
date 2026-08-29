@@ -7,18 +7,18 @@
 //! facts and orders them so a person can follow the program, which is a
 //! different job and is worth its own code.
 //!
-//! The report used to be the goal read back as a *term*, and a term is the
-//! wrong shape for it twice over. A graph is a DAG and a term is a spine, so
-//! [`read_back`](super::read_back) has to reimpose a stack and pay for it in
+//! The report used to be the goal turned back into a *term*, and a term is
+//! the wrong shape for it twice over. A graph is a DAG and a term is a
+//! spine, so anything writing one has to reimpose a stack and pay for it in
 //! routing; and a term has no name for a box, so two consecutive steps of a
 //! proof cannot be compared. A [`NodeId`] is stable for the life of a graph —
 //! nodes are only ever deleted, never moved — so a listing keyed by one is a
 //! diff, and "31 boxes went, the branches are gone" is a sentence about what
 //! a tactic did.
 //!
-//! The term has not gone anywhere. It is the language a `via` waypoint is
-//! written in, so a stuck goal still prints one to copy from; this is what
-//! is printed to *understand* the goal, and that is the split.
+//! So this is the only reading of a stuck goal, and the term language is
+//! left to what it is for: stating a claim, and writing a `via` waypoint by
+//! hand off the boxes a listing names.
 //!
 //! ## A branch is a block
 //!
@@ -57,10 +57,9 @@
 //! guess from what happens to sit between two lines, and an arm that
 //! reaches out of itself still reads as an arm.
 //!
-//! **A branch's boxes come out as one run.** The schedule
-//! [`read_back`](super::read_back) uses is min-id-first, which is
-//! topological and nothing else: it hoists the constants an arm pushes out
-//! of the arm, and the arm stops reading as a unit. Nor is a greedy "stay
+//! **A branch's boxes come out as one run.** A plain min-id-first schedule
+//! is topological and nothing else: it hoists the constants an arm pushes
+//! out of the arm, and the arm stops reading as a unit. Nor is a greedy "stay
 //! where you are" enough — preferring the ready box that shares the most
 //! branches with the last one *leaves* a region whenever nothing inside it
 //! is ready, and comes back later, which is what makes an `if` and its

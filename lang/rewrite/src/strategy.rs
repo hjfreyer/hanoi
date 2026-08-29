@@ -25,12 +25,12 @@
 //! [`Derivation::push`](crate::diagram2::rules::Derivation::push): the
 //! whole file is untrusted convenience over the table.
 //!
-//! A stuck goal's residual is **narrowed** for the report — the two sides
-//! read back into terms, shared affixes stripped, the differing arm
-//! entered — because when the engine says no, where the difference lives
-//! is the thing worth printing. A stuck *tactic* reports the goal as it
-//! now stands: a failed run leaves its graph at the last step that landed,
-//! and showing that state is the point of the guarantee.
+//! A stuck goal's residual is **both sides as graphs**, plus the steps of
+//! the strategy that holds it: when the engine says no, what it acted on
+//! is the thing worth printing, and a box in it keeps the id a next step
+//! would name. A stuck *tactic* reports the goal as it now stands: a
+//! failed run leaves its graph at the last step that landed, and showing
+//! that state is the point of the guarantee.
 
 use std::collections::HashSet;
 
@@ -40,11 +40,11 @@ use bytecode::{IdentityIndex, Library};
 
 use crate::diagram2::rules::{self, Derivation, Law};
 use crate::diagram2::tactic::{Region, Tactic};
-use crate::diagram2::{self, read_back, tactic};
+use crate::diagram2::{self, tactic};
 use crate::goal::{Goal, Outcome, Proof, Residual, against};
 use crate::graph::{self, Direction, Graph, Match, NodeId, NodeKind, Pair, Source};
 use crate::hant::{Body, OnSide, Step, Strategy, default_strategy};
-use crate::term::{Context, Error, Prim, Term, TermIndex};
+use crate::term::{Context, Error, Prim};
 
 /// One side of a goal, picked out for a mutation that borrows it alone.
 type Pick = fn(&mut Goal) -> &mut Graph;
@@ -168,7 +168,7 @@ impl<'l> Prover<'l> {
                  accepted on its word: {}",
                 why
             );
-            return Ok(Outcome::Stuck(gave_up(ctx, &stated, &why)));
+            return Ok(Outcome::Stuck(gave_up(&stated, &why)));
         }
         Ok(outcome)
     }
@@ -188,7 +188,6 @@ impl<'l> Prover<'l> {
         }
         let Some((head, rest)) = strategy.split_first() else {
             return Ok(Outcome::Stuck(gave_up(
-                ctx,
                 &goal,
                 "the strategy ended with the goal still open",
             )));
@@ -198,9 +197,8 @@ impl<'l> Prover<'l> {
             // they land on one diagram or the claim is beyond the table.
             // Every rewrite is an instance of a named law checked by
             // `rules::apply`, so the closer's verdict is a derivation's
-            // worth of checked steps and one isomorphism. The residual
-            // reads back what each side became, narrowed to where they
-            // differ.
+            // worth of checked steps and one isomorphism. The residual is
+            // what each side became.
             Step::Diagram => {
                 let mut goal = goal;
                 let mut spent: [Vec<diagram2::rules::Step>; 2] = [Vec::new(), Vec::new()];
@@ -209,7 +207,7 @@ impl<'l> Prover<'l> {
                     let mut deriv = diagram2::rules::Derivation::default();
                     if let Err(e) = tactic::run(pick(&mut goal), &mut deriv, &tactic::decide()) {
                         let why = format!("`diagram`'s drive failed: {}", e);
-                        return Ok(Outcome::Stuck(gave_up(ctx, &goal, &why)));
+                        return Ok(Outcome::Stuck(gave_up(&goal, &why)));
                     }
                     *record = deriv.steps().cloned().collect();
                 }
@@ -217,19 +215,11 @@ impl<'l> Prover<'l> {
                     let [lhs, rhs] = spent;
                     return Ok(Outcome::Closed(Proof::Diagram { lhs, rhs }));
                 }
-                let (l, r) = (read_back(&goal.lhs, ctx), read_back(&goal.rhs, ctx));
-                let (mut path, lhs, rhs) = narrow(ctx, l, r);
-                path.insert(0, "as diagrams".to_string());
-                Ok(Outcome::Stuck(Residual {
-                    lhs_graph: goal.lhs.clone(),
-                    rhs_graph: goal.rhs.clone(),
-                    lhs,
-                    rhs,
-                    path,
-                    stopped: "the two sides rewrite to different diagrams: the claim is \
-                              false, or true only for reasons the table cannot yet say"
-                        .to_string(),
-                }))
+                Ok(Outcome::Stuck(gave_up(
+                    &goal,
+                    "the two sides rewrite to different diagrams: the claim is \
+                     false, or true only for reasons the table cannot yet say",
+                )))
             }
 
             // Case analysis on an intermediate result, as a checked
@@ -292,14 +282,12 @@ impl<'l> Prover<'l> {
             // A goal whose sides are one graph closed above, before any
             // step ran — so an `exact` that is reached is an `exact` whose
             // claim is false, and its whole job is the report: the goal
-            // exactly as it stands, no normalization to reshape it and no
-            // narrowing to walk into it. That unaltered residual is what
-            // the step is usually written for — `exact` alone shows the
-            // identity as built and aligned, and after a manipulation it
-            // shows what the manipulation left, in the language a waypoint
-            // is written in.
+            // exactly as it stands, with no normalization to reshape it.
+            // That unaltered residual is what the step is usually written
+            // for — `exact` alone shows the identity as built and aligned,
+            // and after a manipulation it shows what the manipulation
+            // left, box by box.
             Step::Exact => Ok(Outcome::Stuck(gave_up(
-                ctx,
                 &goal,
                 "`exact` claims the sides are one graph, and they are not",
             ))),
@@ -323,7 +311,7 @@ impl<'l> Prover<'l> {
                         Ok(_) => spent[at] = deriv.steps().cloned().collect(),
                         Err(e) => {
                             let why = format!("`{}(…)`: {}", side.word(), e);
-                            return Ok(Outcome::Stuck(gave_up(ctx, &goal, &why)));
+                            return Ok(Outcome::Stuck(gave_up(&goal, &why)));
                         }
                     }
                 }
@@ -362,7 +350,6 @@ impl<'l> Prover<'l> {
             Step::By { side, of } => {
                 let Body::Lemma(idx) = *of else {
                     return Ok(Outcome::Stuck(gave_up(
-                        ctx,
                         &goal,
                         "`by` was handed something that is not an identity",
                     )));
@@ -375,7 +362,7 @@ impl<'l> Prover<'l> {
                         side.word(),
                         name
                     );
-                    return Ok(Outcome::Stuck(gave_up(ctx, &goal, &why)));
+                    return Ok(Outcome::Stuck(gave_up(&goal, &why)));
                 };
                 // Expanding costs the claim's own run at every use, and it
                 // needs one: a claim proved by meeting in the middle, or by a
@@ -393,7 +380,7 @@ impl<'l> Prover<'l> {
                                 name,
                                 why
                             );
-                            return Ok(Outcome::Stuck(gave_up(ctx, &goal, &why)));
+                            return Ok(Outcome::Stuck(gave_up(&goal, &why)));
                         }
                     },
                 };
@@ -417,7 +404,7 @@ impl<'l> Prover<'l> {
                             side.word(),
                             name
                         );
-                        return Ok(Outcome::Stuck(gave_up(ctx, &goal, &why)));
+                        return Ok(Outcome::Stuck(gave_up(&goal, &why)));
                     };
                     let outcome = match carried {
                         None => lemma
@@ -433,7 +420,7 @@ impl<'l> Prover<'l> {
                         Ok(steps) => spent[at] = steps,
                         Err(e) => {
                             let why = format!("`{}(by {})`: {}", side.word(), name, e);
-                            return Ok(Outcome::Stuck(gave_up(ctx, &goal, &why)));
+                            return Ok(Outcome::Stuck(gave_up(&goal, &why)));
                         }
                     }
                     found[at] = Some(here);
@@ -484,7 +471,7 @@ impl<'l> Prover<'l> {
                         ctx.arity(waypoint).net(),
                         goal.lhs.arity().net()
                     );
-                    return Ok(Outcome::Stuck(gave_up(ctx, &goal, &why)));
+                    return Ok(Outcome::Stuck(gave_up(&goal, &why)));
                 }
                 // Two goals, fully independent from here: each side takes its
                 // own road, and proving both proves the whole by transitivity.
@@ -548,7 +535,7 @@ impl<'l> Prover<'l> {
                             self.library.names[idx]
                         ),
                     };
-                    return Ok(Outcome::Stuck(gave_up(ctx, &goal, &why)));
+                    return Ok(Outcome::Stuck(gave_up(&goal, &why)));
                 }
                 let name = only.map(|idx| self.library.names[idx].clone());
                 Ok(match self.run(ctx, rest, goal)? {
@@ -625,7 +612,7 @@ impl<'l> Prover<'l> {
             };
             if let Err(e) = derivs[i].push(side, split) {
                 let why = format!("`cases` proposed a split the checker refused: {}", e);
-                return Err(Box::new(gave_up(ctx, goal, &why)));
+                return Err(Box::new(gave_up(goal, &why)));
             }
             // The Shannon replacement adds its select last, so the
             // introduced branch is the last select the recorded inverse
@@ -647,7 +634,6 @@ impl<'l> Prover<'l> {
         }
         if branches.iter().all(Option::is_none) {
             return Err(Box::new(gave_up(
-                ctx,
                 goal,
                 "`cases` finds nothing to split on: no side holds the operation \
                  with anything downstream of its answer",
@@ -714,7 +700,7 @@ impl<'l> Prover<'l> {
                         let mark = derivs[i].len();
                         if let Err(e) = tactic::run(graph, &mut derivs[i], &wrapped) {
                             let why = format!("`{}(…)`: {}", side.word(), e);
-                            let mut residual = gave_up(ctx, goal, &why);
+                            let mut residual = gave_up(goal, &why);
                             stood_in(&mut residual);
                             return Err(Box::new(residual));
                         }
@@ -836,153 +822,28 @@ fn outermost(
 }
 
 /// A residual for a strategy that failed before any engine ran: the goal as
-/// it stands — read back into the term language a report is written in —
-/// and why the step gave up. For a failed tactic "as it stands" is the
-/// point: the graph reflects the last rewrite that landed.
-fn gave_up(ctx: &mut Context, goal: &Goal, why: &str) -> Residual {
+/// it stands, and why the step gave up. For a failed tactic "as it stands"
+/// is the point: the graph reflects the last rewrite that landed.
+fn gave_up(goal: &Goal, why: &str) -> Residual {
     Residual {
         lhs_graph: goal.lhs.clone(),
         rhs_graph: goal.rhs.clone(),
-        lhs: read_back(&goal.lhs, ctx),
-        rhs: read_back(&goal.rhs, ctx),
         path: Vec::new(),
         stopped: why.to_string(),
     }
-}
-
-// ---- narrowing a residual ---------------------------------------------------
-
-/// Localizes a stuck goal's difference: strips what the two compose spines
-/// share at either end, and descends into a branch pair whose *other* arm
-/// already matches, until neither move applies. The path records each step,
-/// so the report can say "the difference is inside the then arm" instead of
-/// printing two whole terms.
-///
-/// Sound for pointing (any remaining difference must live inside what is
-/// kept), and only for pointing: the narrowed pair may be equal for reasons
-/// the stripped context supplied.
-fn narrow(
-    ctx: &mut Context,
-    lhs: TermIndex,
-    rhs: TermIndex,
-) -> (Vec<String>, TermIndex, TermIndex) {
-    let mut path = Vec::new();
-    let (mut lhs, mut rhs) = (lhs, rhs);
-    loop {
-        if let Some(((l, r), prefix, suffix)) = peel(ctx, lhs, rhs) {
-            path.push(match (prefix, suffix) {
-                (p, 0) => format!("past {} shared leading part(s)", p),
-                (0, s) => format!("before {} shared trailing part(s)", s),
-                (p, s) => format!("between {} shared leading and {} trailing part(s)", p, s),
-            });
-            (lhs, rhs) = (l, r);
-            continue;
-        }
-        if let (
-            &Term::Branch {
-                if_true: t1,
-                if_false: e1,
-            },
-            &Term::Branch {
-                if_true: t2,
-                if_false: e2,
-            },
-        ) = (ctx.get(lhs), ctx.get(rhs))
-        {
-            let (thens, elses) = (ctx.equal(t1, t2), ctx.equal(e1, e2));
-            if thens && !elses {
-                path.push("in the else arm".to_string());
-                (lhs, rhs) = (e1, e2);
-                continue;
-            }
-            if elses && !thens {
-                path.push("in the then arm".to_string());
-                (lhs, rhs) = (t1, t2);
-                continue;
-            }
-        }
-        return (path, lhs, rhs);
-    }
-}
-
-/// Strips what the two compose spines share at either end. Answers the
-/// narrowed pair and how much went, or `None` when nothing does. Report
-/// machinery: it reads the *terms* a residual is written in, and the goal
-/// itself never comes here.
-fn peel(
-    ctx: &mut Context,
-    l: TermIndex,
-    r: TermIndex,
-) -> Option<((TermIndex, TermIndex), usize, usize)> {
-    let lhs = spine(ctx, l);
-    let rhs = spine(ctx, r);
-
-    let prefix = lhs
-        .iter()
-        .zip(&rhs)
-        .take_while(|(a, b)| ctx.equal(**a, **b))
-        .count();
-    // Never peel a whole side away twice over: if the spines are equal the
-    // pair was trivial, and the caller handled it.
-    let rest = lhs.len().min(rhs.len()) - prefix;
-    let suffix = lhs
-        .iter()
-        .rev()
-        .zip(rhs.iter().rev())
-        .take(rest)
-        .take_while(|(a, b)| ctx.equal(**a, **b))
-        .count();
-    if prefix + suffix == 0 {
-        return None;
-    }
-
-    // The width flowing across the cut, read off the last stripped part.
-    let boundary = if prefix > 0 {
-        ctx.arity(lhs[prefix - 1]).outputs
-    } else {
-        ctx.arity(l).inputs
-    };
-    let narrowed = (
-        rebuild(ctx, &lhs[prefix..lhs.len() - suffix], boundary),
-        rebuild(ctx, &rhs[prefix..rhs.len() - suffix], boundary),
-    );
-    Some((narrowed, prefix, suffix))
-}
-
-/// A term's compose spine, outermost first: the flattening of `;`.
-fn spine(ctx: &Context, term: TermIndex) -> Vec<TermIndex> {
-    fn walk(ctx: &Context, term: TermIndex, out: &mut Vec<TermIndex>) {
-        match ctx.get(term) {
-            &Term::Compose(a, b) => {
-                walk(ctx, a, out);
-                walk(ctx, b, out);
-            }
-            _ => out.push(term),
-        }
-    }
-    let mut out = Vec::new();
-    walk(ctx, term, &mut out);
-    out
-}
-
-/// A spine segment back as a term; an empty segment is the identity on the
-/// width that flowed across it.
-///
-/// The parts are pointed at rather than copied: what a peel keeps is the same
-/// subterms the goal was already made of.
-fn rebuild(ctx: &mut Context, parts: &[TermIndex], width_if_empty: usize) -> TermIndex {
-    let Some((first, rest)) = parts.split_first() else {
-        return ctx.id(width_if_empty);
-    };
-    rest.iter()
-        .fold(*first, |acc, next| ctx.push(Term::Compose(acc, *next)))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::hant::parse_hant;
-    use bytecode::assemble;
+    use bytecode::{Value, assemble};
+
+    /// The live boxes of a graph, in id order: what a residual's side is,
+    /// checked without going through the listing that prints it.
+    fn kinds(graph: &Graph) -> Vec<NodeKind> {
+        graph.live().map(|(_, kind)| kind.clone()).collect()
+    }
 
     /// Proves the identity named `name`, with the strategy written as a
     /// `.hant` entry body, or the default when `strategy` is `None` —
@@ -1071,24 +932,29 @@ mod tests {
     fn a_failed_exact_reports_the_goal_untouched() {
         // `is_bool ; is_bool` = `drop 0 ; push true` is provable — `diagram`
         // closes it — but `exact` claims more, fails, and shows the goal
-        // exactly as it stands: no normalization, no narrowing. That
+        // exactly as it stands: no normalization, nothing spent. That
         // unaltered residual is what the step is for.
-        let (ctx, outcome) = prove_with(
+        let (_ctx, outcome) = prove_with(
             "identity probe { is_bool is_bool } = { drop 0 push true };",
             "probe",
             Some("exact"),
         );
         let Outcome::Stuck(residual) = outcome else {
-            panic!("the sides are not one term as written");
+            panic!("the sides are not one graph as written");
         };
         assert!(residual.stopped.contains("`exact`"), "{}", residual.stopped);
         assert_eq!(
-            format!("{}", ctx.display(residual.lhs)),
-            "is_bool ; is_bool"
+            kinds(&residual.lhs_graph),
+            vec![NodeKind::Op(Prim::IsBool), NodeKind::Op(Prim::IsBool)],
+            "the left is the two tests it was written as"
         );
         assert_eq!(
-            format!("{}", ctx.display(residual.rhs)),
-            "drop(1) ; push true"
+            kinds(&residual.rhs_graph),
+            vec![
+                NodeKind::Drop(1),
+                NodeKind::Op(Prim::Push(Value::Bool(true)))
+            ],
+            "the right is the drop and the literal it was written as"
         );
         assert!(residual.path.is_empty());
     }
@@ -1191,10 +1057,10 @@ mod tests {
 
     /// A failed tactic reports the goal **as it now stands** — the fatal
     /// failure left the graph at the last rewrite that landed, and the
-    /// residual reads that state back.
+    /// residual carries that state.
     #[test]
     fn a_stuck_tactic_shows_the_goal_standing() {
-        let (ctx, outcome) = prove_with(
+        let (_ctx, outcome) = prove_with(
             "identity probe { push 1 push 1 add } = { push 2 };",
             "probe",
             Some("lhs(fire(dedup) fire(tuple-cancel)) exact"),
@@ -1207,11 +1073,25 @@ mod tests {
             "{}",
             residual.stopped
         );
-        // The dedup landed and stands: one literal read twice, which the
-        // read-back spells as the copy it is.
-        let lhs = format!("{}", ctx.display(residual.lhs));
-        assert!(lhs.contains("copy(1)"), "{}", lhs);
-        assert_eq!(lhs.matches("push 1").count(), 1, "{}", lhs);
+        // The dedup landed and stands: the two literals became one box,
+        // and the `add` and the second reader both read its port.
+        let graph = &residual.lhs_graph;
+        let pushes: Vec<NodeId> = graph
+            .live()
+            .filter(|(_, kind)| matches!(kind, NodeKind::Op(Prim::Push(Value::Int(1)))))
+            .map(|(id, _)| id)
+            .collect();
+        assert_eq!(pushes.len(), 1, "the two literals are one:\n{}", graph);
+        let port = Source::Port {
+            node: pushes[0],
+            port: 0,
+        };
+        assert_eq!(
+            graph.sinks(port).len(),
+            2,
+            "the one literal is read twice:\n{}",
+            graph
+        );
     }
 
     #[test]
@@ -1279,7 +1159,7 @@ mod tests {
 
     #[test]
     fn a_swapped_goal_that_sticks_says_which_way_round_it_is() {
-        let (ctx, outcome) = prove_with(
+        let (_ctx, outcome) = prove_with(
             "identity probe { push 1 } = { push 2 };",
             "probe",
             Some("symm diagram"),
@@ -1292,7 +1172,12 @@ mod tests {
             "{:?}",
             residual.path
         );
-        assert_eq!(format!("{}", ctx.display(residual.lhs)), "push 2");
+        assert_eq!(
+            kinds(&residual.lhs_graph),
+            vec![NodeKind::Op(Prim::Push(Value::Int(2)))],
+            "`symm` swapped the sides, so the left is what the goal stated \
+             on the right"
+        );
     }
 
     #[test]
@@ -1333,7 +1218,7 @@ mod tests {
 
     #[test]
     fn a_false_goal_reports_a_residual() {
-        let (ctx, outcome) = prove_identity("identity probe { push 1 } = { push 2 };", "probe");
+        let (_ctx, outcome) = prove_identity("identity probe { push 1 } = { push 2 };", "probe");
         let Outcome::Stuck(residual) = outcome else {
             panic!("push 1 is not push 2");
         };
@@ -1342,37 +1227,13 @@ mod tests {
             "{}",
             residual.stopped
         );
-        assert_eq!(format!("{}", ctx.display(residual.lhs)), "push 1");
-        assert_eq!(format!("{}", ctx.display(residual.rhs)), "push 2");
-    }
-
-    #[test]
-    fn a_stuck_goal_names_where_the_difference_lives() {
-        // A false claim buried behind shared context: the residual strips
-        // what the two read-backs share rather than printing two whole
-        // terms. (The read-back spells a branch flat, so the narrowing
-        // peels the shared spelling rather than entering an arm.)
-        let (ctx, outcome) = prove_identity(
-            "identity probe { drop 0 branch { drop 0 push 1 } { not } } = { drop 0 branch { drop 0 push 2 } { not } };",
-            "probe",
+        assert_eq!(
+            kinds(&residual.lhs_graph),
+            vec![NodeKind::Op(Prim::Push(Value::Int(1)))]
         );
-        let Outcome::Stuck(residual) = outcome else {
-            panic!("the arms differ");
-        };
-        assert!(
-            residual.path.iter().any(|step| step.contains("shared")),
-            "{:?}",
-            residual.path
-        );
-        assert!(
-            format!("{}", ctx.display(residual.lhs)).contains("push 1"),
-            "{}",
-            ctx.display(residual.lhs)
-        );
-        assert!(
-            format!("{}", ctx.display(residual.rhs)).contains("push 2"),
-            "{}",
-            ctx.display(residual.rhs)
+        assert_eq!(
+            kinds(&residual.rhs_graph),
+            vec![NodeKind::Op(Prim::Push(Value::Int(2)))]
         );
     }
 

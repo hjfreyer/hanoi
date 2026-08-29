@@ -480,16 +480,14 @@ pub(crate) fn against(ctx: &mut Context, side: &Graph, waypoint: TermIndex) -> (
     }
 }
 
-/// What is left when a goal did not close: what each side became, twice
-/// over — as the graphs the tactics left, and as terms narrowed to where
-/// the two differ.
+/// What is left when a goal did not close: what each side became, as the
+/// graphs the tactics left.
 ///
-/// Both, because the two answer different questions. The graphs are what
-/// there is to *read*: they are what a step acted on, they carry the boxes
-/// a next step would name, and a box's id is stable across a step so two
-/// reports of one proof can be compared. The terms are what there is to
-/// *write*: a `via` waypoint is a term, so the report hands back one in the
-/// language the answer is written in.
+/// A graph is what there is to read: it is what a step acted on, it carries
+/// the boxes a next step would name, and a box's id is stable across a step
+/// so two reports of one proof can be compared. There is no term here — the
+/// translation runs one way, and a graph is answered by naming its boxes,
+/// not by being spelled back out.
 ///
 /// This output is the deliverable of a failed run — it is what says what to
 /// try next, so it is kept as data rather than printed on the spot.
@@ -501,14 +499,8 @@ pub struct Residual {
     /// [`render`](crate::diagram2::render).
     pub lhs_graph: Graph,
     pub rhs_graph: Graph,
-    /// The same two sides read back as terms, narrowed to the difference.
-    /// This is what a stuck goal is *answered* with: a `via` waypoint is
-    /// written in the term language, so the report prints one to copy and
-    /// edit rather than to translate.
-    pub lhs: TermIndex,
-    pub rhs: TermIndex,
-    /// How the report walked from the goal to the difference: each step of
-    /// stripping shared context or entering the one arm that differs.
+    /// How the report walked from the goal as stated to the one that stuck:
+    /// each step of the strategy that holds it, outermost first.
     pub path: Vec<String>,
     /// Why the step gave up.
     pub stopped: String,

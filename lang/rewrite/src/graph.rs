@@ -7,8 +7,8 @@
 //! and leaves, what reads what, whether it holds together, and whether
 //! another graph is the same diagram. It knows nothing about terms, laws,
 //! tactics or proofs; the traffic in that direction is all diagram2's, which
-//! [`build`](crate::diagram2::build)s one from a term and
-//! [`read_back`](crate::diagram2::read_back)s one out again.
+//! [`build`](crate::diagram2::build)s one from a term and never turns one
+//! back.
 //!
 //! Nothing here is generic, and that is deliberate. A [`NodeKind`] is a
 //! Hanoi [`Prim`], a call into a Hanoi library, or one of the structural
@@ -59,8 +59,7 @@
 //! loop, and what it answers with is the run said in the host's coordinates
 //! — a proof about the host, replayable on its own.
 
-use std::cmp::Reverse;
-use std::collections::{BinaryHeap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 
 use bytecode::SentenceIndex;
@@ -147,9 +146,9 @@ pub enum NodeKind {
     /// condition holds and input `1 + n + i` otherwise.
     ///
     /// The condition sits at the *bottom* rather than on top, where the
-    /// term puts it, so a rule that wants it finds it at port 0, and
-    /// [`read_back`](crate::diagram2::read_back) pays for it by hoisting
-    /// the wire before it writes the `branch`.
+    /// term puts it, so a rule that wants it finds it at port 0. What the
+    /// term language spends a hoist on, the graph is free to say directly:
+    /// a port is named, not reached past.
     ///
     /// The arms are not in here. They are ordinary boxes upstream of the
     /// blocks, fed by a plain `copy(n)` that `copy-elim` deletes like any
@@ -1679,9 +1678,17 @@ pub fn find_over(graph: &Graph, pattern: &Graph, host: NodeId) -> Vec<Match> {
 // ---- an order to run them in -----------------------------------------------------
 
 /// The live nodes in an order that runs producers first, smallest id first
-/// among those ready — which is roughly the order they were built in, so
-/// the term that comes out reads like the term that went in.
+/// among those ready — which is roughly the order they were built in.
+///
+/// Only an evaluator wants this: a graph says what depends on what and
+/// nothing about when, so running one means picking an order, and any
+/// topological one gives the same answers. Nothing in the engine needs it
+/// — rewriting is local — which is why this is test-only.
+#[cfg(test)]
 pub(crate) fn schedule(graph: &Graph) -> Vec<NodeId> {
+    use std::cmp::Reverse;
+    use std::collections::BinaryHeap;
+
     let mut waiting: HashMap<NodeId, usize> = graph
         .live()
         .map(|(id, _)| {

@@ -11,10 +11,11 @@
 //!
 //! The graph itself is [`crate::graph`] — boxes, the links between them,
 //! well-formedness, and whether two of them are the same diagram. What is
-//! here is everything that knows a graph came from a *term* and is headed
-//! back to one: [`build`] writes one, [`read_back`] reads one out,
-//! [`inline`] opens a call in place, and [`rules`] and [`tactic`] are the
-//! table and the driving of it.
+//! here is everything that knows a graph came from a *term*: [`build`]
+//! writes one, [`inline`] opens a call in place, and [`rules`] and
+//! [`tactic`] are the table and the driving of it. The translation runs
+//! one way only — a graph is read by [`render`], not turned back into a
+//! term.
 //!
 //! A branch is one box, and its arms are not inside it. A `copy(n)` hands
 //! both arms the stack, both arms are emitted as ordinary boxes, and the
@@ -130,24 +131,18 @@
 //!   with the blocks it chooses, leaving the untaken arm to `dead-node`.
 //!   `rules` says what each row can say and why.
 //!
-//! [`read_back`] is the other half of the translation: a graph is scheduled
-//! onto a stack, and the routing between one step and the next is *layered*
-//! — one `*`-product of `copy`/`id`/`drop` to get the multiplicities right,
-//! then a `*`-product of `swap`s per transposition round to get the order
-//! right. A box is placed where its operands already sit rather than on
-//! top, so the survivors pass either side of it and nothing is dragged up
-//! and put back; `pick 1` comes back as `copy(1) * id(1) ; id(1) * swap`.
-//! That is a choice about legibility and nothing more. What comes back is
-//! not the term it was built from — a branch in particular reads back as
-//! both arms run flat and then a branch that throws one answer away, which
-//! is what the graph now says a branch is.
-
-use std::collections::HashSet;
+//! Nothing translates the other way. A graph is *read* as a graph — see
+//! [`render`], which lays one out as a listing whose lines name the boxes
+//! a next step would name back — and the term a graph came from is not
+//! reconstructed. It could not be the term it was built from anyway: a
+//! branch is flattened into the graph and its arms scheduled like any
+//! other work, so anything reimposing a stack would answer with both arms
+//! run flat and a choice at the end.
 
 use bytecode::{Library, SentenceIndex};
 
-use crate::graph::{Direction, Graph, Match, NodeId, NodeKind, Pair, Source, schedule};
-use crate::term::{Context, Prim, Term, TermIndex, lower};
+use crate::graph::{Direction, Graph, Match, NodeId, NodeKind, Pair, Source};
+use crate::term::{Context, Term, TermIndex, lower};
 
 #[cfg(test)]
 mod meaning;
@@ -301,354 +296,6 @@ pub fn inline(
     }
 }
 
-// ---- reading a graph back as a term ----------------------------------------------
-
-/// The graph as a [`Term`] again.
-///
-/// A graph has no stack, so one has to be reimposed: the nodes are put in a
-/// topological order and run one at a time, with a **routing** step between
-/// them that gathers what the next box reads and lets go of what nothing
-/// wants any more. A [`Source`] is a stable name for a value — one producer
-/// port — which is exactly what a stack slot needs to be keyed by.
-///
-/// Two things keep the result readable, and they are where this differs
-/// from `diagram`'s reify. The routing is **layered**: one `*`-product to
-/// fix the multiplicities, then one per transposition round to fix the
-/// order, instead of a bubble chain per value. And a box is placed **where
-/// its operands already are** rather than on top, so the survivors pass
-/// either side of it and a term written `X * id(1)` comes back as
-/// `X * id(1)` rather than as the roll pair it is equal to.
-///
-/// Both are about legibility. This does not undo [`build`], and a branch is
-/// where that shows plainest — the arms were flattened into the graph and
-/// are scheduled like any other work, so what comes back runs both of them
-/// and then chooses.
-pub fn read_back(graph: &Graph, terms: &mut Context) -> TermIndex {
-    let order = schedule(graph);
-    // What is still wanted at or after each step, the boundary included.
-    let mut wanted: Vec<HashSet<Source>> = vec![HashSet::new(); order.len() + 1];
-    wanted[order.len()] = graph.outputs().iter().copied().collect();
-    for k in (0..order.len()).rev() {
-        let mut set = wanted[k + 1].clone();
-        set.extend(graph.sources(order[k]).iter().copied());
-        wanted[k] = set;
-    }
-
-    let mut steps: Vec<TermIndex> = Vec::new();
-    let mut stack: Vec<Source> = (0..graph.arity().inputs).map(Source::Input).collect();
-    for (k, &id) in order.iter().enumerate() {
-        let sources: Vec<Source> = graph.sources(id).to_vec();
-        let keep: Vec<Source> = stack
-            .iter()
-            .copied()
-            .filter(|src| wanted[k + 1].contains(src))
-            .collect();
-        // Where the box goes. Not the top: a box sits just above whatever
-        // it reads that lies deepest, so one that only touches the middle
-        // of the stack stays in the middle instead of dragging its operands
-        // up and the survivors back down afterwards. Putting everything on
-        // top would mean the same thing and read far worse — `X * id(1)`
-        // would come back as the roll pair it is equal to — and legibility
-        // is the whole of the reason. A box that reads nothing has nothing
-        // to sit above, so it lands on top.
-        let anchor = sources
-            .iter()
-            .filter_map(|src| stack.iter().position(|held| held == src))
-            .min()
-            .unwrap_or(stack.len());
-        let below = stack[..anchor]
-            .iter()
-            .filter(|src| wanted[k + 1].contains(src))
-            .count();
-        let above = keep.len() - below;
-
-        let mut want: Vec<Source> = keep[..below].to_vec();
-        want.extend(sources.iter().copied());
-        want.extend(keep[below..].iter().copied());
-        steps.extend(route(terms, &stack, &want));
-
-        // The survivors pass either side of the box, so a step spans the
-        // whole stack — which is what lets the fold below be a plain
-        // `compose`, and a width mismatch a loud one.
-        let step = box_term(terms, graph.kind(id));
-        let step = terms.under(step, below);
-        let step = if above > 0 {
-            let untouched = terms.id(above);
-            terms.par(step, untouched)
-        } else {
-            step
-        };
-        steps.push(step);
-
-        let mut next: Vec<Source> = keep[..below].to_vec();
-        next.extend(
-            (0..graph.kind(id).arity().outputs).map(|port| Source::Port { node: id, port }),
-        );
-        next.extend(keep[below..].iter().copied());
-        stack = next;
-    }
-    steps.extend(route(terms, &stack, graph.outputs()));
-
-    let mut steps = steps.into_iter();
-    // Nothing to do at all is the identity on the inputs, not on nothing.
-    let Some(first) = steps.next() else {
-        return terms.id(graph.arity().inputs);
-    };
-    let spine = steps.fold(first, |acc, next| {
-        terms
-            .compose(acc, next)
-            .expect("every step spans the whole stack")
-    });
-    settle(terms, spine)
-}
-
-/// The two unit laws, spent on a term the loop above wrote wide on purpose.
-///
-/// Every step it emits spans the whole stack — that is what makes the fold a
-/// plain `compose` and a width mismatch a loud one — and it pays for that by
-/// naming each untouched wire separately: one factor per slot in a routing
-/// layer, and a whole row for a box that is itself an `id`. The width is
-/// load-bearing while the term is being built and pure noise once it is
-/// built, so it comes off here rather than never:
-///
-/// - `id(a) * id(b)` = `id(a + b)`, over the flattened `*`-spine. Taking the
-///   spine as a list rather than pairwise is the whole of it: the products
-///   are left-nested, so `id(3) * swap * id(1) * id(1)` has no adjacent pair
-///   to match on and only merges once the row is a run of factors.
-/// - `id(n) ; t` = `t` = `t ; id(n)`. A row whose box is an `Id` touches
-///   nothing, and a graph out of [`build`] is full of them.
-///
-/// Both laws hold on the nose — this deletes `id` boxes and changes nothing
-/// else, so what comes back builds to the same graph the structural laws
-/// take the original to. Nothing but the report reads a term from here, and
-/// the report is the reason to do it.
-fn settle(terms: &mut Context, term: TermIndex) -> TermIndex {
-    match *terms.get(term) {
-        Term::Par(..) => {
-            let mut factors = Vec::new();
-            flatten_par(terms, term, &mut factors);
-            let mut settled: Vec<TermIndex> = Vec::with_capacity(factors.len());
-            for factor in factors {
-                let factor = settle(terms, factor);
-                match (terms.get(factor), settled.last().map(|&m| terms.get(m))) {
-                    // A wire block of no wires is not a factor.
-                    (Term::Id(0), _) => {}
-                    // A run of untouched wires is one block, however the
-                    // products happen to be nested.
-                    (Term::Id(a), Some(Term::Id(b))) => {
-                        let width = a + b;
-                        settled.pop();
-                        let block = terms.id(width);
-                        settled.push(block);
-                    }
-                    _ => settled.push(factor),
-                }
-            }
-            let mut factors = settled.into_iter();
-            let first = factors
-                .next()
-                .expect("a product of nothing is not a product");
-            factors.fold(first, |acc, factor| terms.par(acc, factor))
-        }
-        Term::Compose(left, right) => {
-            let (left, right) = (settle(terms, left), settle(terms, right));
-            match (terms.get(left), terms.get(right)) {
-                (Term::Id(_), _) => right,
-                (_, Term::Id(_)) => left,
-                _ => terms
-                    .compose(left, right)
-                    .expect("settling a step keeps its arity"),
-            }
-        }
-        Term::Branch { if_true, if_false } => {
-            let if_true = settle(terms, if_true);
-            let if_false = settle(terms, if_false);
-            terms.push(Term::Branch { if_true, if_false })
-        }
-        _ => term,
-    }
-}
-
-/// A `*`-spine as the list of factors it is, left to right.
-fn flatten_par(terms: &Context, term: TermIndex, out: &mut Vec<TermIndex>) {
-    if let Term::Par(left, right) = *terms.get(term) {
-        flatten_par(terms, left, out);
-        flatten_par(terms, right, out);
-    } else {
-        out.push(term);
-    }
-}
-
-/// The term one box stands for; a branch answers with its arms read back.
-fn box_term(terms: &mut Context, kind: &NodeKind) -> TermIndex {
-    match kind {
-        NodeKind::Id(n) => terms.id(*n),
-        NodeKind::Copy(n) => terms.copy(*n),
-        NodeKind::Drop(n) => terms.drop(*n),
-        NodeKind::Op(prim) => terms.op(prim.clone()),
-        NodeKind::Call { target, arity } => terms.call(*target, *arity),
-        // Both blocks are already on the stack by the time this runs — the
-        // arms were scheduled like any other work — so the branch left to
-        // write is only the choice between them: keep one block, let the
-        // other go. The condition has to come up from the bottom first,
-        // which is what the node's port order costs and the only place it
-        // costs anything.
-        NodeKind::Select { arity: n } => {
-            let up = hoist(terms, 2 * n + 1);
-            let (keep, lose) = (terms.id(*n), terms.drop(*n));
-            let if_true = terms.par(keep, lose);
-            let (lose, keep) = (terms.drop(*n), terms.id(*n));
-            let if_false = terms.par(lose, keep);
-            let choose = terms
-                .branch(if_true, if_false)
-                .expect("each arm keeps one block of two");
-            terms
-                .compose(up, choose)
-                .expect("the hoist leaves the width it was given")
-        }
-    }
-}
-
-/// `[a, x₁..x_k] -> [x₁..x_k, a]`: the deepest wire brought to the top, one
-/// crossing at a time.
-///
-/// What a `select` costs at the boundary between a graph, where its
-/// condition is port 0, and a term, where a `branch` reads its condition
-/// off the top of the stack.
-fn hoist(terms: &mut Context, width: usize) -> TermIndex {
-    let mut chain: Option<TermIndex> = None;
-    for below in 0..width.saturating_sub(1) {
-        let swap = terms.op(Prim::Swap);
-        let step = terms.under(swap, below);
-        let above = width - below - 2;
-        let step = if above > 0 {
-            let untouched = terms.id(above);
-            terms.par(step, untouched)
-        } else {
-            step
-        };
-        chain = Some(match chain {
-            None => step,
-            Some(acc) => terms
-                .compose(acc, step)
-                .expect("every crossing spans the whole stack"),
-        });
-    }
-    chain.unwrap_or_else(|| terms.id(width))
-}
-
-/// The steps taking a stack of *distinct* sources to `want`, which may
-/// repeat what it takes and leave out what it does not.
-///
-/// Two layers, and each is one `;`-step: the multiplicities first, then the
-/// order. Both are `*`-products over the whole width, so a step reads as a
-/// row of the diagram rather than as a chain of moves.
-fn route(terms: &mut Context, have: &[Source], want: &[Source]) -> Vec<TermIndex> {
-    debug_assert!(
-        want.iter().all(|w| have.contains(w)),
-        "routing cannot conjure a value the stack does not hold"
-    );
-    let copies: Vec<usize> = have
-        .iter()
-        .map(|h| want.iter().filter(|w| *w == h).count())
-        .collect();
-
-    let mut steps = Vec::new();
-    // The copy layer: one factor per slot, `drop(1)` for a value nothing
-    // wants, `id(1)` for one that is wanted once, a short chain otherwise.
-    if copies.iter().any(|&k| k != 1) {
-        let mut layer: Option<TermIndex> = None;
-        for &k in &copies {
-            let factor = duplicate(terms, k);
-            layer = Some(match layer {
-                None => factor,
-                Some(acc) => terms.par(acc, factor),
-            });
-        }
-        if let Some(layer) = layer {
-            steps.push(layer);
-        }
-    }
-
-    // Where each of the duplicated slots has to end up.
-    let mut spread: Vec<Source> = Vec::new();
-    for (j, &h) in have.iter().enumerate() {
-        spread.extend(std::iter::repeat_n(h, copies[j]));
-    }
-    let mut taken = vec![false; want.len()];
-    let mut places: Vec<usize> = Vec::with_capacity(spread.len());
-    for &src in &spread {
-        let slot = want
-            .iter()
-            .enumerate()
-            .find(|&(i, &w)| !taken[i] && w == src)
-            .map(|(i, _)| i)
-            .expect("the copy layer produced exactly what is wanted");
-        taken[slot] = true;
-        places.push(slot);
-    }
-
-    // The permutation layer: odd–even transposition rounds, each a
-    // `*`-product of `swap`s and the identities between them. `swap` is the
-    // only reordering the term language has, so a sequence of rounds is
-    // what a permutation costs — but each round is one flat row.
-    let width = places.len();
-    for round in 0..width {
-        let crossings: Vec<usize> = (round % 2..width.saturating_sub(1))
-            .step_by(2)
-            .filter(|&i| places[i] > places[i + 1])
-            .collect();
-        if crossings.is_empty() {
-            continue;
-        }
-        for &i in &crossings {
-            places.swap(i, i + 1);
-        }
-        let mut layer: Option<TermIndex> = None;
-        let mut slot = 0;
-        while slot < width {
-            let factor = if crossings.contains(&slot) {
-                slot += 2;
-                terms.op(Prim::Swap)
-            } else {
-                slot += 1;
-                terms.id(1)
-            };
-            layer = Some(match layer {
-                None => factor,
-                Some(acc) => terms.par(acc, factor),
-            });
-        }
-        if let Some(layer) = layer {
-            steps.push(layer);
-        }
-    }
-    debug_assert!(
-        places.windows(2).all(|pair| pair[0] < pair[1]),
-        "the rounds sort"
-    );
-    steps
-}
-
-/// `1 -> k`: the value dropped, passed through, or copied that many times.
-fn duplicate(terms: &mut Context, k: usize) -> TermIndex {
-    match k {
-        0 => terms.drop(1),
-        1 => terms.id(1),
-        _ => {
-            let mut chain = terms.copy(1);
-            for held in 2..k {
-                let more = terms.copy(1);
-                let step = terms.under(more, held - 1);
-                chain = terms
-                    .compose(chain, step)
-                    .expect("each link of the chain meets the last");
-            }
-            chain
-        }
-    }
-}
-
 #[cfg(test)]
 pub(crate) mod tests {
     use super::meaning::{Meaning, boundary, eval_graph, eval_term};
@@ -745,28 +392,6 @@ pub(crate) mod tests {
             ),
             "each block is an arm's answer"
         );
-    }
-
-    // ---- routing, the read-back's own layer ----
-
-    #[test]
-    fn a_route_is_a_copy_layer_and_then_swap_rounds() {
-        let terms = &mut Context::new();
-        let have = [Source::Input(0), Source::Input(1)];
-
-        // Nothing to do at all emits nothing.
-        assert!(route(terms, &have, &have).is_empty());
-
-        // One flat product handles every multiplicity at once: drop the
-        // deep slot, keep two copies of the top one.
-        let steps = route(terms, &have, &[Source::Input(1), Source::Input(1)]);
-        assert_eq!(steps.len(), 1);
-        assert_eq!(format!("{}", terms.display(steps[0])), "drop(1) * copy(1)");
-
-        // A pure exchange is one round of one swap.
-        let steps = route(terms, &have, &[Source::Input(1), Source::Input(0)]);
-        assert_eq!(steps.len(), 1);
-        assert_eq!(format!("{}", terms.display(steps[0])), "swap");
     }
 
     // ---- the corpus ----

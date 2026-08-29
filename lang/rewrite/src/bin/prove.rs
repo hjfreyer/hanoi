@@ -20,11 +20,8 @@
 //! and it is the question citing is an answer to — a citation is only honest
 //! if it could have been discharged, and this is what discharges it.
 //!
-//! `--terms` prints the sides as terms instead, narrowed to where they
-//! differ: that is the language a `via` waypoint is written in, so it is
-//! what a stuck goal is *answered* with — ask for it when you are ready to
-//! write one. `--boxes` stops reading through the `id` and `copy` the
-//! structural laws would delete.
+//! `--boxes` stops reading through the `id` and `copy` the structural laws
+//! would delete.
 //!
 //! Exit codes: `0` every identity proved, `1` a claim is unproved or a
 //! proof entry could not attach, `2` the corpus would not build or the
@@ -43,9 +40,6 @@ use rewrite::strategy::{Citing, Prover};
 struct Args {
     root: PathBuf,
     filter: Option<String>,
-    /// Print the sides as terms — the language a `via` is written in —
-    /// rather than as graphs.
-    terms_only: bool,
     /// Show `id` and `copy` rather than reading through them.
     all_boxes: bool,
     /// Spend every `by` in full — the cited proof's own steps, carried in
@@ -59,7 +53,7 @@ fn main() -> ExitCode {
         Ok(args) => args,
         Err(message) => {
             eprintln!("error: {}", message);
-            eprintln!("usage: prove <root> [--filter <substr>] [--terms] [--boxes] [--expand]");
+            eprintln!("usage: prove <root> [--filter <substr>] [--boxes] [--expand]");
             return ExitCode::from(2);
         }
     };
@@ -76,14 +70,12 @@ fn main() -> ExitCode {
 fn parse_args() -> Result<Args, String> {
     let mut root = None;
     let mut filter = None;
-    let mut terms_only = false;
     let mut all_boxes = false;
     let mut expand = false;
     let mut argv = std::env::args().skip(1);
     while let Some(arg) = argv.next() {
         match arg.as_str() {
             "--filter" => filter = Some(argv.next().ok_or("--filter needs a value")?),
-            "--terms" => terms_only = true,
             "--boxes" => all_boxes = true,
             "--expand" => expand = true,
             other if root.is_none() && !other.starts_with('-') => root = Some(PathBuf::from(other)),
@@ -93,18 +85,14 @@ fn parse_args() -> Result<Args, String> {
     Ok(Args {
         root: root.ok_or("no corpus root given")?,
         filter,
-        terms_only,
         all_boxes,
         expand,
     })
 }
 
-/// How many columns a residual's terms get, past the gutter [`field`] writes.
-const TERM_WIDTH: usize = 70;
-
 /// One row of the residual report: a label, a gutter, and a value that may
-/// need more than one line — every line of it written inside the same gutter,
-/// so a term broken over ten lines still reads as one field.
+/// need more than one line — every line of it written inside the same
+/// gutter, so a long reason still reads as one field.
 fn field(label: &str, value: &impl std::fmt::Display) {
     let value = value.to_string();
     for (i, line) in value.lines().enumerate() {
@@ -178,40 +166,22 @@ fn run(args: &Args) -> Result<bool, String> {
                 failed += 1;
                 println!("identity {} ... FAILED", name);
                 println!();
-                if args.terms_only {
-                    // What to write back. With the library at hand a call
-                    // prints as the name a waypoint would have to write,
-                    // not as an index.
-                    let shown = |term| {
-                        corpus
-                            .terms
-                            .pretty(term, TERM_WIDTH)
-                            .named(&corpus.library)
-                            .to_string()
+                // What the goal *is*, as the tactics left it. Every line
+                // names a box a next step could name back.
+                for (tag, graph) in [
+                    ("left ", &residual.lhs_graph),
+                    ("right", &residual.rhs_graph),
+                ] {
+                    let listing = render::listing(graph, tag);
+                    let listing = if args.all_boxes {
+                        listing.all_boxes()
+                    } else {
+                        listing
                     };
-                    if !residual.path.is_empty() {
-                        field("the difference is", &residual.path.join(", "));
-                    }
-                    field("what the left came to", &shown(residual.lhs));
-                    field("what the right came to", &shown(residual.rhs));
-                } else {
-                    // What the goal *is*, as the tactics left it. Every
-                    // line names a box a next step could name back.
-                    for (tag, graph) in [
-                        ("left ", &residual.lhs_graph),
-                        ("right", &residual.rhs_graph),
-                    ] {
-                        let listing = render::listing(graph, tag);
-                        let listing = if args.all_boxes {
-                            listing.all_boxes()
-                        } else {
-                            listing
-                        };
-                        println!("{}", listing);
-                    }
-                    if !residual.path.is_empty() {
-                        field("as terms, they differ", &residual.path.join(", "));
-                    }
+                    println!("{}", listing);
+                }
+                if !residual.path.is_empty() {
+                    field("the goal that stuck", &residual.path.join(", "));
                 }
                 field("the engine stopped", &residual.stopped);
                 println!();

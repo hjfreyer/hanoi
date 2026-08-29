@@ -1,12 +1,11 @@
 //! The term language, read back.
 //!
 //! [`Context`](crate::term::Context) writes a term; this reads one. The two
-//! are inverses, deliberately: a residual is printed in this language, and a
-//! `via` waypoint is the author's answer to a residual, so it is written in
-//! the same one. A proof used to say `pick 0 push t1
-//! equal` where the report said `copy(1) ; id(1) * push t1 ; equal`, and
-//! translating between the two by hand was work the author should never have
-//! been doing.
+//! are inverses, deliberately: a `via` waypoint is a term the author writes
+//! by hand, and it is written in the language the model prints rather than
+//! in Hana's. A proof used to say `pick 0 push t1 equal` where the term
+//! model said `copy(1) ; id(1) * push t1 ; equal`, and translating between
+//! the two by hand was work the author should never have been doing.
 //!
 //! ```text
 //! via { copy(1) ; id(1) * push types_test::t1 ; equal ; branch { … } { … } }

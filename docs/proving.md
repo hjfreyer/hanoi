@@ -34,8 +34,8 @@ identity result: ok. 24 passed; 0 failed; 0 problem(s); 0 filtered out
 
 Exit codes: `0` every identity proved, `1` a claim unproved or a hint
 orphaned, `2` the corpus would not build or the arguments were wrong.
-`--expand` additionally cashes every citation (see below); `--boxes` and
-`--terms` choose how a stuck goal is printed (see the failure output,
+`--expand` additionally cashes every citation (see below); `--boxes`
+chooses how much of a stuck goal is printed (see the failure output,
 below).
 
 ## The pieces
@@ -46,7 +46,7 @@ Four layers, in `lang/rewrite/src/`:
 |---|---|---|
 | proofs | `hant.rs`, `corpus.rs`, `parse.rs` | the strategy language a proof is written in, the loader that attaches each `.hant` entry to the identity it names — ordering them, since `by name` cites another identity and needs it proved first — and the reader that turns a waypoint's text into a term |
 | goals | `goal.rs`, `strategy.rs` | a goal is two [graphs](../lang/rewrite/src/graph.rs), lowered and padded to one arity before they build; the interpreter runs a strategy over one |
-| engine | `diagram2/` | the literal translation of a term into a graph and back, the law table (`rules.rs`), and the tactic language that drives it (`tactic.rs`, see [docs/tactics.md](tactics.md)) |
+| engine | `diagram2/` | the literal translation of a term into a graph, the law table (`rules.rs`), the tactic language that drives it (`tactic.rs`, see [docs/tactics.md](tactics.md)), and the listing a stuck graph is read as (`render.rs`) |
 | graphs | `graph.rs` | boxes and the links between them, well-formedness, the isomorphism that says two graphs are one diagram, and the rewrite itself — a `Pair` of graphs spliced in at a checked `Match` |
 
 A program in the engine is a **literal** graph: one box per term leaf —
@@ -317,24 +317,21 @@ not silently shed its proof — and a claim discharged twice was
 discharged once too often.
 
 A body — a `via` waypoint — is a **term**, read by
-`lang/rewrite/src/parse.rs`, which is the inverse of the printing
-residuals use. That is the point: a residual says `copy(1) ; id(1) *
-push t1 ; equal`, the waypoint answering it is written the same way, and
-nothing is translated by hand. Two consequences worth knowing. Nothing
-pads — the term language says what it means, so a body whose halves do
-not meet is `cannot compose 1 -> 2 with 1 -> 1` where it is written,
-rather than something quietly widened. And a call is named (`call
-types_test::number`, or any unambiguous tail of that), which is also how
-a residual prints one when the report has the library to hand.
+`lang/rewrite/src/parse.rs`, which is the inverse of the term model's own
+printing: a waypoint is written `copy(1) ; id(1) * push t1 ; equal`,
+in the language the model says rather than in Hana's. Two consequences
+worth knowing. Nothing pads — the term language says what it means, so a
+body whose halves do not meet is `cannot compose 1 -> 2 with 1 -> 1`
+where it is written, rather than something quietly widened. And a call is
+named (`call types_test::number`, or any unambiguous tail of that).
 
 ## The failure output is the point
 
 A stuck goal prints its **residual**: the two sides as they stand, plus
-why the step gave up. That output is the deliverable of a failed run, and
-it comes in two spellings because reading a goal and answering one are
-different jobs.
+why the step gave up. That output is the deliverable of a failed run — it
+is what says what to try next.
 
-**The graphs are what it shows** (`--boxes`). One line per box — its id,
+**The graphs are what it shows.** One line per box — its id,
 what it reads, what reads it — with a branch written as the block it is:
 `if <condition>` where its first arm begins, `else` where the second
 does, `endif <condition>` at the `select`, the arms indented between
@@ -353,21 +350,13 @@ enters one; a box that reads nothing is placed just before the box that
 reads it, so an operand sits with its `equal`; and `id` and `copy` are
 read through, since a `copy` says what the links already say.
 
-**The terms are what it answers with** (`--terms`). The two sides read
-back into the term language and narrowed to where they differ (an `as
-terms, they differ │ …` line strips shared context), so a false claim
-buried in one branch arm behind a shared prefix prints as the two leaves
-that disagree rather than as two whole programs. This is the spelling to
-ask for when writing a `via`: the reified form is in the same language a
-waypoint is, so answering a residual is copying and editing rather than
-translating.
-
-A term that does not fit the width breaks at every `;` of its spine,
-indents a branch's arms inside their braces, and lines a parenthesized
-group up under its paren; anything that still fits stays on one line. The
-parentheses are the same ones the one-line spelling uses, so a broken
-term still says which tree it came from — the layout only chooses where
-the newlines go.
+The sides are shown as graphs and only as graphs. A graph is a DAG and a
+term is a spine, so anything spelling one back out has to reimpose a
+stack and pay for it in routing, and a term has no name for a box, so two
+reports of one proof could not be compared. `--boxes` is the only dial:
+it stops reading through the `id` and `copy` boxes the structural laws
+would delete. A `via` answering the report is written by hand off the
+boxes the listing names.
 
 ## Trust, in one paragraph
 
@@ -391,7 +380,3 @@ fail closed. [docs/invariants.md](invariants.md) is the full statement.
   operand sorting and coercion idempotence among them; the list is in
   [docs/rules.md](rules.md). A claim that needs one fails honestly, and
   the row is a `sides` construction away.
-- **Reify for the giants.** A read-back shares nothing a term cannot, so
-  a handful of state-machine test sentences would print past any
-  reasonable size if a residual ever needed one; scratch definitions for
-  shared subgraphs would close that gap.

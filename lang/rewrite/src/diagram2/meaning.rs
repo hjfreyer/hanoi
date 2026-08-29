@@ -159,11 +159,11 @@ pub(super) fn eval_term(
             Some(name) => m.apply(name, stack, prim.arity().outputs),
         },
         Term::Call { target, arity } => m.apply(format!("call {:?}", target), stack, arity.outputs),
-        // Both spines are walked rather than recursed down. A read-back
-        // emits a step per box and folds them left, and a routing layer
-        // is a `*`-product over the whole width, so these chains are as
-        // long as the graph is wide and deep — recursion overflows a
-        // test thread's stack on the corpus.
+        // Both spines are walked rather than recursed down. A lowered
+        // sentence is one step per instruction folded left, and padding
+        // makes each step a `*`-product over the whole width, so these
+        // chains are as long as the term is wide and deep — recursion
+        // overflows a test thread's stack on the corpus.
         Term::Compose(..) => {
             let mut spine = Vec::new();
             let mut head = term;
@@ -216,8 +216,8 @@ pub(super) fn eval_term(
 
 /// What a graph means — the same reading, one box at a time.
 ///
-/// No `read_back` anywhere in it, which is the point: this can hold a
-/// rewrite to preserving meaning without the translation in the loop.
+/// Read off the graph itself, which is the point: this can hold a rewrite
+/// to preserving meaning without a translation in the loop.
 pub(super) fn eval_graph(m: &mut Meaning, graph: &Graph, inputs: &[SymId]) -> Vec<SymId> {
     let mut ports: HashMap<(NodeId, usize), SymId> = HashMap::new();
     let read = |ports: &HashMap<(NodeId, usize), SymId>, src: Source| match src {
