@@ -45,6 +45,13 @@
 //! **reachable** graph: a node no boundary output reaches is not part of
 //! the program, and reachability is the whole of what deletion means.
 //!
+//! Both of those readings — what the boundary reaches, and who reads what
+//! — are *kept* rather than swept for at every question, because the
+//! matcher asks them once per candidate box it tries. Kept, not
+//! maintained: only the outputs can move either answer, so they are taken
+//! together and thrown away whole when the outputs change. `Readings` is
+//! where that argument is written down.
+//!
 //! ## A rewrite replaces a value, not a subgraph
 //!
 //! **A rewrite is a [`Pair`], spent where a [`Match`] says.** A pair is two
@@ -83,6 +90,7 @@
 //! about one graph be spent inside another, and a whole *run* of them
 //! likewise.
 
+use std::cell::OnceCell;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 
@@ -384,6 +392,10 @@ struct Node {
 ///
 /// Nodes accumulate and are never removed; the program is what the boundary
 /// outputs reach. `intern` is what makes a node's content its name.
+///
+/// What the boundary reaches and who reads what are kept rather than swept
+/// for at every question — see `Readings`, which is also where the one
+/// fact that makes keeping them safe is written down.
 #[derive(Debug, Clone, Default)]
 pub struct Graph {
     nodes: Vec<Node>,
@@ -399,6 +411,43 @@ pub struct Graph {
     inputs: usize,
     /// What each boundary output reads, deepest first.
     outputs: Vec<Source>,
+    /// The two readings of the boundary, worked out together the first
+    /// time either is asked for. Boxed: a `Graph` sits inside a `Rule`
+    /// inside a `Step`, and this is a memo rather than contents, so it
+    /// costs the type a pointer rather than the tables.
+    read: OnceCell<Box<Readings>>,
+}
+
+/// What the boundary says about the graph, as opposed to what the graph
+/// says about itself: which boxes the outputs reach, and who reads what.
+///
+/// Both are sweeps of the live program, and both are answered constantly
+/// — the matcher asks each once per candidate box it tries — so they are
+/// worked out once and kept. What makes that safe is one fact, and it is
+/// the reason they share a cell: **only the outputs can move either
+/// answer.** A box is never edited, and a box made later is not reached
+/// by outputs that never named it, so adding one changes neither. So they
+/// are taken together, dropped together by [`close`](Graph::close), and
+/// nothing between those two moments can be stale.
+///
+/// A memo and not an index: nothing is kept *in step* through a rewrite —
+/// the answers are thrown away whole and read again when next asked for,
+/// which is what lets a node go on holding only what it reads.
+#[derive(Debug, Clone, Default)]
+struct Readings {
+    /// Whether the boundary reaches the box at each index. A box made
+    /// since this was taken sits past the end, which [`reaches`] reads as
+    /// the truth it is: outputs that never named it do not reach it.
+    reach: Vec<bool>,
+    /// Every live reading of each source, the boundary's own first and
+    /// then the boxes in id order.
+    readers: HashMap<Source, Vec<Sink>>,
+}
+
+/// Reading a reachability table: a node past its end was made after it was
+/// taken, and outputs that never named that node do not reach it.
+fn reaches(table: &[bool], id: NodeId) -> bool {
+    table.get(id.index()).copied().unwrap_or(false)
 }
 
 /// Two graphs are equal when they are the same program: what the boundary
@@ -419,6 +468,7 @@ impl Graph {
             addrs: Vec::new(),
             inputs,
             outputs: Vec::new(),
+            read: OnceCell::new(),
         }
     }
 
@@ -443,7 +493,7 @@ impl Graph {
     /// Whether the boundary reaches that node — which is the whole of what
     /// being part of the program means here.
     pub fn is_live(&self, id: NodeId) -> bool {
-        self.reachable().contains(&id)
+        reaches(self.reachable(), id)
     }
 
     /// Every box the boundary reaches, in id order — which is producers
@@ -452,13 +502,13 @@ impl Graph {
         let reachable = self.reachable();
         (0..self.nodes.len())
             .map(NodeId::at)
-            .filter(move |id| reachable.contains(id))
+            .filter(move |&id| reaches(reachable, id))
             .map(|id| (id, &self.nodes[id.index()].kind))
     }
 
     /// How many boxes the program is.
     pub fn live_count(&self) -> usize {
-        self.reachable().len()
+        self.reachable().iter().filter(|&&there| there).count()
     }
 
     pub fn kind(&self, id: NodeId) -> &NodeKind {
@@ -478,28 +528,23 @@ impl Graph {
     /// Who reads that port, among the boxes the program reaches and the
     /// boundary.
     ///
-    /// Computed rather than kept: a node records what it reads and nothing
-    /// records what reads it, so this is a sweep. It is the one place the
+    /// Read off rather than recorded: a node holds what it reads and
+    /// nothing holds what reads it, so the answer is a sweep of the live
+    /// program — taken once per set of outputs and kept (see the type's
+    /// own docs), never maintained edge by edge. It is the one place the
     /// distinction between a box and a box the boundary reaches is
     /// load-bearing — a rewrite leaves its old boxes standing, and they
     /// read what they always read, so counting them would be counting
     /// ghosts.
+    ///
+    /// The boundary's own readings come first, then the boxes in id
+    /// order, which is the order a caller may rely on.
     pub fn sinks(&self, src: Source) -> Vec<Sink> {
-        let mut out: Vec<Sink> = self
-            .outputs
-            .iter()
-            .enumerate()
-            .filter(|&(_, &s)| s == src)
-            .map(|(i, _)| Sink::Output(i))
-            .collect();
-        for (id, _) in self.live() {
-            for (port, &s) in self.sources(id).iter().enumerate() {
-                if s == src {
-                    out.push(Sink::Port { node: id, port });
-                }
-            }
-        }
-        out
+        self.readings()
+            .readers
+            .get(&src)
+            .cloned()
+            .unwrap_or_default()
     }
 
     /// A box, its input ports reading the sources given — or the box that
@@ -630,20 +675,46 @@ impl Graph {
     /// Closes the graph: these sources are what the boundary leaves.
     pub(crate) fn close(&mut self, sources: Vec<Source>) {
         self.outputs = sources;
+        // The one thing that can move either reading, so the one place
+        // they are dropped.
+        self.read = OnceCell::new();
     }
 
-    /// Every box the boundary reaches.
-    fn reachable(&self) -> HashSet<NodeId> {
-        let mut seen = HashSet::new();
-        let mut todo: Vec<Source> = self.outputs.clone();
-        while let Some(src) = todo.pop() {
-            if let Source::Port { node, .. } = src
-                && seen.insert(node)
-            {
-                todo.extend(self.nodes[node.index()].inputs.iter().copied());
+    /// What the boundary says about this graph, swept for once and kept.
+    fn readings(&self) -> &Readings {
+        self.read.get_or_init(|| {
+            let mut reach = vec![false; self.nodes.len()];
+            let mut todo: Vec<Source> = self.outputs.clone();
+            while let Some(src) = todo.pop() {
+                if let Source::Port { node, .. } = src
+                    && !std::mem::replace(&mut reach[node.index()], true)
+                {
+                    todo.extend(self.nodes[node.index()].inputs.iter().copied());
+                }
             }
-        }
-        seen
+            let mut readers: HashMap<Source, Vec<Sink>> = HashMap::new();
+            for (i, &read) in self.outputs.iter().enumerate() {
+                readers.entry(read).or_default().push(Sink::Output(i));
+            }
+            for (index, node) in self.nodes.iter().enumerate() {
+                if !reach[index] {
+                    continue;
+                }
+                let id = NodeId::at(index);
+                for (port, &read) in node.inputs.iter().enumerate() {
+                    readers
+                        .entry(read)
+                        .or_default()
+                        .push(Sink::Port { node: id, port });
+                }
+            }
+            Box::new(Readings { reach, readers })
+        })
+    }
+
+    /// Every box the boundary reaches, as a table indexed by node.
+    fn reachable(&self) -> &[bool] {
+        &self.readings().reach
     }
 
     /// The program, renumbered by a walk that reads only structure: the
@@ -781,8 +852,8 @@ impl Graph {
     /// so the sweep never has to consider them.
     fn substitute(&mut self, sigma: &HashMap<Source, Source>) {
         let mut map = sigma.clone();
-        let mut here: Vec<NodeId> = self.reachable().into_iter().collect();
-        here.sort_unstable();
+        // `live` is already id order, which is producers first.
+        let here: Vec<NodeId> = self.live().map(|(id, _)| id).collect();
         for id in here {
             let node = &self.nodes[id.index()];
             let takes: Vec<Source> = node
@@ -804,11 +875,12 @@ impl Graph {
                     .or_insert(Source::Port { node: made, port });
             }
         }
-        self.outputs = self
+        let outputs = self
             .outputs
             .iter()
             .map(|src| map.get(src).copied().unwrap_or(*src))
             .collect();
+        self.close(outputs);
     }
 
     /// Everything a source reads, transitively.
@@ -1045,7 +1117,9 @@ impl Pair {
                 port,
             },
         };
-        let before = graph.reachable();
+        // A snapshot: what follows adds boxes, and what was here before
+        // them is the question.
+        let before = graph.reachable().to_vec();
 
         // The other side, built where the match says it goes.
         let mut fresh: Vec<NodeId> = Vec::with_capacity(replacement.nodes.len());
@@ -1081,7 +1155,7 @@ impl Pair {
         // A replacement the graph already held, and that reads what it is
         // standing in for, would be rebuilt into a reading of itself.
         for (&key, &val) in &sigma {
-            let standing = matches!(val, Source::Port { node, .. } if before.contains(&node));
+            let standing = matches!(val, Source::Port { node, .. } if reaches(&before, node));
             if standing && graph.upstream(val).iter().any(|s| sigma.contains_key(s)) {
                 return Err(Mismatch::Circular(key));
             }
@@ -1685,6 +1759,42 @@ mod tests {
         assert_ne!(x, y);
         h.close(vec![x[0], y[0]]);
         assert_eq!(h.live_count(), 2);
+    }
+
+    /// What the boundary reaches is worked out once and kept, and the
+    /// whole of what makes that safe is that only the boundary can move
+    /// the answer: a box is never edited, and a box made afterwards is not
+    /// reached by outputs that never named it. So `close` is the one place
+    /// the memo is dropped, and this is that claim, said in both
+    /// directions.
+    #[test]
+    fn what_the_boundary_reaches_moves_only_when_the_boundary_does() {
+        let mut g = Graph::empty(1);
+        let first = g.add(NodeKind::Op(Prim::Not), vec![Source::Input(0)]);
+        g.close(first.clone());
+        assert_eq!(g.live_count(), 1);
+
+        // A box made after the answer was read is not part of it, and
+        // asking again does not make it one.
+        let second = g.add(NodeKind::Op(Prim::Not), first.clone());
+        let Source::Port { node: made, .. } = second[0] else {
+            unreachable!("a box's port")
+        };
+        assert!(!g.is_live(made), "nothing the boundary reaches reads it");
+        assert_eq!(g.live_count(), 1);
+
+        // Re-closing is what moves the answer, and the memo goes with it.
+        g.close(second);
+        assert!(g.is_live(made));
+        assert_eq!(g.live_count(), 2);
+
+        // And the other way: a boundary that stops naming them leaves the
+        // program with no boxes at all.
+        g.close(vec![Source::Input(0)]);
+        assert!(!g.is_live(made));
+        assert_eq!(g.live_count(), 0);
+        assert_eq!(g.live().count(), 0);
+        assert!(g.sinks(first[0]).is_empty(), "a dead box reads nothing");
     }
 
     /// What a rewrite leaves behind is not part of the program: the
