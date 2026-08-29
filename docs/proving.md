@@ -216,10 +216,10 @@ way — or split in turn: `cases(equal) cases(equal)` is a two-variable
 case analysis, four leaves, all folded shut by the closing `diagram`.
 And *identification is free*: a program often retests one condition in
 several places, and the split only helps once those are recognized as a
-single wire. They are, from the moment the graph is written: a box is
+single wire. They are, from the moment the graph is written — a box is
 its kind and what it reads, so two spellings of one test are one box.
-`cases` still usually follows a drive, but for the ordinary reason — the
-wire it wants may only appear once a branch has folded.
+`cases` still usually follows a drive, for the ordinary reason: the wire
+it wants may only appear once a branch has folded.
 
 *And which wire*: an unaddressed `cases(op)` takes the first it is
 offered, so a goal with several tests of one shape needs the split said
@@ -356,10 +356,10 @@ reads it, so an operand sits with its `equal`.
 The sides are shown as graphs and only as graphs. A graph is a DAG and a
 term is a spine, so anything spelling one back out has to reimpose a
 stack and pay for it in routing, and a term has no name for a box, so two
-reports of one proof could not be compared. There is no dial: every box
-the boundary reaches is listed, because every box is an operation now. A
-`via` answering the report is written by hand off the boxes the listing
-names.
+reports of one proof could not be compared. Every box the boundary
+reaches is listed — every box is an operation, so there is nothing a
+reader would rather look through. A `via` answering the report is
+written by hand off the boxes the listing names.
 
 ## Trust, in one paragraph
 

@@ -607,9 +607,9 @@ fn parse_tactic(input: &str) -> Result<(Tactic, &str), String> {
         .unwrap_or(input.len());
     let (word, rest) = input.split_at(word_len);
     match word {
-        // Named laws to fixpoint. There is no bare `saturate` any more:
-        // it stood for the wiring list, and wiring is not a list of laws
-        // now but a thing the representation cannot say.
+        // Named laws to fixpoint. The laws have to be named: there is no
+        // bare `saturate`, because there is no list a driver may spend
+        // without a proof having chosen it.
         "saturate" => {
             let after = rest
                 .trim_start()

@@ -2,17 +2,14 @@
 //! program, and a rewrite the business of pointing at one and swapping in
 //! the other.
 //!
-//! [`super`] builds a graph and stops there. It used to shrink one as well:
-//! first by hand — a `match` on [`NodeKind`] that re-pointed ports directly
-//! — and then by running this table to fixpoint. Both are gone. The
-//! hand-written version said nothing: there was no page to read, and no way
-//! to add a law without editing the engine. The fixpoint said too much:
-//! *which* laws, *where*, and *in what order* is a strategy, and a strategy
-//! belongs to whoever is proving something rather than to the module the
-//! graph lives in. What is left here is the page — this module is the thing
-//! `rewrite/src/rules.rs` was for terms, over graphs instead — and the
-//! handful of operations a driver is built out of: [`sides`],
-//! [`find`](crate::graph::find), [`propose`], [`apply`], [`replay`].
+//! [`super`] builds a graph and stops there; nothing shrinks one but a
+//! strategy, and a strategy belongs to whoever is proving something
+//! rather than to the module the graph lives in. So what is here is the
+//! page — this module is the thing `rewrite/src/rules.rs` was for terms,
+//! over graphs instead — and the handful of operations a driver is built
+//! out of: [`sides`], [`find`](crate::graph::find), [`propose`],
+//! [`apply`], [`replay`]. A law is a row anyone can read, and adding one
+//! is not editing an engine.
 //!
 //! ## A rule states its equation; the checker only compares
 //!
@@ -36,7 +33,7 @@
 //! [`Law::SelectLiteral`] carries its arms. Nothing asks a question a
 //! match could answer.
 //!
-//! What a pattern no longer says is *and nothing else reads this*. A
+//! What a pattern does **not** say is *and nothing else reads this*. A
 //! rewrite replaces the value a window exports and rebuilds whatever read
 //! it, so a reader the window never mentioned is not a loose end:
 //! `not-not` fires on a first `not` somebody else reads, and that
@@ -45,15 +42,14 @@
 //! ## Which laws are here
 //!
 //! Not the wiring. `id-elim`, `swap-elim`, `copy-elim`, `dead-node` and
-//! `dedup` were rows here once, and they are gone — not because they
-//! stopped being true but because there is no graph for either side of
-//! them to be. A box is its kind and the sources it reads, so a value
-//! read twice is two references, a value read never is a box the boundary
-//! does not reach, and two boxes computing the same thing are one box.
-//! [docs/rules.md](../../../../docs/rules.md) opens with the whole list,
-//! the associativities and Yang–Baxter among them.
+//! `dedup` are not rows and could not be: there is no graph for either
+//! side of them to be. A box is its kind and the sources it reads, so a
+//! value read twice is two references, a value read never is a box the
+//! boundary does not reach, and two boxes computing the same thing are
+//! one box. [docs/rules.md](../../../../docs/rules.md) opens with the
+//! whole list, the associativities and Yang–Baxter among them.
 //!
-//! What is left is the two things the representation cannot decide: what
+//! What is here is the two things the representation cannot decide: what
 //! a branch means ([`branching`]) and what an operation computes
 //! ([`folding`]). [`Law::NotNot`] — `not ; not = as_bool` — is the elder
 //! of the second: the opaque-operation oracle the tests judge by reads
@@ -3408,10 +3404,9 @@ mod tests {
         // rewrite makes, and are covered above against the shapes the
         // table itself states.
         //
-        // The lists are short now, and that is the change: a built graph
-        // used to arrive full of wiring, and the value layer could reach
-        // nothing until the wiring had been swept. There is no wiring, so
-        // what a graph offers on the first asking is what it is about.
+        // The lists are short, and that is the point: a graph arrives with
+        // no wiring to sweep, so what it offers on the first asking is
+        // what it is about.
         offers("push 1 push 2 add", &[Law::Fold]);
         offers("swap swap", &[]);
         offers("push 9 pick 0", &[]);
@@ -3435,7 +3430,7 @@ mod tests {
         );
         // One operation in both arms is *one box*: the two arms are handed
         // the same sources, so they compute the same value and there is
-        // one of it. What `dedup` used to be for happens in `build`.
+        // one of it.
         offers("branch { add } { add }", &[Law::SelectSame]);
         offers("push 1 pick 1 branch { add } { add }", &[Law::SelectSame]);
         // Work after a branch, which is what `select-hoist` reads: the
@@ -3506,9 +3501,9 @@ mod tests {
     /// way it can be false is decided by comparing ports — there is no
     /// searching in the checker to go wrong.
     ///
-    /// Three ways, where there were five. A reader the window does not
-    /// export is no longer one of them: substitution strands nothing, so
-    /// there is nothing to account for.
+    /// Three ways, and a reader the window does not export is none of
+    /// them: substitution strands nothing, so there is nothing to
+    /// account for.
     #[test]
     fn a_match_that_does_not_fit_is_refused() {
         let (_terms, mut graph) = built("not negate");

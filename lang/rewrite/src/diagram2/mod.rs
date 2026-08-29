@@ -20,8 +20,8 @@
 //!
 //! A box is its kind and the sources its input ports read, and asking for
 //! one twice answers with the one that is already there. So a family of
-//! laws that used to be rows here are not rows, and could not be: there
-//! is no graph for either side of them to be.
+//! laws is not in the table and could not be: there is no graph for
+//! either side of them to be.
 //!
 //! - **`id-elim`, `swap-elim`** — a wire and a crossing are not boxes.
 //!   σ involutive, σ-natural and Yang–Baxter all fall out of nothing
@@ -30,8 +30,8 @@
 //!   cartesian structure is not something a rewrite introduces; it is
 //!   what a source having many readers *is*.
 //! - **`dead-node`** — a box the boundary does not reach is not part of
-//!   the program. Discarding is licensed by totality and purity, exactly
-//!   as before; what changed is that there is nothing to fire.
+//!   the program. Discarding is licensed by totality and purity, and
+//!   there is nothing to fire.
 //! - **`dedup`** — δ-naturality. `push 9 ; push 9` and `push 9 ; copy(1)`
 //!   do not *settle* in the same place; they are written in the same
 //!   place, because a value is named by what it is.
@@ -57,11 +57,8 @@
 //!
 //! ## Nothing here spends them
 //!
-//! There was a `rewrite` in this module — a worklist that ran the wiring
-//! laws to fixpoint, and the only way a graph ever got smaller. It is
-//! gone twice over: first because *which* laws and *where* is a strategy,
-//! written in [`crate::hant`], and then because the laws it spent stopped
-//! existing.
+//! No driver lives in this module, and none should: *which* laws and
+//! *where* is a strategy, and strategies are written in [`crate::hant`].
 //!
 //! So a graph out of [`build`] is the translation and stays that way
 //! until something applies a rule to it. [`rules`] is where that happens:

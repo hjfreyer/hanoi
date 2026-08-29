@@ -7,14 +7,14 @@
 //! facts and orders them so a person can follow the program, which is a
 //! different job and is worth its own code.
 //!
-//! The report used to be the goal turned back into a *term*, and a term is
-//! the wrong shape for it twice over. A graph is a DAG and a term is a
-//! spine, so anything writing one has to reimpose a stack and pay for it in
-//! routing; and a term has no name for a box, so two consecutive steps of a
-//! proof cannot be compared. A [`NodeId`] is stable for the life of a graph —
-//! nodes are only ever deleted, never moved — so a listing keyed by one is a
-//! diff, and "31 boxes went, the branches are gone" is a sentence about what
-//! a tactic did.
+//! A **term** is the wrong shape for the report twice over. A graph is a
+//! DAG and a term is a spine, so anything writing one has to reimpose a
+//! stack and pay for it in routing; and a term has no name for a box, so
+//! two consecutive steps of a proof cannot be compared. A [`NodeId`] is
+//! stable for the life of a graph — a box is named by what it computes,
+//! and nothing edits one — so a listing keyed by one is a diff, and "31
+//! boxes went, the branches are gone" is a sentence about what a tactic
+//! did.
 //!
 //! So this is the only reading of a stuck goal, and the term language is
 //! left to what it is for: stating a claim, and writing a `via` waypoint by
@@ -89,13 +89,8 @@
 //! A value may be written wherever it is used; a computation is written
 //! once, and a **parenthesised id** is how a line says which it is.
 //!
-//! It is the trade this listing already makes for `copy`, run the other
-//! way. A `copy` is the graph's word for "read twice": eliding one
-//! deletes the box and keeps the sharing, and this deletes the sharing
-//! and keeps the value. The sharing is still on the page — the `→`
-//! columns of a box's lines partition its readers, so their union is what
-//! its one line used to say — and [`Listing::all_boxes`] still shows
-//! every box.
+//! The sharing is still on the page: the `→` columns of a box's lines
+//! partition its readers, so their union is the whole of who reads it.
 //!
 //! **The arms come out in the order a reader reads them.** A branch's
 //! region splits in two — every box in it is upstream of one of the
@@ -116,11 +111,10 @@
 //! listing draws one against the `select` itself rather than printing an
 //! `endif` that closes nothing.
 //!
-//! **`id` and `copy` are read through.** They are what the structural laws
-//! delete, and a `copy` says what the links already say — a value read
-//! twice. On the corpus's biggest goal that is 156 boxes of 351. They are
-//! still there and [`Listing::all_boxes`] shows them, because a proof about
-//! a `copy` needs to see it.
+//! **Every box the boundary reaches is on the page.** There is nothing a
+//! reader would rather look through — every box is an operation, and a
+//! value read twice is one box with two `→` entries rather than a box
+//! saying so.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::fmt;
@@ -133,12 +127,10 @@ pub struct Listing<'g> {
     tag: &'g str,
 }
 
-/// A graph as a listing.
+/// A graph as a listing: every box the boundary reaches, one to a line.
 ///
-/// There used to be a choice here — read `id` and `copy` through, or show
-/// them — because a listing full of wiring was unreadable and a proof
-/// naming one of those boxes needed to see it. Neither is a box any more,
-/// so every listing is every box.
+/// There is nothing a reader would rather look through — every box is an
+/// operation — so there is no dial for how much of one to print.
 pub fn listing<'g>(graph: &'g Graph, tag: &'g str) -> Listing<'g> {
     Listing { graph, tag }
 }
@@ -882,8 +874,8 @@ fn operands_at_each_use(
     debug_assert!(lands.is_empty(), "every landing is before a box");
     #[cfg(debug_assertions)]
     {
-        // Every live box is written, and what the lines of one say between
-        // them is what its single line used to say.
+        // Every live box is written, and what the lines of one say
+        // between them is the whole of who reads it.
         let mut said: HashMap<NodeId, HashSet<Sink>> = HashMap::new();
         for printing in &written {
             said.entry(printing.id)
@@ -1374,9 +1366,8 @@ mod tests {
     /// This is the one box the listing writes twice, and the two things a
     /// reader needs of it are that the operand is beside the `add` that
     /// takes it — in *each* arm, since neither can see into the other —
-    /// and that the parenthesised id says the lines are one box. What the
-    /// single line used to say is still said: the `→` columns partition
-    /// its readers rather than dropping any.
+    /// and that the parenthesised id says the lines are one box. No
+    /// reader is dropped for the split: the `→` columns partition them.
     #[test]
     fn a_value_read_from_two_arms_is_written_in_both() {
         let (graph, shared) = grown();

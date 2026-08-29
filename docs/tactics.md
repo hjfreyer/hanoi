@@ -30,9 +30,7 @@ steps are:
 A law is named as [docs/rules.md](rules.md) names it — `fold`,
 `select-same`, `not-not`; the spellings are `Law::name`'s, read both
 ways, so a law added to the table is spellable the moment it is named.
-`branching` names the one list with a name of its own. There is no bare
-`saturate` any more: it stood for the wiring laws, and wiring is not a
-list of laws now but a thing the representation cannot say. This surface is
+`branching` names the one driven list with a name of its own. This surface is
 deliberately smaller than the language underneath: queries and stated
 backward steps exist as data first, and grow a spelling here when a
 proof needs one.
@@ -49,15 +47,11 @@ an arm is the one that matters). A goal offering nine `fold`s and
 needing the seventh has no other proof to write.
 
 The direction field makes `at` a **found** backward step:
-`at(#7, not-not, backward)` looks for the law's right-hand side. This used
-to find something only where that side pinned its own match, which most
-did not — a side exporting one port twice left the split of that port's
-readers a choice nothing in the host settled, so those steps had to be
-stated. A substitution asks no such question, so a right-hand side is
-looked for like any other graph and backward is a direction like forward.
-What still limits it is the payload: `instances` reads payloads off the
-boxes the graph itself spells, so a rule whose payload nothing in the
-graph names is not on offer. The failure says which.
+`at(#7, not-not, backward)` looks for the law's right-hand side. A
+right-hand side is a graph like any other, so backward is a direction
+like forward. What limits it is the payload: `instances` reads payloads
+off the boxes the graph itself spells, so a rule whose payload nothing
+in the graph names is not on offer. The failure says which.
 
 An id is an exact address and a brittle one, and both halves are the
 point. A `NodeId` means one box of one graph at one moment, so an `at`
@@ -72,8 +66,7 @@ entry and fails by name, `NoSuchNode`, the moment its box is gone.
 ### The library drives
 
 Three drivers ship as library tactics — data a proof cites, not an
-ordering an engine hardcodes. There were four: the wiring saturation is
-gone, because a graph arrives with nothing to sweep.
+ordering an engine hardcodes.
 
 - `saturate(law, …)` — those laws to fixpoint. Termination is the
   author's claim: the laws named have to be ones that shrink.
@@ -168,16 +161,11 @@ held.)
 
 ### Found and stated steps
 
-`find` declines a pattern with **no boxes**: there is nothing to anchor
-on, and its image would be a pure guess. Those splices are **stated**
-rather than found.
-
-There used to be a second decline, and it was the interesting one: a
-pattern that exported **one port twice** left the split of that port's
-readers a genuine, result-changing choice, so most right-hand sides
-could not be looked for and a backward step was usually a statement. A
-substitution re-points every reader of the value it replaces, so the
-question is not asked and the decline is gone.
+`find` declines exactly one thing: a pattern with **no boxes**, which
+has nothing to anchor on and whose image would be a pure guess. Those
+steps are **stated** rather than found. Everything else is searchable in
+either direction — a substitution re-points every reader of the value it
+replaces, so no pattern leaves a reader-split for the host to settle.
 
 A stated step is what is read, and nothing else:
 
@@ -294,11 +282,10 @@ Three phenomena, three policies:
   *not* detected: canonical ordering already makes the list
   deterministic, the derivation records the actual match, and `Unique`
   intentionally counts automorphic duplicates — the fix for "unique up
-  to symmetry" is a sharper query. There used to be a second kind here,
-  the reader-split, and it was the one genuine *choice* a match carried:
-  which of a port's outside readers belonged to the window. A
-  substitution re-points every reader of the value it replaces, so
-  nothing is left to choose.
+  to symmetry" is a sharper query. A match carries no choice of its own
+  besides: a substitution re-points every reader of the value it
+  replaces and leaves every reader of anything else alone, so there is
+  no split of a port's readers for anyone to decide.
 
 ### Failure and speculation
 
@@ -371,14 +358,10 @@ Tactic::Fire {
 ```
 
 The query binds what is natural to *say* — the select — while `ReadOff`
-rides `propose`, which seeds what the matcher needs — the literal.
-
-There was a second step here once, a focused wiring sweep to collect
-what the fold had orphaned, and a paragraph about why the untaken arm
-survived it. Neither is a thing any more: the untaken arm's boxes lose
-their reader when the select goes, and a box the boundary does not reach
-is not in the program. There is nothing to collect, and so nothing to
-scope a collection to.
+rides `propose`, which seeds what the matcher needs — the literal. One
+step and no cleanup after it: the untaken arm's boxes lose their reader
+when the select goes, and a box the boundary does not reach is not in
+the program.
 
 ## What is not here yet
 
