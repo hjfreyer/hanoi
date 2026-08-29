@@ -136,17 +136,26 @@ firing), `at(#box, law)` (one firing at a **named box**), `repeat(…)` and
 
 `at` is the step that answers a report in the report's own words. `fire`
 takes the first match it is offered anywhere on the side; when that is
-the wrong one, `at(#41, fold)` names the box the residual listing
+the wrong one, `at(#nkz, fold)` names the box the residual listing
 printed beside the line, and fires the law in a match that holds *that*
 box — anywhere in the match, not only where the law's pattern happens to
 anchor. A third field is the direction, `forward` when left out:
-`at(#41, select-same, backward)` reads the law's equation right to left,
-which is how a proof says "put this back". An id is an exact address and
-a brittle one — it means one box of one graph at one moment, so an `at`
-is written by reading a report and holds only against the goal that
-report described; change a step in front of it and the ids behind it
-move. A proof whose named box is gone fails saying so, by name, rather
-than firing somewhere else.
+`at(#nkz, select-same, backward)` reads the law's equation right to
+left, which is how a proof says "put this back".
+
+**A box's name is what it computes** — a digest of its kind and of the
+names of what it reads, written in twelve letters and printed by the
+listing beside every line, the way Jujutsu writes a change id. A proof
+writes as much of one as tells that box from the others on the page,
+which is exactly the part the listing prints in bold and the part it
+prints wherever one box refers to another: two or three letters, in
+practice. Because the name is a fact about the computation rather than
+about the graph holding it, it means the same box on both sides of the
+goal and in the goal the next step leaves — what it does not survive is
+a rewrite underneath it, since a value made of different values is a
+different value. A proof whose named box is gone fails saying so, by
+name, rather than firing somewhere else; so does one whose prefix has
+come to mean two boxes, and it says which two.
 
 ## Citing one claim in another
 
@@ -335,17 +344,18 @@ A stuck goal prints its **residual**: the two sides as they stand, plus
 why the step gave up. That output is the deliverable of a failed run — it
 is what says what to try next.
 
-**The graphs are what it shows.** One line per box — its id,
+**The graphs are what it shows.** One line per box — its address,
 what it reads, what reads it — with a branch written as the block it is:
 `if <condition>` where its first arm begins, `else` where the second
 does, `endif <condition>` at the `select`, the arms indented between
 them. Only the `endif` is a box; the other two lines the listing draws,
-which is what their empty id column says. The condition is named on all
+which is what their empty name column says. The condition is named on all
 three lines, so a block deep in a nest says which wire it turns on. This is what the tactics acted on, so a next step
-names the boxes it names — literally, with `at(#41, law)` — and a
-`NodeId` is stable for the life of a graph (a box is named by what it
-computes, and nothing edits one), so two reports of one proof compare, which is what watching a
-proof means. Three things keep a large listing legible, each stated in
+names the boxes it names — literally, with `at(#nkz, law)` — and a box
+is named by what it computes, so two reports of one proof compare, which is what watching a
+proof means. On a terminal each line's address is printed with its
+shortest telling prefix in bold, and every reference to a box is that
+prefix; a piped run gets the letters and no escapes. Three things keep a large listing legible, each stated in
 `lang/rewrite/src/diagram2/render.rs`: branch membership is *computed*
 (upstream of the select's blocks, less what feeds its condition, less
 whatever something outside reads) rather than guessed from what sits

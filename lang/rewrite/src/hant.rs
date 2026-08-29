@@ -103,7 +103,7 @@
 //! | `branches` | the branch layer with its cleanup, to fixpoint |
 //! | `decide` | the whole table to fixpoint — what the `diagram` closer drives |
 //! | `fire(law, …)` | the first proposal of those laws, once — fails finding none |
-//! | `at(#box, law)` | that law, once, in a match that holds **that box** — the id the residual printed |
+//! | `at(#box, law)` | that law, once, in a match that holds **that box** — the address the residual printed |
 //! | `at(#box, law, backward)` | the same, reading the law's equation right to left |
 //! | `repeat(t …)` | the sequence until it stops advancing |
 //! | `try(t …)` | the sequence, or nothing — failure becomes no progress |
@@ -119,7 +119,7 @@
 //! ## Pointing at a box
 //!
 //! `fire` takes the first match it is offered anywhere on the side. `at`
-//! is for when that is the wrong one: it names the box, by the id the
+//! is for when that is the wrong one: it names the box, by the address the
 //! **residual listing** printed beside it, and fires the law in a match
 //! that holds that box — anywhere in the match, not only where the law's
 //! pattern happens to anchor. A goal with nine `fold`s available and one
@@ -127,11 +127,11 @@
 //!
 //! ```text
 //! proof identities::the_awkward_one =
-//!     lhs(decide) lhs(at(#41, select-same)) lhs(decide) diagram;
+//!     lhs(decide) lhs(at(#nkz, select-same)) lhs(decide) diagram;
 //! ```
 //!
 //! The third field is the direction, `forward` when it is left out:
-//! `at(#41, select-same, backward)` reads the law's equation right to
+//! `at(#nkz, select-same, backward)` reads the law's equation right to
 //! left, which is how a proof says "put this back". Backward finds
 //! something only where the law's right-hand side names enough boxes to
 //! be looked for, and where the payload is one this graph's own boxes
@@ -140,14 +140,20 @@
 //! data](crate::diagram2::tactic::Tactic::State) with no spelling yet.
 //! Both failures say so by name.
 //!
-//! An id is an exact address and a brittle one, and both halves are the
-//! point. A [`NodeId`] means one box of one graph at one moment, so `at`
-//! is written by reading a report and is only good against the goal that
-//! report described: change a step in front of it and the ids behind it
-//! move. What it buys is that no other spelling of "that one" exists —
-//! the listing is keyed by id precisely so a next step can name what the
-//! report named. A proof whose named box is gone fails loudly, naming it,
-//! rather than firing somewhere else.
+//! An address is a box's **name**: a digest of what it computes and of
+//! what that is computed from, written in letters, and the same letters
+//! wherever that computation is written — the goal's other side included.
+//! A proof writes as much of one as the listing emphasised, which is as
+//! much as tells that box from the others on the page, and the rest is
+//! the listing's to print and the reader's to skim. What it costs is that
+//! a rewrite *under* a box renames it, since a value made of different
+//! values is a different value; so an `at` written off a report is good
+//! for as long as the steps in front of it leave its box computing what
+//! it computed. What it buys is that no other spelling of "that one"
+//! exists — the listing is keyed by address precisely so a next step can
+//! name what the report named. A proof whose named box is gone fails
+//! loudly, naming it, rather than firing somewhere else; so does one
+//! whose prefix has come to mean two boxes, and it says which.
 //!
 //! `inline` and `cases` are the steps that *change what is provable* — no
 //! closer opens a call or invents a case analysis on its own — and the
@@ -184,8 +190,7 @@ use bytecode::{IdentityIndex, SentenceIndex};
 
 use crate::diagram2::rules::{self, Law};
 use crate::diagram2::tactic::{self, Tactic};
-use crate::graph::Direction;
-use crate::graph::NodeId;
+use crate::graph::{Direction, Prefix};
 use crate::term::TermIndex;
 
 /// Which side of the goal a graph tactic acts on.
@@ -662,27 +667,25 @@ fn parse_tactic(input: &str) -> Result<(Tactic, &str), String> {
     }
 }
 
-/// `at(#7, fold)`, `at(#7, not-not, backward)`: a box named by the id the
-/// residual printed, one law, and which way round to read its equation.
+/// `at(#nkz, fold)`, `at(#nkz, not-not, backward)`: a box named by as much
+/// of its address as tells it from the others, one law, and which way
+/// round to read its equation.
 ///
 /// The `#` is the listing's own spelling and is optional here, so a
-/// pasted `#7` and a typed `7` are the same box. A law **list** is
-/// refused: pointing at one box is a claim about one rewrite, and
-/// `structural` there would mean "whichever of twelve laws happens to
-/// fire", which is the opposite of what naming a box is for.
+/// pasted `#nkz` and a typed `nkz` are the same box. Any prefix will do
+/// while it names one box of the side the step runs on; the listing
+/// emphasises exactly how much of each address that is, and a prefix that
+/// grew ambiguous says so at the step rather than firing somewhere else.
+/// A law **list** is refused: pointing at one box is a claim about one
+/// rewrite, and `structural` there would mean "whichever of twelve laws
+/// happens to fire", which is the opposite of what naming a box is for.
 fn parse_at(inside: &str) -> Result<Tactic, String> {
     let mut fields = inside.split(',').map(str::trim);
     let node = fields
         .next()
         .filter(|f| !f.is_empty())
         .ok_or("`at` names no box")?;
-    let node = node.strip_prefix('#').unwrap_or(node);
-    let node: usize = node.parse().map_err(|_| {
-        format!(
-            "`at`: `{}` is not a box id — write `#7`, as the report does",
-            node
-        )
-    })?;
+    let node = Prefix::parse(node).map_err(|why| format!("`at`: {}", why))?;
     let law = fields.next().map(str::trim).unwrap_or("");
     let law = one_law(law)?;
     let dir = match fields.next().map(str::trim) {
@@ -701,7 +704,7 @@ fn parse_at(inside: &str) -> Result<Tactic, String> {
             head_of(extra)
         ));
     }
-    Ok(tactic::fire_at(NodeId::at(node), law, dir))
+    Ok(tactic::fire_at(node, law, dir))
 }
 
 /// One law and not a list — what an address to a single box may name.
@@ -904,6 +907,11 @@ fn paren_block(text: &str) -> Option<(&str, &str)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// An address as a proof writes one, which is as much of it as the
+    /// listing emphasised.
+    fn spelled(letters: &str) -> Prefix {
+        Prefix::parse(letters).expect("a prefix of an address")
+    }
 
     /// `by` is the one thing inside a side that is not a tactic, and it is
     /// told apart by its head word alone — so a law or a tactic whose name
@@ -1281,43 +1289,41 @@ mod tests {
     /// The address a residual hands you, read back: a box id, a law, and
     /// which way round to read the law's equation.
     #[test]
-    fn a_box_can_be_named_by_the_id_the_report_printed() {
-        use crate::graph::NodeId;
-
-        let entries = parse_hant("proof p = lhs(at(#41, select-same)) diagram;").unwrap();
+    fn a_box_can_be_named_by_the_address_the_report_printed() {
+        let entries = parse_hant("proof p = lhs(at(#nkz, select-same)) diagram;").unwrap();
         let [Step::Rewrite { side, tactic }, Step::Diagram] = &entries[0].strategy[..] else {
             panic!("{:?}", entries[0].strategy);
         };
         assert_eq!(*side, OnSide::Lhs);
         assert_eq!(
             tactic.as_ref(),
-            &tactic::fire_at(NodeId::at(41), Law::SelectSame, Direction::Forward)
+            &tactic::fire_at(spelled("nkz"), Law::SelectSame, Direction::Forward)
         );
 
         // The `#` is the listing's spelling, and optional here, so a
-        // pasted id and a typed one are the same box.
-        let entries = parse_hant("proof p = rhs(at(41, select-same)) diagram;").unwrap();
+        // pasted address and a typed one are the same box.
+        let entries = parse_hant("proof p = rhs(at(nkz, select-same)) diagram;").unwrap();
         let [Step::Rewrite { tactic, .. }, _] = &entries[0].strategy[..] else {
             panic!()
         };
         assert_eq!(
             tactic.as_ref(),
-            &tactic::fire_at(NodeId::at(41), Law::SelectSame, Direction::Forward)
+            &tactic::fire_at(spelled("nkz"), Law::SelectSame, Direction::Forward)
         );
 
         // The third field is the direction, `forward` when it is left out.
-        let entries = parse_hant("proof p = lhs(at(#7, select-same, backward)) diagram;").unwrap();
+        let entries = parse_hant("proof p = lhs(at(#sq, select-same, backward)) diagram;").unwrap();
         let [Step::Rewrite { tactic, .. }, _] = &entries[0].strategy[..] else {
             panic!()
         };
         assert_eq!(
             tactic.as_ref(),
-            &tactic::fire_at(NodeId::at(7), Law::SelectSame, Direction::Backward)
+            &tactic::fire_at(spelled("sq"), Law::SelectSame, Direction::Backward)
         );
 
         // And it composes like any other tactic.
         let entries =
-            parse_hant("proof p = both(decide try(at(#3, not-not, backward)) decide) diagram;")
+            parse_hant("proof p = both(decide try(at(#w, not-not, backward)) decide) diagram;")
                 .unwrap();
         let [Step::Rewrite { tactic, .. }, _] = &entries[0].strategy[..] else {
             panic!()
@@ -1328,7 +1334,7 @@ mod tests {
         assert_eq!(
             steps[1],
             Tactic::Try(Box::new(tactic::fire_at(
-                NodeId::at(3),
+                spelled("w"),
                 Law::NotNot,
                 Direction::Backward
             )))
@@ -1344,25 +1350,29 @@ mod tests {
         for (proof, expected) in [
             ("proof p = lhs(at) diagram;", "expects"),
             ("proof p = lhs(at()) diagram;", "names no box"),
-            ("proof p = lhs(at(#41)) diagram;", "names no law"),
+            ("proof p = lhs(at(#nkz)) diagram;", "names no law"),
             (
                 "proof p = lhs(at(the third one, select-same)) diagram;",
-                "not a box id",
+                "is not one of the letters",
             ),
             (
-                "proof p = lhs(at(#41, no-such-law)) diagram;",
+                "proof p = lhs(at(#41, select-same)) diagram;",
+                "is not one of the letters",
+            ),
+            (
+                "proof p = lhs(at(#nkz, no-such-law)) diagram;",
                 "no law is called",
             ),
             (
-                "proof p = lhs(at(#41, branching)) diagram;",
+                "proof p = lhs(at(#nkz, branching)) diagram;",
                 "is a list of them",
             ),
             (
-                "proof p = lhs(at(#41, select-same, sideways)) diagram;",
+                "proof p = lhs(at(#nkz, select-same, sideways)) diagram;",
                 "forward",
             ),
             (
-                "proof p = lhs(at(#41, select-same, backward, 9)) diagram;",
+                "proof p = lhs(at(#nkz, select-same, backward, 9)) diagram;",
                 "and found",
             ),
         ] {

@@ -11,8 +11,11 @@
 //!
 //! A goal that sticks prints its **residual**: the two sides as graphs —
 //! see `rewrite::diagram2::render` — which is what the tactics acted on and
-//! what a next step would name. A box keeps its id across a step, so two
-//! reports of one proof compare, which is what watching a proof means.
+//! what a next step would name. A box is named by what it computes, so it
+//! keeps that name across a step that leaves it alone, and two reports of
+//! one proof compare — which is what watching a proof means. On a
+//! terminal each name is printed with the shortest prefix that tells it
+//! apart in bold: that prefix is what an `at` step is written with.
 //!
 //! `--expand` spends every `by` in full: instead of citing a claim and
 //! taking the corpus's word for it, the cited proof's own steps are carried
@@ -25,6 +28,7 @@
 //! arguments were wrong.
 
 use std::collections::{HashMap, HashSet};
+use std::io::IsTerminal;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -94,7 +98,16 @@ fn field(label: &str, value: &impl std::fmt::Display) {
     }
 }
 
+/// Whether a listing may emphasise the telling prefix of each address:
+/// a terminal shows it, a pipe and a log file would show the escapes
+/// themselves, and [`NO_COLOR`](https://no-color.org) is a reader saying
+/// they would rather not either way.
+fn emphasis() -> bool {
+    std::io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none()
+}
+
 fn run(args: &Args) -> Result<bool, String> {
+    let emphasis = emphasis();
     let mut corpus = corpus::load(&args.root)?;
     for problem in &corpus.problems {
         eprintln!("{}", problem);
@@ -165,7 +178,7 @@ fn run(args: &Args) -> Result<bool, String> {
                     ("left ", &residual.lhs_graph),
                     ("right", &residual.rhs_graph),
                 ] {
-                    println!("{}", render::listing(graph, tag));
+                    println!("{}", render::listing(graph, tag).bold(emphasis));
                 }
                 if !residual.path.is_empty() {
                     field("the goal that stuck", &residual.path.join(", "));

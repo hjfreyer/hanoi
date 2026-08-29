@@ -22,7 +22,7 @@
 //!   payload blanks resolve by reading the bound box — the way
 //!   `read_off` has always read them.
 //! - [`Tactic::At`] — **found at a named box**, either direction: the
-//!   address is a [`NodeId`] copied off a residual listing, and the
+//!   address is a [`Prefix`] of one copied off a residual listing, and the
 //!   search is [`rules::instances`] × [`find_over`]
 //!   over every pattern box, so a match counts when it holds that box
 //!   anywhere. The
@@ -50,15 +50,15 @@
 //! not detected:
 //! the deterministic order picks one and the derivation records which.
 //!
-//! [`Tactic::At`] is the exception that keeps the rule honest. It holds an
-//! id, and an id means nothing against a graph other than the one that
-//! issued it — so it holds one across no rewrite either: it is checked
-//! live at every entry, re-searched between firings like everything else,
-//! and it fails by name ([`TacticError::NoSuchNode`]) the moment the box
-//! it points at is gone. What licenses it is the residual listing, which
-//! is keyed by id precisely so that a next step can name what the report
-//! named; the address is exact for as long as the steps in front of it
-//! are, and no longer, which is the author's to know.
+//! [`Tactic::At`] is the exception that keeps the rule honest. It holds a
+//! name — as much of an [`Address`] as told that box from the others when
+//! the report was printed — and holds it across no rewrite: it is looked
+//! up live at every entry, re-searched between firings like everything
+//! else, and it fails by name the moment the box it points at computes
+//! something else ([`TacticError::NoSuchBox`]) or the prefix has come to
+//! mean two boxes ([`TacticError::ManyBoxes`]). What licenses it is the
+//! residual listing, which is keyed by address precisely so that a next
+//! step can name what the report named.
 //!
 //! ## A fatal failure leaves the graph standing
 //!
@@ -86,7 +86,10 @@ use std::fmt;
 
 use super::query::{self, Bindings, Query, Var};
 use super::rules::{self, Derivation, Law, Rule, Step};
-use crate::graph::{Direction, Graph, Match, NodeId, NodeKind, Source, find_over, find_pinned};
+use crate::graph::{
+    Address, Direction, Graph, Match, Named, NodeId, NodeKind, Prefix, Source, find_over,
+    find_pinned,
+};
 
 // ---- what a step says ------------------------------------------------------------
 
@@ -197,23 +200,28 @@ pub enum Tactic {
         rule: RuleSpec,
         pick: Pick,
     },
-    /// Found at a **named box**: the one address that is an id rather
+    /// Found at a **named box**: the one address that is a name rather
     /// than a description, and the one a residual listing hands you
     /// ready-made.
     ///
-    /// Everything else here addresses by [`Query`], because a [`NodeId`]
-    /// stops meaning anything once a rewrite has run and a description
-    /// does not. This is the deliberate exception, and it earns its place
-    /// from the other end: a stuck goal prints one line per box, keyed by
-    /// id, and the whole point of that listing is that *a next step names
-    /// the boxes it names*. Without this variant there is no way to say
-    /// back what the report just said.
+    /// Everything else here addresses by [`Query`], because a description
+    /// goes on meaning something after a rewrite has run. This is the
+    /// deliberate exception, and it earns its place from the other end: a
+    /// stuck goal prints one line per box, keyed by [`Address`], and the
+    /// whole point of that listing is that *a next step names the boxes it
+    /// names*. Without this variant there is no way to say back what the
+    /// report just said.
     ///
-    /// So the address is exact and the brittleness is the author's: an id
-    /// is a fact about one graph at one moment, and it survives only as
-    /// long as the steps in front of it do. What it buys is precision
-    /// nothing else offers — not "the first `fold` that fires", but *that
-    /// one*.
+    /// The name is written as a [`Prefix`] — as much of the address as
+    /// tells that box from the others, which is what the listing
+    /// emphasises — and is resolved against the side's live boxes at every
+    /// entry ([`Graph::lookup`]). An address is a fact about what the box
+    /// computes rather than about the graph holding it, so it goes on
+    /// meaning that box across the steps that leave it alone and across
+    /// both sides of the goal; what it does not survive is a rewrite
+    /// under it, because a value made of different values is a different
+    /// value. What it buys is precision nothing else offers — not "the
+    /// first `fold` that fires", but *that one*.
     ///
     /// The search is the mirror of [`rules::propose`]'s. Every equation
     /// the law comes to in this graph ([`rules::instances`]) is looked
@@ -227,7 +235,7 @@ pub enum Tactic {
     /// not. Where it finds nothing it says so, loudly, naming the box and
     /// the law.
     At {
-        node: NodeId,
+        at: Prefix,
         law: Law,
         dir: Direction,
         pick: Pick,
@@ -294,14 +302,17 @@ pub enum TacticError {
     /// [`rules::apply`] refused a step the tactic constructed — a tactic
     /// bug, carried with the refusal so it can be read.
     Refused(rules::Error),
-    /// [`Tactic::At`] named a box the graph does not have live: an id
-    /// from before an earlier step deleted it, or from the other side of
-    /// the goal.
-    NoSuchNode { node: NodeId },
+    /// [`Tactic::At`] wrote an address no live box of this side answers
+    /// to: a name read off a listing from before the step in front of it
+    /// changed what that box computes.
+    NoSuchBox { at: Prefix },
+    /// [`Tactic::At`] wrote an address several boxes answer to, with the
+    /// ones it could have meant — lengthen it.
+    ManyBoxes { at: Prefix, found: Vec<Address> },
     /// [`Tactic::At`] found the box, and no match of that law in that
     /// direction holds it.
     NoMatchAt {
-        node: NodeId,
+        at: Address,
         law: Law,
         dir: Direction,
     },
@@ -322,10 +333,21 @@ impl fmt::Display for TacticError {
             TacticError::Ambiguous { found } => {
                 write!(f, "one answer was claimed and {} were found", found)
             }
-            TacticError::NoSuchNode { node } => {
-                write!(f, "{} is not a live box of this side", node)
+            TacticError::NoSuchBox { at } => {
+                write!(f, "{} is not a live box of this side", at)
             }
-            TacticError::NoMatchAt { node, law, dir } => write!(
+            TacticError::ManyBoxes { at, found } => write!(
+                f,
+                "{} is {} boxes of this side: {}",
+                at,
+                found.len(),
+                found
+                    .iter()
+                    .map(Address::to_string)
+                    .collect::<Vec<String>>()
+                    .join(" ")
+            ),
+            TacticError::NoMatchAt { at, law, dir } => write!(
                 f,
                 "no {} `{}` match holds {}",
                 match dir {
@@ -333,7 +355,7 @@ impl fmt::Display for TacticError {
                     Direction::Backward => "backward",
                 },
                 law,
-                node
+                at
             ),
             TacticError::Refused(e) => write!(f, "a constructed step was refused: {}", e),
             TacticError::Unresolved { var } => write!(f, "{} is not bound by the query", var),
@@ -388,12 +410,7 @@ impl Runner<'_> {
     fn run(&mut self, tactic: &Tactic) -> Result<Progress, TacticError> {
         match tactic {
             Tactic::Fire { at, rule, pick } => self.fire(at, rule, *pick),
-            Tactic::At {
-                node,
-                law,
-                dir,
-                pick,
-            } => self.fire_at(*node, *law, *dir, *pick),
+            Tactic::At { at, law, dir, pick } => self.fire_at(at, *law, *dir, *pick),
             Tactic::State {
                 at,
                 rule,
@@ -504,19 +521,33 @@ impl Runner<'_> {
     /// matches still hold it.
     fn fire_at(
         &mut self,
-        node: NodeId,
+        at: &Prefix,
         law: Law,
         dir: Direction,
         pick: Pick,
     ) -> Result<Progress, TacticError> {
         // Said apart from "no match holds it", because the two are
-        // different mistakes: a dead id is a proof reading a listing from
-        // before the step in front of it, and that is worth its own
-        // sentence.
-        if !self.graph.is_live(node) {
-            return Err(TacticError::NoSuchNode { node });
-        }
-        let missing = || TacticError::NoMatchAt { node, law, dir };
+        // different mistakes: an address nothing answers to is a proof
+        // reading a listing from before the step in front of it changed
+        // what that box computes, and that is worth its own sentence. An
+        // address several boxes answer to is a third, and its answer is to
+        // write more of it.
+        let node = match self.graph.lookup(at) {
+            Named::One(node) => node,
+            Named::Nothing => return Err(TacticError::NoSuchBox { at: at.clone() }),
+            Named::Many(found) => {
+                return Err(TacticError::ManyBoxes {
+                    at: at.clone(),
+                    found,
+                });
+            }
+        };
+        let address = self.graph.address(node);
+        let missing = || TacticError::NoMatchAt {
+            at: address,
+            law,
+            dir,
+        };
         match pick {
             Pick::First => {
                 let step = self.at_offers(node, law, dir).into_iter().next();
@@ -922,9 +953,9 @@ pub fn fire_first(laws: Vec<Law>) -> Tactic {
 /// One law, one box, one direction — [`Tactic::At`] with the canonical
 /// pick, which is what the `.hant` surface `at(#7, not-not, backward)`
 /// builds.
-pub fn fire_at(node: NodeId, law: Law, dir: Direction) -> Tactic {
+pub fn fire_at(at: Prefix, law: Law, dir: Direction) -> Tactic {
     Tactic::At {
-        node,
+        at,
         law,
         dir,
         pick: Pick::First,
@@ -965,6 +996,7 @@ mod tests {
     use crate::diagram2::{build, rules::replay};
     use crate::term::{Context, Prim};
     use bytecode::{Value, assemble};
+    use std::collections::HashMap;
 
     fn built(body: &str) -> Graph {
         let code = format!("sentence probe {{ {} }}", body);
@@ -980,6 +1012,12 @@ mod tests {
         let graph = build(&terms, term);
         graph.check().unwrap();
         graph
+    }
+
+    /// What a proof would write to name that box: as much of its address
+    /// as the listing emphasises.
+    fn named(graph: &Graph, id: NodeId) -> Prefix {
+        Prefix::parse(&graph.shortest(id)).expect("a listing's own spelling")
     }
 
     /// The two graphs are one program, judged with every operation left
@@ -1392,7 +1430,7 @@ mod tests {
             let fired = run(
                 &mut g,
                 &mut deriv,
-                &fire_at(target, Law::Fold, Direction::Forward),
+                &fire_at(named(&graph, target), Law::Fold, Direction::Forward),
             )
             .unwrap();
             assert_eq!(fired, Progress::Advanced(1));
@@ -1442,12 +1480,8 @@ mod tests {
         );
 
         let mut deriv = Derivation::default();
-        run(
-            &mut graph,
-            &mut deriv,
-            &fire_at(second, Law::NotNot, Direction::Forward),
-        )
-        .unwrap();
+        let step = fire_at(named(&graph, second), Law::NotNot, Direction::Forward);
+        run(&mut graph, &mut deriv, &step).unwrap();
         assert_eq!(deriv.len(), 1);
         assert!(
             !graph.is_live(first) && !graph.is_live(second),
@@ -1477,7 +1511,7 @@ mod tests {
         run(
             &mut g,
             &mut deriv,
-            &fire_at(coercion, Law::NotNot, Direction::Backward),
+            &fire_at(named(&graph, coercion), Law::NotNot, Direction::Backward),
         )
         .unwrap();
         let landed: Vec<Step> = deriv.steps().cloned().collect();
@@ -1508,37 +1542,91 @@ mod tests {
         let graph = built("not not");
         let (live, _) = graph.live().next().expect("boxes");
 
-        let ghost = NodeId::at(graph.live_count() + 999);
+        let ghost = Prefix::parse("zzzzzzzzzzzz").expect("an address of nought");
+        assert_eq!(graph.lookup(&ghost), Named::Nothing, "\n{}", graph);
         assert_eq!(
             run(
                 &mut graph.clone(),
                 &mut Derivation::default(),
-                &fire_at(ghost, Law::NotNot, Direction::Forward),
+                &fire_at(ghost.clone(), Law::NotNot, Direction::Forward),
             ),
-            Err(TacticError::NoSuchNode { node: ghost })
+            Err(TacticError::NoSuchBox { at: ghost })
         );
 
         assert_eq!(
             run(
                 &mut graph.clone(),
                 &mut Derivation::default(),
-                &fire_at(live, Law::EqualRefl, Direction::Forward),
+                &fire_at(named(&graph, live), Law::EqualRefl, Direction::Forward),
             ),
             Err(TacticError::NoMatchAt {
-                node: live,
+                at: graph.address(live),
                 law: Law::EqualRefl,
                 dir: Direction::Forward,
             })
         );
         assert_eq!(
             TacticError::NoMatchAt {
-                node: live,
+                at: graph.address(live),
                 law: Law::EqualRefl,
                 dir: Direction::Backward,
             }
             .to_string(),
-            format!("no backward `equal-refl` match holds {}", live)
+            format!(
+                "no backward `equal-refl` match holds {}",
+                graph.address(live)
+            )
         );
+    }
+
+    /// A prefix is a name only while it means one box, and when it means
+    /// several the step says which — the answer being to write more of it.
+    #[test]
+    fn an_address_that_names_two_boxes_says_so() {
+        // Seventeen boxes against sixteen letters: two of them start the
+        // same way, whatever the letters turn out to be.
+        let graph = built(
+            "push 1 push 2 add push 3 add push 4 add push 5 add push 6 add \
+             push 7 add push 8 add push 9 add",
+        );
+        assert!(graph.live_count() > 16, "\n{}", graph);
+        let mut sharing: HashMap<char, Vec<NodeId>> = HashMap::new();
+        for (id, _) in graph.live() {
+            let first = graph.address(id).letters().chars().next().expect("letters");
+            sharing.entry(first).or_default().push(id);
+        }
+        let (&letter, held) = sharing
+            .iter()
+            .find(|(_, held)| held.len() > 1)
+            .expect("sixteen letters cannot tell seventeen boxes apart");
+        let short = Prefix::parse(&letter.to_string()).expect("a letter is a prefix");
+
+        let found: Vec<Address> = held.iter().map(|&id| graph.address(id)).collect();
+        let Named::Many(mut answered) = graph.lookup(&short) else {
+            panic!("{} is more than one box:\n{}", short, graph)
+        };
+        answered.sort();
+        let mut wanted = found.clone();
+        wanted.sort();
+        assert_eq!(answered, wanted);
+
+        let Err(TacticError::ManyBoxes { at, .. }) = run(
+            &mut graph.clone(),
+            &mut Derivation::default(),
+            &fire_at(short.clone(), Law::Fold, Direction::Forward),
+        ) else {
+            panic!("an ambiguous address is not a name")
+        };
+        assert_eq!(at, short);
+
+        // And the whole of any one of them is: every box's own address
+        // tells it from every other.
+        for (id, _) in graph.live() {
+            let whole = Prefix::parse(&graph.address(id).letters()).expect("an address");
+            assert_eq!(graph.lookup(&whole), Named::One(id));
+            let short = Prefix::parse(&graph.shortest(id)).expect("what the listing prints");
+            assert_eq!(graph.lookup(&short), Named::One(id), "{}", short);
+        }
     }
 
     /// A focus scopes anchors, and a named box is an anchor: naming one
@@ -1560,7 +1648,11 @@ mod tests {
         let mut deriv = Derivation::default();
         let focused = Tactic::Within(
             Region::LastImage,
-            Box::new(fire_at(outside, Law::Fold, Direction::Forward)),
+            Box::new(fire_at(
+                named(&graph, outside),
+                Law::Fold,
+                Direction::Forward,
+            )),
         );
         // Nothing has landed, so the focus is empty and the box is out of
         // it — even though it is a live box the tactic could otherwise
@@ -1568,7 +1660,7 @@ mod tests {
         assert_eq!(
             run(&mut g, &mut deriv, &focused),
             Err(TacticError::NoMatchAt {
-                node: outside,
+                at: graph.address(outside),
                 law: Law::Fold,
                 dir: Direction::Forward,
             })

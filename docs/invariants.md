@@ -72,7 +72,9 @@ list.
 
 Node ids are handed out in order and never reused, and a box is named by
 what it computes and never edited, so a `NodeId` is stable for the life
-of a graph. A
+of a graph and a box's **address** — the digest of what it computes, in
+letters, which is what a report prints and a proof writes — is stable
+across graphs. A
 derivation replays from its original graph and lands identically —
 that is the property it exists to have — so:
 
@@ -82,8 +84,10 @@ that is the property it exists to have — so:
 - Speculation (a tactic's `try`, a failed alternative) runs on clones and
   leaves no trace; the surviving suffix replays onto the real graph.
 - Bindings and matches never cross a rewrite. Persistence is running the
-  query again; the one exception, `at(#box, law)`, is checked live at
-  every entry and fails by name when its box is gone.
+  query again; the one exception, `at(#box, law)`, holds a **name** and
+  not an id — as much of a box's address as tells it apart — looked up
+  against the live graph at every entry and failing by name when nothing
+  answers to it or two boxes do.
 
 ## A close is re-checked, fail closed
 

@@ -27,8 +27,19 @@
 //! laws that fire — they are things the representation cannot say, which is
 //! the strongest form of "already done".
 //!
-//! **A node is immutable.** Its content is its name, so nothing edits one;
-//! a rewrite makes new nodes and re-roots. Which means links are recorded
+//! **Its content is its name, and the name is writable.** [`Address`] is
+//! that name spelled out: a digest of the box's kind and the *addresses*
+//! of what its input ports read, in twelve letters. It is stolen from
+//! Jujutsu's change ids down to the reverse-hex alphabet, and for the same
+//! reason — a name a person can read off a report, say back, and shorten
+//! to however much of it is unambiguous ([`Prefix`], [`Graph::lookup`],
+//! [`Graph::names`]). A [`NodeId`] is an arena slot and means one graph at
+//! one moment; an address is a fact about the computation and means the
+//! same box wherever that computation is written, this goal's other side
+//! included.
+//!
+//! **A node is immutable.** Nothing edits one; a rewrite makes new nodes
+//! and re-roots. Which means links are recorded
 //! one way only — [`Graph::sources`] down, and no reader lists to keep in
 //! step. [`Graph::sinks`] answers by reading, and answers about the
 //! **reachable** graph: a node no boundary output reaches is not part of
@@ -86,7 +97,9 @@ use crate::term::{Arity, Prim};
 /// Meaningful only against the graph that issued it. An id is never reused
 /// and a node is never edited, so an id names the same computation for the
 /// life of the graph — what changes is whether the boundary still reaches
-/// it.
+/// it. What a *person* names a box with is its [`Address`]: an id is the
+/// slot the box sits in, which is nobody's business outside the graph it
+/// sits in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct NodeId(u32);
 
@@ -128,6 +141,190 @@ pub enum Sink {
     Output(usize),
     /// Input port `port` of `node`.
     Port { node: NodeId, port: usize },
+}
+
+// ---- what a box is called ------------------------------------------------------
+
+/// The sixteen letters an address is written in, digit by digit.
+///
+/// Reverse hex, [as Jujutsu writes a change id]: `z` is nought and `k` is
+/// fifteen. The property that matters is that no address is ever a
+/// number — `at(#nkz, fold)` cannot be misread as the forty-first box of
+/// anything, and a listing's name column cannot be read as a count.
+///
+/// [as Jujutsu writes a change id]: https://jj-vcs.github.io/jj/latest/glossary/#change-id
+const DIGITS: [u8; 16] = *b"zyxwvutsrqponmlk";
+
+/// A box's name: a hash of what it computes, written in letters.
+///
+/// **The address is the content.** It is taken over the box's kind and the
+/// *addresses* of the sources its input ports read — never their ids — so
+/// it says what the box computes and nothing about the graph that holds
+/// it. Two graphs that compute a thing the same way name it the same, and
+/// that is the whole point: a [`NodeId`] is an arena slot, meaningful for
+/// the life of one graph and shifting the moment a step in front of it
+/// adds a box, while an address is a fact about the computation. A proof
+/// that names a box by address goes on naming the same box across the
+/// steps that leave it alone, and across the two sides of one goal.
+///
+/// What it does *not* survive is a change to what the box computes — and
+/// that is right, because that is a different box. A rewrite under a box
+/// re-addresses everything downstream of it, since a value made of
+/// different values is a different value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct Address(u64);
+
+impl Address {
+    /// How many letters an address is: forty-eight bits, twelve digits.
+    ///
+    /// Long enough that a corpus-sized graph never lands two boxes on one
+    /// name — a few hundred boxes against 2⁴⁸ — and short enough to read
+    /// out loud. Nobody writes all of it: a proof names a box by any
+    /// prefix no other box on the page shares, which in practice is two or
+    /// three letters.
+    pub const LETTERS: usize = 12;
+
+    /// The letters, most significant digit first.
+    pub fn letters(self) -> String {
+        (0..Address::LETTERS)
+            .map(|i| {
+                let shift = 4 * (Address::LETTERS - 1 - i);
+                DIGITS[((self.0 >> shift) & 0xf) as usize] as char
+            })
+            .collect()
+    }
+
+    /// Whether this is one of the boxes that prefix could mean.
+    pub fn starts_with(self, prefix: &Prefix) -> bool {
+        self.letters().starts_with(prefix.letters())
+    }
+
+    /// The digest of a box, folded down to the letters an address is.
+    fn of(hash: u64) -> Address {
+        Address(hash & ((1 << (4 * Address::LETTERS as u64)) - 1))
+    }
+}
+
+impl fmt::Display for Address {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "#{}", self.letters())
+    }
+}
+
+/// As much of an address as somebody wrote: what a proof names a box with.
+///
+/// Any run of the alphabet's letters, the empty one excluded. It means the
+/// box whose address begins with it — and it is only a name at all while
+/// exactly one box on the page begins that way, which is a question about
+/// a graph and so is asked of one ([`Graph::lookup`]).
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct Prefix(String);
+
+impl Prefix {
+    /// A written prefix, checked to be one: letters of the alphabet, and at
+    /// least one of them.
+    ///
+    /// The `#` an address prints with is accepted and dropped, so a prefix
+    /// pasted out of a listing is a prefix.
+    pub fn parse(written: &str) -> Result<Prefix, String> {
+        let letters = written.strip_prefix('#').unwrap_or(written);
+        if letters.is_empty() {
+            return Err("an address names no box".to_string());
+        }
+        if let Some(stray) = letters
+            .chars()
+            .find(|c| !c.is_ascii() || !DIGITS.contains(&(*c as u8)))
+        {
+            return Err(format!(
+                "`{}` is no address: `{}` is not one of the letters `{}` an address is written in",
+                letters,
+                stray,
+                String::from_utf8_lossy(&DIGITS),
+            ));
+        }
+        if letters.len() > Address::LETTERS {
+            return Err(format!(
+                "`{}` is longer than an address, which is {} letters",
+                letters,
+                Address::LETTERS
+            ));
+        }
+        Ok(Prefix(letters.to_string()))
+    }
+
+    pub fn letters(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for Prefix {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "#{}", self.0)
+    }
+}
+
+/// How many letters two addresses agree on from the front.
+fn shared(one: &str, other: &str) -> usize {
+    one.chars()
+        .zip(other.chars())
+        .take_while(|(a, b)| a == b)
+        .count()
+}
+
+/// What a prefix named, asked of a graph.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Named {
+    /// Exactly one live box begins that way.
+    One(NodeId),
+    /// None does.
+    Nothing,
+    /// Several do, and here they are — a prefix is a name only while it is
+    /// unambiguous, and the answer says what to lengthen it to.
+    Many(Vec<Address>),
+}
+
+/// FNV-1a, so that an address is the same letters everywhere.
+///
+/// [`Node`] already hashes by exactly what it *is* — that is what the
+/// intern table is — so an address is that same hashing, spent through a
+/// hasher whose answer is written down rather than one the standard
+/// library is free to change between releases. The integer writes are
+/// little-endian for the same reason: a proof holds an address, and an
+/// address that moved with the machine it was computed on would be no
+/// name at all.
+struct Digest(u64);
+
+impl Digest {
+    fn new() -> Digest {
+        Digest(0xcbf2_9ce4_8422_2325)
+    }
+}
+
+macro_rules! written_little_endian {
+    ($($method:ident: $int:ty),* $(,)?) => {
+        $(fn $method(&mut self, n: $int) {
+            std::hash::Hasher::write(self, &n.to_le_bytes())
+        })*
+    };
+}
+
+impl std::hash::Hasher for Digest {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        for &byte in bytes {
+            self.0 ^= u64::from(byte);
+            self.0 = self.0.wrapping_mul(0x100_0000_01b3);
+        }
+    }
+
+    written_little_endian! {
+        write_u16: u16, write_u32: u32, write_u64: u64, write_u128: u128, write_usize: usize,
+        write_i16: i16, write_i32: i32, write_i64: i64, write_i128: i128, write_isize: isize,
+        write_u8: u8, write_i8: i8,
+    }
 }
 
 /// What a box is: an operation, a call, or a branch.
@@ -192,6 +389,12 @@ pub struct Graph {
     nodes: Vec<Node>,
     /// The one id each distinct box has.
     intern: HashMap<Node, NodeId>,
+    /// What each box is called, by index — see [`Address`].
+    ///
+    /// Kept beside the nodes rather than in them because it is not part of
+    /// what a node *is*: it is a reading of that, and the intern table is
+    /// keyed by the thing itself.
+    addrs: Vec<Address>,
     /// How many boundary inputs.
     inputs: usize,
     /// What each boundary output reads, deepest first.
@@ -213,6 +416,7 @@ impl Graph {
         Graph {
             nodes: Vec::new(),
             intern: HashMap::new(),
+            addrs: Vec::new(),
             inputs,
             outputs: Vec::new(),
         }
@@ -324,9 +528,103 @@ impl Graph {
             return id;
         }
         let id = NodeId::at(self.nodes.len());
+        self.addrs.push(self.address_of(&node));
         self.intern.insert(node.clone(), id);
         self.nodes.push(node);
         id
+    }
+
+    /// What a box is called: its kind and the **addresses** of what it
+    /// reads, digested.
+    ///
+    /// Reading the sources by address rather than by id is the whole of
+    /// what makes the name a fact about the computation: a box's operands
+    /// are named by what *they* compute, all the way down to the boundary,
+    /// so the same program written in two graphs gets the same letters.
+    /// Every source is already there when this is asked — a box is only
+    /// ever made after what it reads — so it is one pass and no recursion.
+    fn address_of(&self, node: &Node) -> Address {
+        use std::hash::{Hash, Hasher};
+        let mut digest = Digest::new();
+        node.kind.hash(&mut digest);
+        for source in &node.inputs {
+            match *source {
+                Source::Input(i) => {
+                    digest.write_u8(0);
+                    digest.write_usize(i);
+                }
+                Source::Port { node, port } => {
+                    digest.write_u8(1);
+                    digest.write_u64(self.addrs[node.index()].0);
+                    digest.write_usize(port);
+                }
+            }
+        }
+        Address::of(digest.finish())
+    }
+
+    /// What that box is called.
+    pub fn address(&self, id: NodeId) -> Address {
+        self.addrs[id.index()]
+    }
+
+    /// The box a written prefix means — or why it means no box.
+    ///
+    /// Asked of the **live** boxes, which are the ones a listing printed
+    /// and so the ones a proof can have read: the arena keeps what a
+    /// rewrite left behind, and a name for one of those would be a name
+    /// for something that is not part of the program.
+    pub fn lookup(&self, prefix: &Prefix) -> Named {
+        let mut found: Vec<NodeId> = self
+            .live()
+            .map(|(id, _)| id)
+            .filter(|&id| self.address(id).starts_with(prefix))
+            .collect();
+        match found.len() {
+            0 => Named::Nothing,
+            1 => Named::One(found.pop().expect("one")),
+            _ => Named::Many(found.into_iter().map(|id| self.address(id)).collect()),
+        }
+    }
+
+    /// How much of that box's address a proof has to write: the shortest
+    /// prefix of it no other live box shares.
+    ///
+    /// The listing marks exactly this much of every address it prints, and
+    /// prints exactly this much wherever one box refers to another — so
+    /// what is emphasised on a box's own line is what the rest of the page
+    /// calls it, and is what an `at` step is written with.
+    pub fn shortest(&self, id: NodeId) -> String {
+        self.names()
+            .remove(&id)
+            .unwrap_or_else(|| self.address(id).letters())
+    }
+
+    /// [`Graph::shortest`] for every live box at once, which is what a
+    /// listing wants: one sort, and each address measured against the two
+    /// it lands between.
+    pub fn names(&self) -> HashMap<NodeId, String> {
+        let mut sorted: Vec<(String, NodeId)> = self
+            .live()
+            .map(|(id, _)| (self.address(id).letters(), id))
+            .collect();
+        sorted.sort();
+        let mut out = HashMap::new();
+        for (at, (letters, id)) in sorted.iter().enumerate() {
+            let against = |other: Option<&(String, NodeId)>| match other {
+                Some((theirs, _)) => shared(letters, theirs),
+                None => 0,
+            };
+            // One letter past the longest agreement with a neighbour, and
+            // never nothing — a lone box is still called something. Two
+            // boxes that agree the whole way are a collision, and both
+            // then answer to the whole of it, which is the honest thing:
+            // whoever writes it is told the name means two boxes.
+            let agreed = against(sorted.get(at.wrapping_sub(1))).max(against(sorted.get(at + 1)));
+            let cut = (agreed + 1).clamp(1, letters.len());
+            out.insert(*id, letters[..cut].to_string());
+        }
+        out
     }
 
     /// Closes the graph: these sources are what the boundary leaves.
@@ -596,7 +894,7 @@ impl fmt::Display for Error {
                 inputs,
             } => write!(
                 f,
-                "node {} takes {} where its kind takes {}",
+                "{} takes {} where its kind takes {}",
                 node, inputs, expected
             ),
             Error::Dangling { source, sink } => {
@@ -1266,9 +1564,13 @@ pub(crate) fn schedule(graph: &Graph) -> Vec<NodeId> {
 
 // ---- printing --------------------------------------------------------------------
 
+/// An id is a slot, and prints as one. The `#` sigil belongs to
+/// [`Address`] — what a person calls a box — and no low-level complaint
+/// about a graph's own consistency should look like something an `at` step
+/// could be written with.
 impl fmt::Display for NodeId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "#{}", self.0)
+        write!(f, "box {}", self.0)
     }
 }
 
@@ -1645,5 +1947,86 @@ mod tests {
             inputs: vec![Source::Input(0)],
         };
         assert_eq!(carried.carry(&stranger), None, "box 1 is not covered");
+    }
+
+    /// A box's name is what it computes, so the same computation written
+    /// in two graphs is the same name — which is what lets a proof write
+    /// one down and what makes two reports of one proof comparable.
+    #[test]
+    fn a_box_is_called_what_it_computes() {
+        let (_t, a) = built("push 1 push 2 add");
+        let (_t, b) = built("push 1 push 2 add");
+        let names = |g: &Graph| -> Vec<String> {
+            let mut said: Vec<String> = g.live().map(|(id, _)| g.address(id).letters()).collect();
+            said.sort();
+            said
+        };
+        assert_eq!(names(&a), names(&b), "one program, one set of names");
+
+        let (_t, c) = built("push 1 push 3 add");
+        assert_ne!(
+            names(&a),
+            names(&c),
+            "a different operand is a different value, so a different name"
+        );
+
+        // And a name is letters, never a number: no address can be read as
+        // an id, and no id as an address.
+        for (id, _) in a.live() {
+            let letters = a.address(id).letters();
+            assert_eq!(letters.len(), Address::LETTERS);
+            assert!(
+                letters.chars().all(|c| ('k'..='z').contains(&c)),
+                "{} is not written in the alphabet",
+                letters
+            );
+        }
+    }
+
+    /// What a proof writes: the shortest prefix that means one box, and
+    /// the whole address, both naming the box the listing named. A prefix
+    /// short of that means several, and says so.
+    #[test]
+    fn a_prefix_names_a_box_while_it_means_one() {
+        let (_t, graph) = built("push 1 push 2 add push 3 add");
+        for (id, _) in graph.live() {
+            let short = Prefix::parse(&graph.shortest(id)).expect("what a listing prints");
+            assert_eq!(graph.lookup(&short), Named::One(id), "{}", short);
+            let whole = Prefix::parse(&graph.address(id).letters()).expect("an address");
+            assert_eq!(graph.lookup(&whole), Named::One(id));
+            // Nothing shorter would do — the letter before the last is
+            // shared with somebody, or the shortest was not shortest.
+            let letters = short.letters();
+            if letters.len() > 1 {
+                let shorter = Prefix::parse(&letters[..letters.len() - 1]).expect("a prefix");
+                assert!(
+                    matches!(graph.lookup(&shorter), Named::Many(_)),
+                    "{} would have done",
+                    shorter
+                );
+            }
+        }
+        assert_eq!(
+            graph.lookup(&Prefix::parse("zzzzzzzzzzzz").expect("an address of nought")),
+            Named::Nothing
+        );
+    }
+
+    /// Every way of writing an address wrong, answered where it is
+    /// written. The `#` is the listing's own spelling, so a pasted address
+    /// and a typed one are one prefix.
+    #[test]
+    fn an_address_is_written_one_way() {
+        assert_eq!(Prefix::parse("#nkz"), Prefix::parse("nkz"));
+        for (written, why) in [
+            ("", "names no box"),
+            ("#", "names no box"),
+            ("41", "not one of the letters"),
+            ("nkza", "not one of the letters"),
+            ("nkzmnkzmnkzmn", "longer than an address"),
+        ] {
+            let err = Prefix::parse(written).expect_err(written);
+            assert!(err.contains(why), "{}: {}", written, err);
+        }
     }
 }
