@@ -30,38 +30,35 @@
 //! and [`apply`] *verifies* it rather than searching for it: every check is
 //! local, reads one port at a time, and takes no decisions.
 //!
-//! Side conditions are not checked, they are **carried by the interface**.
-//! `dead-node` is the clearest case: its left side is one box with **no
-//! boundary outputs**, so the fullness condition below forces every port of
-//! the box it matches to have no reader at all. Nothing asks "is this dead";
-//! a match that is not one fails to be a match. `not-not` is the same trick
-//! one step along — its middle port is not exported, so the rule cannot fire
-//! where something else reads the first `not`.
+//! What a rule *wants* is said in its pattern rather than tested for:
+//! [`Law::SelectHoist`] exports its body's outputs and never the select's
+//! answers, [`Law::Shannon`] carries the region it pins as payload,
+//! [`Law::SelectLiteral`] carries its arms. Nothing asks a question a
+//! match could answer.
+//!
+//! What a pattern no longer says is *and nothing else reads this*. A
+//! rewrite replaces the value a window exports and rebuilds whatever read
+//! it, so a reader the window never mentioned is not a loose end:
+//! `not-not` fires on a first `not` somebody else reads, and that
+//! somebody goes on reading it.
 //!
 //! ## Which laws are here
 //!
-//! Four are the eliminations `super` used to hardcode, restated:
-//! [`Law::IdElim`], [`Law::SwapElim`], [`Law::CopyElim`] and
-//! [`Law::DeadNode`] (which is `drop-elim` too — a `drop(n)` has no outputs,
-//! so it is always dead). The rest of the structural theory
-//! ([docs/rules.md](../../../../docs/rules.md) opens with the list) has no
-//! spelling here: the associativities, the units, the interchange and
-//! Yang–Baxter are all *representation*, true of the wiring because the
-//! wiring cannot say them.
+//! Not the wiring. `id-elim`, `swap-elim`, `copy-elim`, `dead-node` and
+//! `dedup` were rows here once, and they are gone — not because they
+//! stopped being true but because there is no graph for either side of
+//! them to be. A box is its kind and the sources it reads, so a value
+//! read twice is two references, a value read never is a box the boundary
+//! does not reach, and two boxes computing the same thing are one box.
+//! [docs/rules.md](../../../../docs/rules.md) opens with the whole list,
+//! the associativities and Yang–Baxter among them.
 //!
-//! Two are new, and they are why a table is worth having:
-//!
-//! - [`Law::Dedup`] — δ-naturality, which `super` used to list among the
-//!   things it had not bought. Two boxes of one kind reading one set of
-//!   sources are one box read twice. It is also the whole of "the same
-//!   operation done in both arms is one operation": both arms read the
-//!   one port once `copy-elim` has run, so the two boxes are two boxes on
-//!   one set of sources like any other pair.
-//! - [`Law::NotNot`] — `not ; not = as_bool`, a layer-3 law carried as the
-//!   template for the rest. It is in the table and **not** in
-//!   [`structural`], because the opaque-operation oracle the tests judge by
-//!   reads `not(not(x))` and `as_bool(x)` as different symbols — this law is
-//!   about what the machine computes, and `vm` is what measures it.
+//! What is left is the two things the representation cannot decide: what
+//! a branch means ([`branching`]) and what an operation computes
+//! ([`folding`]). [`Law::NotNot`] — `not ; not = as_bool` — is the elder
+//! of the second: the opaque-operation oracle the tests judge by reads
+//! `not(not(x))` and `as_bool(x)` as different symbols, so this is a law
+//! about what the machine computes, and `vm` is what measures it.
 //!
 //! ## The value layer, and the two rows no list drives
 //!
@@ -114,8 +111,8 @@
 //! exactly the claim that the answers go into `A` and nowhere else.
 //!
 //! A branch grows *backwards* for free: work in front of one is shared by
-//! both arms as a matter of wiring, and two boxes doing it twice are one
-//! box by [`Law::Dedup`]. This is the same freedom at the other end —
+//! both arms as a matter of naming, and doing it twice is having it once.
+//! This is the same freedom at the other end —
 //! without it everything downstream of a select is out of the branch
 //! layer's reach, and a select can be deleted but never moved.
 //!
@@ -142,10 +139,10 @@
 //!
 //! Every one of them is stated at the `select`, because a `select` is the
 //! whole of what a branch is. Lifting work both arms do out in front is
-//! not among them: both arms read the one port once `copy-elim` has run,
-//! so two boxes doing the same work are two boxes on one set of sources,
-//! which is [`Law::Dedup`]. `branch { A } { A } = drop-top ; A` is
-//! `dedup`, then `select-same`, then `dead-node`.
+//! not among them, and is not a rewrite at all: both arms are handed the
+//! same sources, so the same work done in both is one box from the moment
+//! it is written. `branch { A } { A } = drop-top ; A` is `select-same`
+//! and nothing else.
 //!
 //! ### What a block is, and what a window may say about one
 //!
@@ -208,11 +205,6 @@ use crate::term::{Arity, Prim};
 /// Which equation, with its blanks still open.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Law {
-    IdElim,
-    SwapElim,
-    CopyElim,
-    DeadNode,
-    Dedup,
     NotNot,
     AndLiteral,
     TupleCancel,
@@ -251,11 +243,6 @@ impl Law {
     /// names one cannot drift apart.
     pub fn name(self) -> &'static str {
         match self {
-            Law::IdElim => "id-elim",
-            Law::SwapElim => "swap-elim",
-            Law::CopyElim => "copy-elim",
-            Law::DeadNode => "dead-node",
-            Law::Dedup => "dedup",
             Law::NotNot => "not-not",
             Law::AndLiteral => "and-literal",
             Law::TupleCancel => "tuple-cancel",
@@ -287,11 +274,6 @@ impl Law {
     /// checked against.
     pub fn every() -> Vec<Law> {
         vec![
-            Law::IdElim,
-            Law::SwapElim,
-            Law::CopyElim,
-            Law::DeadNode,
-            Law::Dedup,
             Law::NotNot,
             Law::AndLiteral,
             Law::TupleCancel,
@@ -334,25 +316,11 @@ pub enum Side {
 /// One equation, stated outright: a pair of graphs, built from the payload
 /// and nothing else.
 ///
-/// Widths a payload determines are not carried — `DeadNode { kind }` reads
-/// its boundary width off the kind's own arity, because carrying it as well
-/// would let a rule state a pair whose two halves disagree.
+/// Widths a payload determines are not carried — a rule reads them off the
+/// kinds it names, because carrying them as well would let a rule state a
+/// pair whose two halves disagree.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Rule {
-    /// `id(n)` is a wire: its readers read what it read.
-    IdElim { n: usize },
-    /// A crossing is not recorded — the two lines cross by being re-pointed.
-    SwapElim,
-    /// `copy(n)` is a port read twice. The one rule that grows the readers
-    /// of a port rather than shrinking the graph, and where the cartesian
-    /// structure enters.
-    CopyElim { n: usize },
-    /// ε-naturality: a box nothing reads, and its input links, gone. The
-    /// language is total and pure, which is what licenses it.
-    DeadNode { kind: NodeKind },
-    /// δ-naturality: two boxes of one kind on one set of sources are one box
-    /// read twice.
-    Dedup { kind: NodeKind },
     /// `not ; not = as_bool` — the coercion spelled the long way round.
     NotNot,
     /// `and` with a literal operand is decided by `truthy` alone —
@@ -700,11 +668,6 @@ impl Rule {
     /// Which row of the table this is an instance of.
     pub fn law(&self) -> Law {
         match self {
-            Rule::IdElim { .. } => Law::IdElim,
-            Rule::SwapElim => Law::SwapElim,
-            Rule::CopyElim { .. } => Law::CopyElim,
-            Rule::DeadNode { .. } => Law::DeadNode,
-            Rule::Dedup { .. } => Law::Dedup,
             Rule::NotNot => Law::NotNot,
             Rule::AndLiteral { .. } => Law::AndLiteral,
             Rule::TupleCancel { .. } => Law::TupleCancel,
@@ -727,23 +690,6 @@ impl Rule {
             Rule::CoercionGuard { .. } => Law::CoercionGuard,
         }
     }
-}
-
-/// The wiring laws: everything true of the wiring alone — the `structural`
-/// list of [docs/rules.md](../../../../docs/rules.md).
-///
-/// `DeadNode` leads because it is the cheapest test and because a dead box
-/// should go before anything bothers looking inside it — advice to a driver
-/// that takes the first proposal it is offered, not a promise this module
-/// keeps.
-pub fn structural() -> Vec<Law> {
-    vec![
-        Law::DeadNode,
-        Law::IdElim,
-        Law::SwapElim,
-        Law::CopyElim,
-        Law::Dedup,
-    ]
 }
 
 /// The branch layer: the laws stated at one end of a branch or the other.
@@ -932,49 +878,6 @@ pub fn sides(rule: &Rule) -> Result<Pair, Error> {
     let law = rule.law();
     let ill = |why| Error::Ill { law, why };
     let (a, b) = match rule {
-        Rule::IdElim { n } => {
-            let n = *n;
-            (
-                Graph::of_box(NodeKind::Id(n)),
-                wires(n, (0..n).map(Source::Input).collect()),
-            )
-        }
-        Rule::SwapElim => (
-            Graph::of_box(NodeKind::Op(Prim::Swap)),
-            // Output 0 is what came in on top, which is what a crossing is.
-            wires(2, vec![Source::Input(1), Source::Input(0)]),
-        ),
-        Rule::CopyElim { n } => {
-            let n = *n;
-            // Block-wise, as the box is: output `i` and output `n + i` both
-            // stand for input `i`, so the right side names one source twice.
-            let both = (0..n).chain(0..n).map(Source::Input).collect();
-            (Graph::of_box(NodeKind::Copy(n)), wires(n, both))
-        }
-        Rule::DeadNode { kind } => {
-            let inputs = kind.arity().inputs;
-            (dead_box(kind.clone()), wires(inputs, Vec::new()))
-        }
-        Rule::Dedup { kind } => {
-            // Every kind is fair game, `select` included: two selects on one
-            // condition and one pair of blocks answer alike, which is the
-            // whole of what this row says of any box.
-            let arity = kind.arity();
-            let ins: Vec<Source> = (0..arity.inputs).map(Source::Input).collect();
-
-            let mut twice = Graph::empty(arity.inputs);
-            let mut ports = twice.add(kind.clone(), ins.clone());
-            ports.extend(twice.add(kind.clone(), ins.clone()));
-            twice.close(ports);
-
-            let mut once = Graph::empty(arity.inputs);
-            let ports = once.add(kind.clone(), ins);
-            let mut both = ports.clone();
-            both.extend(ports);
-            once.close(both);
-
-            (twice, once)
-        }
         Rule::NotNot => {
             let mut long = Graph::empty(1);
             let first = long.add(NodeKind::Op(Prim::Not), vec![Source::Input(0)]);
@@ -1092,10 +995,18 @@ pub fn sides(rule: &Rule) -> Result<Pair, Error> {
             both.close(answers);
 
             let mut fewer = Graph::empty(2 * n);
-            let mut takes = vec![Source::Input(0)];
-            takes.extend((0..n).filter(|&i| i != j).map(then));
-            takes.extend((0..n).filter(|&i| i != j).map(els));
-            let kept = fewer.add(NodeKind::Select { arity: n - 1 }, takes);
+            // A branch that answers nothing is not a branch. Narrowing the
+            // last block away leaves the block itself and no box at all —
+            // and it has to leave no box, because a box with no output
+            // ports is a value nothing can name.
+            let kept = if n == 1 {
+                Vec::new()
+            } else {
+                let mut takes = vec![Source::Input(0)];
+                takes.extend((0..n).filter(|&i| i != j).map(then));
+                takes.extend((0..n).filter(|&i| i != j).map(els));
+                fewer.add(NodeKind::Select { arity: n - 1 }, takes)
+            };
             let mut answers = Vec::with_capacity(n);
             let mut next = 0;
             for i in 0..n {
@@ -1593,23 +1504,6 @@ pub fn sides(rule: &Rule) -> Result<Pair, Error> {
     Pair::new(a, b).map_err(|why| ill(why.into()))
 }
 
-/// The same box with **nothing exported**, which is how "nothing reads this"
-/// is said as an interface rather than as a test.
-fn dead_box(kind: NodeKind) -> Graph {
-    let arity = kind.arity();
-    let mut g = Graph::empty(arity.inputs);
-    g.add(kind, (0..arity.inputs).map(Source::Input).collect());
-    g.close(Vec::new());
-    g
-}
-
-/// No boxes at all: `n` inputs, and outputs that name them.
-fn wires(inputs: usize, outputs: Vec<Source>) -> Graph {
-    let mut g = Graph::empty(inputs);
-    g.close(outputs);
-    g
-}
-
 /// Runs one instruction on the operands it wants, on the machine itself.
 ///
 /// The fold owes the interpreter exact agreement, junk included, so there
@@ -1916,7 +1810,7 @@ fn downstream_of(graph: &Graph, answers: &[Source], spare: bool) -> Option<Graph
     let mut region: Vec<NodeId> = Vec::new();
     let mut todo: Vec<Source> = answers.to_vec();
     while let Some(src) = todo.pop() {
-        for &sink in graph.sinks(src) {
+        for sink in graph.sinks(src) {
             let Sink::Port { node, .. } = sink else {
                 continue;
             };
@@ -2019,11 +1913,6 @@ fn read_off(graph: &Graph, law: Law, id: NodeId) -> Vec<(Rule, NodeId)> {
     };
     let one = |rule: Rule| vec![(rule, id)];
     match (law, &kind) {
-        (Law::IdElim, NodeKind::Id(n)) => one(Rule::IdElim { n: *n }),
-        (Law::SwapElim, NodeKind::Op(Prim::Swap)) => one(Rule::SwapElim),
-        (Law::CopyElim, NodeKind::Copy(n)) => one(Rule::CopyElim { n: *n }),
-        (Law::DeadNode, _) => one(Rule::DeadNode { kind }),
-        (Law::Dedup, _) => one(Rule::Dedup { kind }),
         (Law::NotNot, NodeKind::Op(Prim::Not)) => one(Rule::NotNot),
 
         // `and` with a literal operand: one rule per operand a pushed
@@ -2446,9 +2335,6 @@ mod tests {
         Match {
             nodes: (0..g.live_count()).map(NodeId::at).collect(),
             inputs: (0..g.arity().inputs).map(Source::Input).collect(),
-            outputs: (0..g.arity().outputs)
-                .map(|j| vec![Sink::Output(j)])
-                .collect(),
         }
     }
 
@@ -2484,84 +2370,6 @@ mod tests {
     }
 
     // ---- the table ----
-
-    #[test]
-    fn an_identity_box_is_a_wire() {
-        holds(Law::IdElim, Rule::IdElim { n: 3 });
-        holds(Law::IdElim, Rule::IdElim { n: 0 });
-    }
-
-    #[test]
-    fn a_crossing_is_the_links_it_leaves() {
-        holds(Law::SwapElim, Rule::SwapElim);
-    }
-
-    #[test]
-    fn a_copy_is_a_port_read_twice() {
-        holds(Law::CopyElim, Rule::CopyElim { n: 1 });
-        holds(Law::CopyElim, Rule::CopyElim { n: 3 });
-    }
-
-    /// The side condition that is an interface rather than a test: the left
-    /// side exports nothing, so a box with a reader is simply not that
-    /// graph. `drop(n)` is the base case, having no outputs to export.
-    #[test]
-    fn work_nothing_reads_is_no_work() {
-        for kind in [
-            NodeKind::Drop(2),
-            NodeKind::Op(Prim::Add),
-            NodeKind::Op(Prim::Push(Value::Int(9))),
-            NodeKind::Copy(2),
-            NodeKind::Select { arity: 2 },
-        ] {
-            holds(Law::DeadNode, Rule::DeadNode { kind });
-        }
-        let (_, lhs) = (
-            0,
-            sides(&Rule::DeadNode {
-                kind: NodeKind::Op(Prim::Add),
-            })
-            .unwrap()
-            .lhs()
-            .clone(),
-        );
-        assert_eq!(lhs.arity(), Arity::new(2, 0), "the window exports nothing");
-    }
-
-    #[test]
-    fn one_computation_run_twice_is_one_box() {
-        holds(
-            Law::Dedup,
-            Rule::Dedup {
-                kind: NodeKind::Op(Prim::Add),
-            },
-        );
-        holds(
-            Law::Dedup,
-            Rule::Dedup {
-                kind: NodeKind::Op(Prim::Push(Value::Int(9))),
-            },
-        );
-        holds(
-            Law::Dedup,
-            Rule::Dedup {
-                kind: NodeKind::Op(Prim::Untuple(3)),
-            },
-        );
-    }
-
-    /// A select is a box like any other here: two of them on one condition
-    /// and one pair of blocks answer alike, so the row states an equation
-    /// rather than a refusal.
-    #[test]
-    fn dedup_holds_of_a_branch_too() {
-        holds(
-            Law::Dedup,
-            Rule::Dedup {
-                kind: NodeKind::Select { arity: 2 },
-            },
-        );
-    }
 
     // ---- the branch layer ----
 
@@ -2618,9 +2426,6 @@ mod tests {
             let answers = match graph.kind(id) {
                 NodeKind::Op(prim) => run_window(&took, &prim.to_instruction())
                     .expect("every prim is total on the machine"),
-                NodeKind::Id(_) => took,
-                NodeKind::Copy(_) => [took.clone(), took].concat(),
-                NodeKind::Drop(_) => Vec::new(),
                 NodeKind::Select { arity } => {
                     let n = *arity;
                     if took[0].truthy() {
@@ -2921,7 +2726,13 @@ mod tests {
         for refused in [
             Rule::SelectHoist {
                 arity: 1,
-                body: dead_box(NodeKind::Op(Prim::Not)),
+                body: {
+                    // A body that leaves nothing: one box, nothing exported.
+                    let mut g = Graph::empty(1);
+                    g.add(NodeKind::Op(Prim::Not), vec![Source::Input(0)]);
+                    g.close(Vec::new());
+                    g
+                },
             },
             Rule::SelectHoist {
                 arity: 0,
@@ -3306,9 +3117,7 @@ mod tests {
                 law
             );
             assert!(
-                !folding().contains(&law)
-                    && !structural().contains(&law)
-                    && !branching().contains(&law),
+                !folding().contains(&law) && !branching().contains(&law),
                 "{} grows a graph; no list should drive it",
                 law
             );
@@ -3320,11 +3129,12 @@ mod tests {
         let coerced = graph.add(NodeKind::Op(Prim::AsTuple(2)), vec![Source::Input(0)]);
         let parts = graph.add(NodeKind::Op(Prim::Untuple(2)), coerced.clone());
         let rebuilt = graph.add(NodeKind::Op(Prim::Tuple(2)), parts);
-        let elsewhere = graph.add(NodeKind::Op(Prim::IsTuple(None)), coerced);
+        let elsewhere = graph.add(NodeKind::Op(Prim::IsTuple(None)), coerced.clone());
         graph.close(vec![rebuilt[0], elsewhere[0]]);
         graph.check().unwrap();
-        assert!(
-            !graph.is_monogamous(),
+        assert_eq!(
+            graph.sinks(coerced[0]).len(),
+            2,
             "the coercion is read twice:\n{}",
             graph
         );
@@ -3421,134 +3231,6 @@ mod tests {
 
     // ---- the checker does not match ----
 
-    /// The point of the split. A match is a claim about ports, and every
-    /// way it can be false is decided by comparing ports — there is no
-    /// searching in the checker to go wrong.
-    #[test]
-    fn a_match_that_does_not_fit_is_refused() {
-        let (_terms, mut graph) = built("push 1 not");
-        let push = only(&NodeKind::Op(Prim::Push(Value::Int(1))), &graph);
-        let not = only(&NodeKind::Op(Prim::Not), &graph);
-
-        let refuse = |graph: &mut Graph, step: &Step| match apply(graph, step) {
-            Err(Error::NotThere { at, .. }) => at,
-            other => panic!("accepted: {:?}", other.map(|_| ())),
-        };
-
-        // The right law and the wrong box.
-        let step = Step {
-            rule: Rule::IdElim { n: 1 },
-            dir: Direction::Forward,
-            at: Match {
-                nodes: vec![not],
-                inputs: vec![Source::Port {
-                    node: push,
-                    port: 0,
-                }],
-                outputs: vec![vec![Sink::Output(0)]],
-            },
-        };
-        assert_eq!(refuse(&mut graph, &step), Mismatch::Kind(not));
-
-        // The right box, and an input port that reads something else.
-        let step = Step {
-            rule: Rule::DeadNode {
-                kind: NodeKind::Op(Prim::Not),
-            },
-            dir: Direction::Forward,
-            at: Match {
-                nodes: vec![not],
-                inputs: vec![Source::Input(0)],
-                outputs: Vec::new(),
-            },
-        };
-        assert_eq!(
-            refuse(&mut graph, &step),
-            Mismatch::Edge(Sink::Port { node: not, port: 0 })
-        );
-
-        // The right box, and a reader the window does not export. This is
-        // `dead-node`'s side condition doing its work: the `not` is read by
-        // the boundary, so the window with nothing exported is not there.
-        let step = Step {
-            rule: Rule::DeadNode {
-                kind: NodeKind::Op(Prim::Not),
-            },
-            dir: Direction::Forward,
-            at: Match {
-                nodes: vec![not],
-                inputs: vec![Source::Port {
-                    node: push,
-                    port: 0,
-                }],
-                outputs: Vec::new(),
-            },
-        };
-        assert_eq!(
-            refuse(&mut graph, &step),
-            Mismatch::Readers(Source::Port { node: not, port: 0 })
-        );
-
-        // A boundary that points back inside the match: what it names is
-        // the pattern plus a link, not the pattern.
-        let step = Step {
-            rule: Rule::Dedup {
-                kind: NodeKind::Op(Prim::Not),
-            },
-            dir: Direction::Forward,
-            at: Match {
-                nodes: vec![not, not],
-                inputs: vec![Source::Port { node: not, port: 0 }],
-                outputs: vec![vec![], vec![]],
-            },
-        };
-        assert_eq!(refuse(&mut graph, &step), Mismatch::Shape);
-
-        // And nothing above changed the graph.
-        graph.check().unwrap();
-        assert_eq!(graph.live_count(), 2);
-    }
-
-    /// The matcher is partial exactly where a side does not pin its own
-    /// match, and every one of those is a right-hand side that has to be
-    /// *stated* rather than read: a graph with no boxes has nothing to
-    /// anchor on, and a graph that exports one port twice leaves the split
-    /// of that port's readers a choice.
-    #[test]
-    fn the_matcher_declines_where_a_side_pins_nothing() {
-        let (_terms, graph) = built("push 1 push 2 add");
-        for rule in [
-            Rule::IdElim { n: 1 },
-            Rule::SwapElim,
-            Rule::CopyElim { n: 1 },
-            Rule::DeadNode {
-                kind: NodeKind::Op(Prim::Add),
-            },
-            Rule::Dedup {
-                kind: NodeKind::Op(Prim::Add),
-            },
-        ] {
-            let pair = sides(&rule).unwrap();
-            assert!(
-                find(&graph, pair.rhs()).is_empty(),
-                "{:?} backward was matched anyway",
-                rule.law()
-            );
-        }
-        // `equal-refl`'s answer side is a box, and still declines: its
-        // boundary input — the discarded wire — is one the pattern never
-        // touches, so its image is a choice.
-        let (_terms, graph) = built("push 1 push 2 add");
-        let pair = sides(&Rule::EqualRefl).unwrap();
-        assert!(find(&graph, pair.rhs()).is_empty());
-
-        // `not-not` is the one right-hand side that is a box, and it reads
-        // fine.
-        let (_terms, graph) = built("as_bool");
-        let pair = sides(&Rule::NotNot).unwrap();
-        assert_eq!(find(&graph, pair.rhs()).len(), 1);
-    }
-
     /// The walk can start anywhere: pinning any box of a side to its own
     /// image finds the identity embedding, and the answer comes back in
     /// pattern order whatever order the search visited it in.
@@ -3573,58 +3255,11 @@ mod tests {
         }
     }
 
-    /// A backward step still *spends* the laws the matcher declines — it
-    /// just has to say what it is spending, which is the whole point of the
-    /// match carrying the split rather than deriving it.
-    #[test]
-    fn a_derivation_states_what_the_matcher_cannot_read() {
-        let (_terms, mut graph) = built("not");
-        let not = only(&NodeKind::Op(Prim::Not), &graph);
-        // Put a `copy(1)` back in front of the boundary output: the right
-        // side of `copy-elim` is one source exported twice, and here the
-        // one source is the `not` and the two readers are invented.
-        let step = Step {
-            rule: Rule::CopyElim { n: 1 },
-            dir: Direction::Backward,
-            at: Match {
-                nodes: Vec::new(),
-                inputs: vec![Source::Port { node: not, port: 0 }],
-                outputs: vec![vec![Sink::Output(0)], vec![]],
-            },
-        };
-        let back = apply(&mut graph, &step).unwrap();
-        graph.check().unwrap();
-        let copy = only(&NodeKind::Copy(1), &graph);
-        assert_eq!(graph.sources(copy), [Source::Port { node: not, port: 0 }]);
-        assert_eq!(
-            graph.outputs(),
-            [Source::Port {
-                node: copy,
-                port: 0
-            }]
-        );
-
-        // And forward again takes it straight back out.
-        apply(&mut graph, &back).unwrap();
-        graph.check().unwrap();
-        assert_eq!(graph.live_count(), 1);
-        assert_eq!(graph.outputs(), [Source::Port { node: not, port: 0 }]);
-    }
-
     // ---- the table, against a graph ----
 
     /// One payload per row of the table, and between them every law.
     fn table() -> Vec<Rule> {
         vec![
-            Rule::IdElim { n: 2 },
-            Rule::SwapElim,
-            Rule::CopyElim { n: 1 },
-            Rule::DeadNode {
-                kind: NodeKind::Op(Prim::Add),
-            },
-            Rule::Dedup {
-                kind: NodeKind::Op(Prim::Add),
-            },
             Rule::NotNot,
             Rule::AndLiteral {
                 literal: Side::Top,
@@ -3751,49 +3386,6 @@ mod tests {
         }
     }
 
-    /// A window inside a graph, with a port read more than once.
-    ///
-    /// This is the shape [`build`] never makes and every rewrite after the
-    /// first `copy-elim` does, so it is the one the corpus could not offer
-    /// either: a match's [`Match::outputs`] carries the *split* of a port's
-    /// readers, and on a monogamous graph the split has only one way to go.
-    /// Here it has two readers to divide, and both have to come out naming
-    /// what the deleted box was reading.
-    #[test]
-    fn a_step_re_points_the_readers_the_window_does_not_hold() {
-        let mut graph = Graph::empty(0);
-        let nine = graph.add(NodeKind::Op(Prim::Push(Value::Int(9))), Vec::new());
-        let wire = graph.add(NodeKind::Id(1), nine.clone());
-        let not = graph.add(NodeKind::Op(Prim::Not), wire.clone());
-        let negate = graph.add(NodeKind::Op(Prim::Negate), wire.clone());
-        graph.close(vec![not[0], negate[0]]);
-        graph.check().unwrap();
-        assert!(!graph.is_monogamous(), "the point of the test:\n{}", graph);
-
-        let id = only(&NodeKind::Id(1), &graph);
-        let steps = propose(&graph, &[Law::IdElim], id);
-        assert_eq!(steps.len(), 1, "one window, both readers in it");
-        apply(&mut graph, &steps[0]).unwrap();
-        graph.check().unwrap();
-
-        // Both readers came out naming the `9`, and the wire is gone.
-        let not = only(&NodeKind::Op(Prim::Not), &graph);
-        let negate = only(&NodeKind::Op(Prim::Negate), &graph);
-        let push = only(&NodeKind::Op(Prim::Push(Value::Int(9))), &graph);
-        for reader in [not, negate] {
-            assert_eq!(
-                graph.sources(reader),
-                [Source::Port {
-                    node: push,
-                    port: 0
-                }],
-                "a reader outside the window was left naming a deleted box:\n{}",
-                graph
-            );
-        }
-        assert_eq!(graph.live_count(), 3);
-    }
-
     /// The same again on programs rather than on shapes: on a handful of
     /// sentences, every law that should be read off a box is, and every
     /// proposal applies and leaves the graph whole.
@@ -3815,50 +3407,37 @@ mod tests {
         // list cannot reach — the specializing rows — want a shape a
         // rewrite makes, and are covered above against the shapes the
         // table itself states.
-        // A fresh graph pads its literals behind `id` boxes, so the fold
-        // has nothing to read until `id-elim` has fired — the value layer
-        // only reaches a graph the structural layer has cleaned.
-        offers("push 1 push 2 add", &[Law::IdElim]);
-        offers("push 1 push 1 add", &[Law::IdElim, Law::Dedup]);
-        offers("swap swap", &[Law::SwapElim]);
-        offers("push 9 pick 0", &[Law::CopyElim]);
-        offers(
-            "dip { swap } swap dip { swap }",
-            &[Law::IdElim, Law::SwapElim],
-        );
-        offers(
-            "pick 1 pick 1 equal drop 0",
-            &[
-                Law::IdElim,
-                Law::SwapElim,
-                Law::CopyElim,
-                Law::DeadNode,
-                Law::PromisedBool,
-                Law::Shannon,
-            ],
-        );
+        //
+        // The lists are short now, and that is the change: a built graph
+        // used to arrive full of wiring, and the value layer could reach
+        // nothing until the wiring had been swept. There is no wiring, so
+        // what a graph offers on the first asking is what it is about.
+        offers("push 1 push 2 add", &[Law::Fold]);
+        offers("swap swap", &[]);
+        offers("push 9 pick 0", &[]);
+        offers("dip { swap } swap dip { swap }", &[]);
+        // Nothing at all: the comparison is dropped, so the boundary
+        // reaches no box and there is no box to read a law off.
+        offers("pick 1 pick 1 equal drop 0", &[]);
+        // The answer goes straight to the boundary, so there is no
+        // region downstream of it for `shannon` to split.
+        offers("pick 1 pick 1 equal", &[Law::PromisedBool]);
+        // One wire compared with itself — which is what it is, now that
+        // `pick` is a second reference rather than a `copy`.
+        offers("pick 0 pick 0 equal", &[Law::EqualRefl, Law::PromisedBool]);
         offers(
             "branch { pick 0 drop 0 not } { not }",
-            &[
-                Law::IdElim,
-                Law::CopyElim,
-                Law::DeadNode,
-                Law::PromisedBool,
-                Law::Shannon,
-            ],
+            &[Law::PromisedBool, Law::Shannon, Law::SelectSame],
         );
         offers(
             "pick 0 push 1 equal branch { not } { negate }",
-            &[Law::IdElim, Law::CopyElim, Law::PromisedBool, Law::Shannon],
+            &[Law::PromisedBool, Law::Shannon],
         );
-        // One operation in both arms is two boxes on one copy's ports,
-        // and once `copy-elim` has run it is two boxes on one set of
-        // sources — which is `dedup`.
-        offers("branch { add } { add }", &[Law::CopyElim]);
-        offers(
-            "push 1 pick 1 branch { add } { add }",
-            &[Law::IdElim, Law::SwapElim, Law::CopyElim],
-        );
+        // One operation in both arms is *one box*: the two arms are handed
+        // the same sources, so they compute the same value and there is
+        // one of it. What `dedup` used to be for happens in `build`.
+        offers("branch { add } { add }", &[Law::SelectSame]);
+        offers("push 1 pick 1 branch { add } { add }", &[Law::SelectSame]);
         // Work after a branch, which is what `select-hoist` reads: the
         // region downstream of the select's answers, lifted out as the
         // body the branch grows over. Nothing about the condition is
@@ -3866,7 +3445,7 @@ mod tests {
         // whatever made the wire it turns on.
         offers(
             "branch { negate } { negate } negate",
-            &[Law::CopyElim, Law::SelectHoist],
+            &[Law::SelectSame, Law::SelectHoist],
         );
 
         // A literal condition: the select is the blocks it chooses.
@@ -3876,7 +3455,7 @@ mod tests {
         );
     }
 
-    /// The laws a body offers, and no others.
+    /// Every law the built graph proposes somewhere, and no other.
     fn offers(body: &str, want: &[Law]) {
         let (_terms, graph) = built(body);
         let spent = each_proposal(&graph, body);
@@ -3910,7 +3489,7 @@ mod tests {
         let all = Law::every();
         assert_eq!(
             all.len(),
-            25,
+            20,
             "a law joined the table: name it, and list it in `Law::every`"
         );
         let mut names: Vec<&str> = all.iter().map(|law| law.name()).collect();
@@ -3918,56 +3497,96 @@ mod tests {
         let spelled = names.len();
         names.dedup();
         assert_eq!(names.len(), spelled, "two laws share a spelling");
-        for law in [structural(), branching(), folding()].concat() {
+        for law in [branching(), folding()].concat() {
             assert!(all.contains(&law), "{:?} is on no vocabulary", law);
         }
     }
 
-    /// [`instances`] answers which equations a law comes to in one graph,
-    /// with the *where* left open — the payloads the graph's own boxes
-    /// spell, and nothing it does not say.
+    /// The point of the split. A match is a claim about ports, and every
+    /// way it can be false is decided by comparing ports — there is no
+    /// searching in the checker to go wrong.
+    ///
+    /// Three ways, where there were five. A reader the window does not
+    /// export is no longer one of them: substitution strands nothing, so
+    /// there is nothing to account for.
     #[test]
-    fn the_instances_of_a_law_are_the_payloads_the_graph_spells() {
-        let (_terms, graph) = built("pick 1 pick 1 equal drop 0");
+    fn a_match_that_does_not_fit_is_refused() {
+        let (_terms, mut graph) = built("not negate");
+        let negate = only(&NodeKind::Op(Prim::Negate), &graph);
+        let not = only(&NodeKind::Op(Prim::Not), &graph);
 
-        // `dedup` carries a kind, so the instances are the kinds present
-        // — each of them once, however many boxes spell it.
-        let deduped: Vec<NodeKind> = instances(&graph, Law::Dedup)
-            .into_iter()
-            .map(|rule| match rule {
-                Rule::Dedup { kind } => kind,
-                other => panic!("{:?} is not a dedup", other),
-            })
-            .collect();
-        for (_, kind) in graph.live() {
-            assert!(deduped.contains(kind), "no `dedup` payload for {:?}", kind);
-        }
-        for kind in &deduped {
-            assert!(
-                graph.live().any(|(_, live)| live == kind),
-                "{:?} is a payload no box spells",
-                kind
-            );
-            assert_eq!(
-                deduped.iter().filter(|other| *other == kind).count(),
-                1,
-                "{:?} twice",
-                kind
-            );
-        }
+        let refuse = |graph: &mut Graph, step: &Step| match apply(graph, step) {
+            Err(Error::NotThere { at, .. }) => at,
+            other => panic!("accepted: {:?}", other.map(|_| ())),
+        };
 
-        // And a law no box witnesses comes to nothing: there is no
-        // `tuple` here, so no `tuple-cancel` payload to read.
-        assert!(instances(&graph, Law::TupleCancel).is_empty());
+        // The right law and the wrong box.
+        let step = Step {
+            rule: Rule::NotNot,
+            dir: Direction::Forward,
+            at: Match {
+                nodes: vec![negate, not],
+                inputs: vec![Source::Input(0)],
+            },
+        };
+        assert_eq!(refuse(&mut graph, &step), Mismatch::Kind(negate));
 
-        // Every instance is an equation that builds, which is what makes
-        // it something to look for on either side.
-        for law in Law::every() {
-            for rule in instances(&graph, law) {
-                assert_eq!(rule.law(), law);
-                sides(&rule).unwrap_or_else(|e| panic!("{:?}: {:?}", rule, e));
-            }
-        }
+        // The right boxes, and an input port that reads something else.
+        let step = Step {
+            rule: Rule::NotNot,
+            dir: Direction::Forward,
+            at: Match {
+                nodes: vec![not, not],
+                inputs: vec![Source::Input(0)],
+            },
+        };
+        assert_eq!(
+            refuse(&mut graph, &step),
+            Mismatch::Edge(Sink::Port { node: not, port: 0 })
+        );
+
+        // A match that is not the shape of the pattern at all.
+        let step = Step {
+            rule: Rule::NotNot,
+            dir: Direction::Forward,
+            at: Match {
+                nodes: vec![not],
+                inputs: vec![Source::Input(0)],
+            },
+        };
+        assert_eq!(refuse(&mut graph, &step), Mismatch::Shape);
+
+        // And nothing above changed the graph.
+        graph.check().unwrap();
+        assert_eq!(graph.live_count(), 2);
+    }
+
+    /// A right-hand side is looked for like any other graph.
+    ///
+    /// It was not, and the reason was the reader-split: a side exporting
+    /// one port twice left nothing in the host to say which of that port's
+    /// readers belonged to which export, so those steps had to be stated.
+    /// A substitution never asks, so backward is a direction like forward.
+    #[test]
+    fn a_right_hand_side_is_looked_for_like_any_other() {
+        let (_terms, graph) = built("as_bool");
+        let pair = sides(&Rule::NotNot).unwrap();
+        let found = find(&graph, pair.rhs());
+        assert_eq!(found.len(), 1, "`not-not`'s answer is standing right there");
+
+        // And it is a step: the coercion comes back as the two `not`s.
+        let mut graph = graph.clone();
+        apply(
+            &mut graph,
+            &Step {
+                rule: Rule::NotNot,
+                dir: Direction::Backward,
+                at: found[0].clone(),
+            },
+        )
+        .expect("a backward step is a step");
+        graph.check().unwrap();
+        assert_eq!(graph.live_count(), 2, "two `not`s:\n{}", graph);
     }
 
     // ---- a derivation carried somewhere else ----
@@ -4005,7 +3624,6 @@ mod tests {
             at: Match {
                 nodes: vec![made],
                 inputs: vec![Source::Input(0)],
-                outputs: vec![vec![Sink::Output(0)]],
             },
         };
         apply(&mut alone, &second).unwrap();
@@ -4084,7 +3702,6 @@ mod tests {
         let backwards = Match {
             nodes: vec![boxes[1], boxes[0]],
             inputs: vec![Source::Input(0)],
-            outputs: vec![vec![Sink::Output(0)]],
         };
         let mut there = host.clone();
         assert!(matches!(
@@ -4097,7 +3714,7 @@ mod tests {
         // the host is touched at all.
         let at = find(&host, &lemma)[0].clone();
         let stray = Step {
-            rule: Rule::SwapElim,
+            rule: Rule::EqualRefl,
             dir: Direction::Forward,
             at: identity(&lemma),
         };

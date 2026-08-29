@@ -20,9 +20,6 @@
 //! and it is the question citing is an answer to — a citation is only honest
 //! if it could have been discharged, and this is what discharges it.
 //!
-//! `--boxes` stops reading through the `id` and `copy` the structural laws
-//! would delete.
-//!
 //! Exit codes: `0` every identity proved, `1` a claim is unproved or a
 //! proof entry could not attach, `2` the corpus would not build or the
 //! arguments were wrong.
@@ -41,7 +38,6 @@ struct Args {
     root: PathBuf,
     filter: Option<String>,
     /// Show `id` and `copy` rather than reading through them.
-    all_boxes: bool,
     /// Spend every `by` in full — the cited proof's own steps, carried in
     /// and re-checked here — rather than citing the claim on the corpus's
     /// word.
@@ -53,7 +49,7 @@ fn main() -> ExitCode {
         Ok(args) => args,
         Err(message) => {
             eprintln!("error: {}", message);
-            eprintln!("usage: prove <root> [--filter <substr>] [--boxes] [--expand]");
+            eprintln!("usage: prove <root> [--filter <substr>] [--expand]");
             return ExitCode::from(2);
         }
     };
@@ -70,13 +66,11 @@ fn main() -> ExitCode {
 fn parse_args() -> Result<Args, String> {
     let mut root = None;
     let mut filter = None;
-    let mut all_boxes = false;
     let mut expand = false;
     let mut argv = std::env::args().skip(1);
     while let Some(arg) = argv.next() {
         match arg.as_str() {
             "--filter" => filter = Some(argv.next().ok_or("--filter needs a value")?),
-            "--boxes" => all_boxes = true,
             "--expand" => expand = true,
             other if root.is_none() && !other.starts_with('-') => root = Some(PathBuf::from(other)),
             other => return Err(format!("unrecognized argument: {}", other)),
@@ -85,7 +79,6 @@ fn parse_args() -> Result<Args, String> {
     Ok(Args {
         root: root.ok_or("no corpus root given")?,
         filter,
-        all_boxes,
         expand,
     })
 }
@@ -172,13 +165,7 @@ fn run(args: &Args) -> Result<bool, String> {
                     ("left ", &residual.lhs_graph),
                     ("right", &residual.rhs_graph),
                 ] {
-                    let listing = render::listing(graph, tag);
-                    let listing = if args.all_boxes {
-                        listing.all_boxes()
-                    } else {
-                        listing
-                    };
-                    println!("{}", listing);
+                    println!("{}", render::listing(graph, tag));
                 }
                 if !residual.path.is_empty() {
                     field("the goal that stuck", &residual.path.join(", "));

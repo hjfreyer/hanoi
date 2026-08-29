@@ -72,12 +72,15 @@ fn probe() -> (Context, Goal) {
     (ctx, goal)
 }
 
-/// The goal with the wiring laws spent on its left side too — where the
-/// route below starts.
+/// Where the route below starts.
+///
+/// There used to be a wiring pass here, spending `copy-elim` and `dedup`
+/// so that the arm's recomputation and the condition became one box. A
+/// graph of values arrives that way: the arm reads the very sources the
+/// branch was handed, so its `is_symbol` *is* the condition's, and there
+/// is nothing to settle.
 fn settled() -> (Context, Goal) {
-    let (ctx, mut goal) = probe();
-    drive(&mut goal.lhs, &tactic::saturate_structural());
-    (ctx, goal)
+    probe()
 }
 
 /// A branch's one end: its condition, and its first block.
@@ -103,24 +106,20 @@ fn the_decision_procedure_does_not_close_it() {
     );
 }
 
-/// The arm's test and the condition's test are two boxes on one source
-/// once `copy-elim` has run, so the **wiring pass alone** makes the then
-/// block the condition itself — which is half of what `specialize-bool` is
-/// anchored on.
+/// The arm recomputes the very test its branch decided, and computing it
+/// twice is having it once: the then block **is** the condition, as built,
+/// which is half of what `specialize-bool` is anchored on.
+///
+/// This used to be a claim about a pass — `copy-elim` and then `dedup`
+/// identifying two boxes on one source. It is now a claim about the
+/// representation, which is the same claim with nothing left to run.
 #[test]
-fn the_wiring_pass_makes_the_block_the_condition() {
-    let (_ctx, mut goal) = probe();
-    let (condition, then_block) = select(&goal.lhs);
-    assert_ne!(
-        condition, then_block,
-        "as built, the arm's test is its own box"
-    );
-
-    drive(&mut goal.lhs, &tactic::saturate_structural());
+fn the_block_is_the_condition_as_built() {
+    let (_ctx, goal) = probe();
     let (condition, then_block) = select(&goal.lhs);
     assert_eq!(
         condition, then_block,
-        "the arm's recomputation was not identified with the condition"
+        "the arm's recomputation is not the condition itself"
     );
 }
 

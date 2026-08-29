@@ -8,8 +8,8 @@ and [`query.rs`](../lang/rewrite/src/diagram2/query.rs). A tactic
 orchestrates rewrites; it is entirely untrusted. Every firing lands
 through `Derivation::push` and is verified by `rules::apply`, so a buggy
 tactic produces a refused step, never a wrong graph — a tactic run *is*
-a derivation, replayable and undoable, and the addressing rules below
-all serve that property (see [docs/invariants.md](invariants.md)).
+a derivation, replayable, and the addressing rules below all serve that
+property (see [docs/invariants.md](invariants.md)).
 
 ## The surface
 
@@ -18,9 +18,8 @@ steps are:
 
 | tactic | is |
 |---|---|
-| `saturate` | the structural laws to fixpoint |
 | `saturate(law, …)` | those laws to fixpoint |
-| `branches` | the branch layer with its structural cleanup, to fixpoint |
+| `branches` | the branch layer to fixpoint |
 | `decide` | the whole table to fixpoint — what the `diagram` closer drives |
 | `fire(law, …)` | the first proposal of those laws, once — fails finding none |
 | `at(#box, law)` | that law, once, in a match that holds **that box** — the id the residual printed |
@@ -28,10 +27,12 @@ steps are:
 | `repeat(t …)` | the sequence until it stops advancing |
 | `try(t …)` | the sequence, or nothing — failure becomes no progress |
 
-A law is named as [docs/rules.md](rules.md) names it — `copy-elim`,
-`select-same`, `dead-node`; the spellings are `Law::name`'s, read both
+A law is named as [docs/rules.md](rules.md) names it — `fold`,
+`select-same`, `not-not`; the spellings are `Law::name`'s, read both
 ways, so a law added to the table is spellable the moment it is named.
-`structural` and `branching` name the two lists. This surface is
+`branching` names the one list with a name of its own. There is no bare
+`saturate` any more: it stood for the wiring laws, and wiring is not a
+list of laws now but a thing the representation cannot say. This surface is
 deliberately smaller than the language underneath: queries and stated
 backward steps exist as data first, and grow a spelling here when a
 proof needs one.
@@ -44,37 +45,43 @@ by the id the **residual listing** printed beside it, and fires the law
 in a match that holds that box — anywhere in the match, not only where
 the law's pattern happens to anchor (`not-not` fired by naming its
 second `not` is the small case; a whole-branch law named at a box inside
-an arm is the one that matters). A goal offering nine `dedup`s and
+an arm is the one that matters). A goal offering nine `fold`s and
 needing the seventh has no other proof to write.
 
 The direction field makes `at` a **found** backward step:
-`at(#7, dedup, backward)` looks for the law's right-hand side. It finds
-something only where that side pins its own match and where the payload
-is one the graph's own boxes spell — most right-hand sides are bare
-wiring and pin nothing, and those steps stay stated data (below). Both
-failures say which.
+`at(#7, not-not, backward)` looks for the law's right-hand side. This used
+to find something only where that side pinned its own match, which most
+did not — a side exporting one port twice left the split of that port's
+readers a choice nothing in the host settled, so those steps had to be
+stated. A substitution asks no such question, so a right-hand side is
+looked for like any other graph and backward is a direction like forward.
+What still limits it is the payload: `instances` reads payloads off the
+boxes the graph itself spells, so a rule whose payload nothing in the
+graph names is not on offer. The failure says which.
 
 An id is an exact address and a brittle one, and both halves are the
 point. A `NodeId` means one box of one graph at one moment, so an `at`
 is written by reading a report and is only good against the goal that
 report described: change a step in front of it and the ids behind it
-move. What it buys is that no other spelling of "that one" exists. The
+move. (A box's *content* is now its identity, so a box that no rewrite
+touched keeps its id — but a rewrite rebuilds everything downstream of
+what it replaced, and those boxes are new.) What it buys is that no other spelling of "that one" exists. The
 id is never *held* across a rewrite either — it is checked live at every
 entry and fails by name, `NoSuchNode`, the moment its box is gone.
 
 ### The library drives
 
 Three drivers ship as library tactics — data a proof cites, not an
-ordering an engine hardcodes:
+ordering an engine hardcodes. There were four: the wiring saturation is
+gone, because a graph arrives with nothing to sweep.
 
-- `saturate` — the structural laws to fixpoint. Terminates without fuel
-  because every structural law strictly shrinks the live box count.
+- `saturate(law, …)` — those laws to fixpoint. Termination is the
+  author's claim: the laws named have to be ones that shrink.
 - `branches` — the branch layer in the order `rules::branching`
-  documents, with the structural laws behind them to spend what a branch
-  rewrite leaves. The phases loop *together*: one law of the layer
+  documents. The phases loop *together*: one law of the layer
   unlocks another, so one `repeat` over the ordered list is the fixpoint
   said plainly.
-- `decide` — the whole table: the branch layer, the structural laws and
+- `decide` — the whole table: the branch layer and
   the value layer. The closest thing to a normalizer, and still a
   strategy: those laws, in that order, replaceable by any proof that
   chooses differently.
@@ -88,7 +95,7 @@ Three layers, all plain data with an interpreter:
   relations, named variables. Evaluating one yields bindings (name →
   node) in a canonical deterministic order. A query is an *address*: it
   survives rewrites by being run again.
-- a **splice** is never arbitrary: always `(Rule, Direction, Match)`
+- a **step** is never arbitrary: always `(Rule, Direction, Match)`
   handed to `apply`, reached one of two ways. *Found*: the query narrows
   to a seed node and `propose`/`find_pinned` produce the `Match`.
   *Stated*: the tactic carries a `MatchSpec`, a recipe resolved against
@@ -111,7 +118,6 @@ the bound host node; only concrete `Rule`s ever reach `sides`.
 pub struct Var(pub &'static str);
 
 pub enum KindPat {
-    Id(Option<usize>), Copy(Option<usize>), Drop(Option<usize>),
     Op(Option<Prim>),
     AnyPush,                      // any literal
     Push(Value),                  // this literal
@@ -122,7 +128,6 @@ pub enum KindPat {
 pub enum NodePred {
     Any,
     Kind(KindPat),
-    Structural,                   // NodeKind::is_structural()
     Dead,                         // every output port unread
 }
 
@@ -163,16 +168,18 @@ held.)
 
 ### Found and stated steps
 
-`find` declines the patterns that do not pin their own match, and those
-splices are **stated** rather than found:
+`find` declines a pattern with **no boxes**: there is nothing to anchor
+on, and its image would be a pure guess. Those splices are **stated**
+rather than found.
 
-- a pattern with **no boxes** has nothing to anchor on — which is nearly
-  every rule's right-hand side;
-- a pattern that exports **one port twice** leaves the split of that
-  port's readers a genuine, result-changing choice — it decides which
-  readers see which leg of a copy.
+There used to be a second decline, and it was the interesting one: a
+pattern that exported **one port twice** left the split of that port's
+readers a genuine, result-changing choice, so most right-hand sides
+could not be looked for and a backward step was usually a statement. A
+substitution re-points every reader of the value it replaces, so the
+question is not asked and the decline is gone.
 
-A stated step separates what is read from what is chosen:
+A stated step is what is read, and nothing else:
 
 ```rust
 // tactic.rs
@@ -184,34 +191,19 @@ pub enum SrcExpr {
     Input(usize),         // boundary input of the host
 }
 
-/// One boundary output's reader list, described. The reader-split
-/// choice is stated here, which is the point.
-pub enum SinkSel {
-    ReadersAt(Var),       // the bound node's ports that read the source
-    PortOf(Var, usize),   // a specific input port of a bound node
-    Output(usize),        // a boundary output of the host
-    Rest,                 // every reader not claimed earlier; ≤ one per spec
-}
-
 /// The recipe for a stated Match against one side of one rule.
 pub struct MatchSpec {
     pub nodes: Vec<Var>,             // image of the pattern's boxes
     pub inputs: Vec<SrcExpr>,        // one per pattern boundary input
-    pub outputs: Vec<Vec<SinkSel>>,  // one list per pattern boundary output
 }
 
 /// Pure reading; the result goes through `apply`, so a wrong resolution
 /// is a refused step.
-fn resolve(graph: &Graph, pattern: &Graph, b: &Bindings, spec: &MatchSpec)
+fn resolve(graph: &Graph, b: &Bindings, spec: &MatchSpec)
     -> Result<Match, TacticError>;
 ```
 
-`Rest` keeps common statements short — "node `x` reads one leg of the
-new copy, everyone else keeps reading the other" is two selectors —
-without making the choice implicit: the author wrote `Rest`, and that is
-a statement. Selectors resolve left to right, and the fullness condition
-in `check_match` holds the split to being exhaustive and disjoint. A
-stated step can only place *bound* nodes in the pattern image, so a
+A stated step can only place *bound* nodes in the pattern image, so a
 backward step whose target side contains boxes needs the query to have
 bound them — what the matcher cannot read, the derivation must literally
 say.
@@ -298,15 +290,15 @@ Three phenomena, three policies:
   that is fine, because a tactic is a chosen strategy rather than a
   normalizer, and the derivation records which road was taken.
 
-- **Ambiguity inside one match.** Pattern automorphisms (`dedup`'s left
-  side is symmetric, so every site matches twice, isomorphically) are
-  deliberately *not* detected: canonical ordering already makes the list
+- **Ambiguity inside one match.** Pattern automorphisms are deliberately
+  *not* detected: canonical ordering already makes the list
   deterministic, the derivation records the actual match, and `Unique`
   intentionally counts automorphic duplicates — the fix for "unique up
-  to symmetry" is a sharper query. The reader-split, by contrast, is a
-  genuine choice, and it is mandatory to state it (`SinkSel`, above).
-  A deterministic default for the ambiguity that cannot matter, a
-  mandatory statement for the kind that can.
+  to symmetry" is a sharper query. There used to be a second kind here,
+  the reader-split, and it was the one genuine *choice* a match carried:
+  which of a port's outside readers belonged to the window. A
+  substitution re-points every reader of the value it replaces, so
+  nothing is left to choose.
 
 ### Failure and speculation
 
@@ -363,59 +355,30 @@ spend its hypothesis but never decompose it. The region scopes *anchors*, not wi
 from inside may still hold boxes outside in its match, and soundness is
 `apply`'s either way.
 
-## Two tactics, worked
+## One tactic, worked
 
-**Directed: fold a literal condition, then clean up its image.**
-
-```rust
-Tactic::Seq(vec![
-    // The select whose condition is a literal — and exactly one, or say so.
-    Tactic::Fire {
-        at: Query::new()
-            .is("sel", NodePred::Kind(KindPat::Select))
-            .is("lit", NodePred::Kind(KindPat::AnyPush))
-            .feeds("lit", 0, "sel", 0),
-        rule: RuleSpec::ReadOff { laws: vec![Law::SelectLiteral], anchor: Var("sel") },
-        pick: Pick::Unique,
-    },
-    // Clean up inside the fold's image, and nowhere else.
-    Tactic::Within(Region::LastImage, Box::new(saturate_structural())),
-])
-```
-
-The query binds what is natural to *say* — the select — while `ReadOff`
-rides `propose`, which seeds what the matcher needs — the literal. Note
-the image is smaller than a first reading suggests: the untaken arm sits
-*outside* the window, dead but deliberately surviving the focused
-cleanup — a focus that collected it would not be a focus.
-
-**Backward, stated: introduce a `copy(1)` on the wire feeding a node.**
+**Directed: fold a literal condition, and nothing after it.**
 
 ```rust
-Tactic::State {
+Tactic::Fire {
     at: Query::new()
-        .is("x", NodePred::Kind(KindPat::Op(Some(Prim::Add))))
-        .reads_input("x", 0, 0),
-    rule: Rule::CopyElim { n: 1 },
-    dir: Direction::Backward,                     // rhs → lhs: the copy comes back
-    with: MatchSpec {
-        nodes: vec![],                            // copy-elim's rhs has no boxes
-        inputs: vec![SrcExpr::FeedOf(Var("x"), 0)],
-        // The rhs exports that source twice; the split is the choice,
-        // so it is STATED: x reads leg 0, everyone else keeps leg 1.
-        outputs: vec![
-            vec![SinkSel::PortOf(Var("x"), 0)],
-            vec![SinkSel::Rest],
-        ],
-        branches: vec![],
-    },
+        .is("sel", NodePred::Kind(KindPat::Select))
+        .is("lit", NodePred::Kind(KindPat::AnyPush))
+        .feeds("lit", 0, "sel", 0),
+    rule: RuleSpec::ReadOff { laws: vec![Law::SelectLiteral], anchor: Var("sel") },
     pick: Pick::Unique,
 }
 ```
 
-`resolve` produces a concrete `Match`, `apply` holds the split to
-fullness, and the returned inverse — a forward `copy-elim` at the fresh
-box — lands in the derivation, closing the valley.
+The query binds what is natural to *say* — the select — while `ReadOff`
+rides `propose`, which seeds what the matcher needs — the literal.
+
+There was a second step here once, a focused wiring sweep to collect
+what the fold had orphaned, and a paragraph about why the untaken arm
+survived it. Neither is a thing any more: the untaken arm's boxes lose
+their reader when the select goes, and a box the boundary does not reach
+is not in the program. There is nothing to collect, and so nothing to
+scope a collection to.
 
 ## What is not here yet
 

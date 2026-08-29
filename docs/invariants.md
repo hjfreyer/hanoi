@@ -36,33 +36,45 @@ the opaque-operation oracle (`rules::is_wiring` is the split).
 
 ## Side conditions are carried by interfaces, never tested
 
-A rule's pattern boundary *is* its side condition. `dead-node`'s left
-side exports nothing, so the fullness check forces every port of the
-matched box to be reader-less; `not-not`'s middle port is not exported,
-so it cannot fire where something else reads the first `not`;
-`select-hoist`'s left side exports its body's outputs and never the
-select's answers, forcing every answer to be consumed inside the window.
-Nothing asks "is this dead" — a match that is not one fails to be a
-match. New rules follow the same discipline.
+A rule's pattern boundary says what the rule is *about*, and a rule that
+wants a shape says it in the pattern rather than testing for it —
+`select-hoist` exports its body's outputs, `shannon` carries the region
+it pins as payload, `select-literal` carries its arms. Nothing asks a
+question a match could answer. New rules follow the same discipline.
+
+What a boundary no longer says is *and nothing else reads this*. That
+was the fullness condition, and it went with the splice: a rewrite
+replaces the value a window exports and rebuilds whatever read it, so a
+reader the window never mentioned is not a loose end. `not-not` used to
+decline on a first `not` somebody else read; it fires there now, and the
+other reader goes on reading the box it always read.
 
 ## Totality, purity and determinism are load-bearing
 
-- Discarding work (`dead-node`, and every branch's untaken arm) is
-  licensed by **totality and purity**: discarded work cannot fail and
-  cannot be observed.
-- Sharing work (`dedup`, interning one computation for many readers) is
-  licensed by **determinism and purity**: running twice is running once.
+- Discarding work (a box the boundary does not reach, and every branch's
+  untaken arm) is licensed by **totality and purity**: discarded work
+  cannot fail and cannot be observed.
+- Sharing work (interning: one box per computation, however many read it)
+  is licensed by **determinism and purity**: running twice is running
+  once.
 
-If a partial instruction ever arrives, discard stops being sound and
-sequencing needs an explicit order; if an effectful or nondeterministic
-one arrives, sharing goes. The laws would survive only for the pure
-fragment. No instruction may be added without revisiting the table
-against this list.
+Neither is a law any more, and that is the point of saying them here.
+They used to be `dead-node` and `dedup`, rows a driver spent; they are
+now properties of the representation — a value is named by what it is,
+and a value nothing names is not there. The licenses did not go with the
+rows. If a partial instruction ever arrives, discard stops being sound
+and the graph would have to record what it currently forgets; if an
+effectful or nondeterministic one arrives, interning goes, and with it
+the whole model.
+
+No instruction may be added without revisiting the table against this
+list.
 
 ## Derivations are forward-only and replayable
 
-Node ids are handed out in order and never reused; boxes are deleted,
-never moved, so a `NodeId` is stable for the life of a graph. A
+Node ids are handed out in order and never reused, and a box is named by
+what it computes and never edited, so a `NodeId` is stable for the life
+of a graph. A
 derivation replays from its original graph and lands identically —
 that is the property it exists to have — so:
 

@@ -131,31 +131,16 @@ use crate::graph::{Graph, NodeId, NodeKind, Sink, Source};
 pub struct Listing<'g> {
     graph: &'g Graph,
     tag: &'g str,
-    elide: bool,
 }
 
-/// A graph as a listing, `id` and `copy` read through.
+/// A graph as a listing.
+///
+/// There used to be a choice here — read `id` and `copy` through, or show
+/// them — because a listing full of wiring was unreadable and a proof
+/// naming one of those boxes needed to see it. Neither is a box any more,
+/// so every listing is every box.
 pub fn listing<'g>(graph: &'g Graph, tag: &'g str) -> Listing<'g> {
-    Listing {
-        graph,
-        tag,
-        elide: true,
-    }
-}
-
-impl<'g> Listing<'g> {
-    /// Every box, `id` and `copy` included — what a proof about one of them
-    /// needs, and what the boundary of a rewrite is stated in.
-    pub fn all_boxes(mut self) -> Self {
-        self.elide = false;
-        self
-    }
-}
-
-/// Whether the rewriting is there to delete this, which is also whether a
-/// reader is better off looking straight through it.
-fn structural(kind: &NodeKind) -> bool {
-    matches!(kind, NodeKind::Id(_) | NodeKind::Copy(_))
+    Listing { graph, tag }
 }
 
 /// Everything reachable from `from`, forwards or backwards.
@@ -168,7 +153,7 @@ fn reach(graph: &Graph, from: NodeId, forward: bool) -> HashSet<NodeId> {
         }
         if forward {
             for port in 0..graph.kind(node).arity().outputs {
-                for &sink in graph.sinks(Source::Port { node, port }) {
+                for sink in graph.sinks(Source::Port { node, port }) {
                     if let Sink::Port { node, .. } = sink {
                         queue.push_back(node);
                     }
@@ -222,7 +207,7 @@ fn nesting(graph: &Graph) -> HashMap<NodeId, BTreeSet<u32>> {
             }
             let mut readers: Vec<BTreeSet<u32>> = Vec::new();
             for port in 0..graph.kind(id).arity().outputs {
-                for &sink in graph.sinks(Source::Port { node: id, port }) {
+                for sink in graph.sinks(Source::Port { node: id, port }) {
                     readers.push(match sink {
                         // A value the boundary reads is inside nothing, and
                         // an intersection with it is empty, which is right.
@@ -434,11 +419,10 @@ fn schedule(
     graph: &Graph,
     inside: &HashMap<NodeId, BTreeSet<u32>>,
     arms: &HashMap<(NodeId, u32), bool>,
-    elide: bool,
 ) -> Vec<Printing> {
     let order = nested_order(graph, inside, arms).unwrap_or_else(|| wherever_ready(graph, inside));
     debug_assert_eq!(order.len(), graph.live_count(), "the graph is acyclic");
-    operands_at_each_use(graph, inside, arms, elide, order)
+    operands_at_each_use(graph, inside, arms, order)
 }
 
 /// One line of the listing: a box, and where it is drawn.
@@ -535,7 +519,7 @@ fn emit_level(
     for (at, (_, held)) in units.iter().enumerate() {
         for &id in held {
             for port in 0..graph.kind(id).arity().outputs {
-                for &sink in graph.sinks(Source::Port { node: id, port }) {
+                for sink in graph.sinks(Source::Port { node: id, port }) {
                     if let Sink::Port { node, .. } = sink
                         && let Some(&to) = unit_of.get(&node)
                         && to != at
@@ -643,7 +627,7 @@ fn wherever_ready(graph: &Graph, inside: &HashMap<NodeId, BTreeSet<u32>>) -> Vec
         here = inside.get(&id).unwrap_or(&nowhere).clone();
         order.push(id);
         for port in 0..graph.kind(id).arity().outputs {
-            for &sink in graph.sinks(Source::Port { node: id, port }) {
+            for sink in graph.sinks(Source::Port { node: id, port }) {
                 if let Sink::Port { node, .. } = sink {
                     let left = unmet.get_mut(&node).expect("a live reader");
                     *left -= 1;
@@ -703,7 +687,6 @@ fn operands_at_each_use(
     graph: &Graph,
     inside: &HashMap<NodeId, BTreeSet<u32>>,
     arms: &HashMap<(NodeId, u32), bool>,
-    elide: bool,
     order: Vec<NodeId>,
 ) -> Vec<Printing> {
     let floating: HashSet<NodeId> = order
@@ -758,19 +741,7 @@ fn operands_at_each_use(
         }
         found
     };
-    let named = |sink: Sink| -> Vec<Sink> {
-        match sink {
-            Sink::Port { node, .. } if elide && structural(graph.kind(node)) => {
-                let mut found = Vec::new();
-                let mut seen = HashSet::new();
-                for port in 0..graph.kind(node).arity().outputs {
-                    readers(graph, Source::Port { node, port }, &mut found, &mut seen);
-                }
-                found
-            }
-            _ => vec![sink],
-        }
-    };
+    let named = |sink: Sink| -> Vec<Sink> { vec![sink] };
     // Which arms a box is drawn inside, and which side of each.
     let place = |id: NodeId| -> BTreeMap<u32, bool> {
         inside
@@ -937,53 +908,10 @@ fn operands_at_each_use(
     written
 }
 
-/// The first source at or above `source` that survives elision.
-///
-/// An `id` passes port `i` through, and a `copy(n)` is block-wise, so its
-/// outputs `i` and `n + i` both stand for its input `i`. The walk is bounded
-/// by the graph's size rather than trusted to terminate: this runs on the
-/// failure path, where a graph that should be acyclic may be the very thing
-/// that is wrong.
-fn resolve(graph: &Graph, source: Source) -> Source {
-    let mut source = source;
-    for _ in 0..=graph.live_count() {
-        let Source::Port { node, port } = source else {
-            return source;
-        };
-        source = match graph.kind(node) {
-            NodeKind::Id(_) => graph.sources(node)[port],
-            NodeKind::Copy(n) => graph.sources(node)[port % n],
-            _ => return source,
-        };
-    }
-    source
-}
-
-/// Every reader of `source` that survives elision, looking through the
-/// boxes that do not.
-fn readers(graph: &Graph, source: Source, found: &mut Vec<Sink>, seen: &mut HashSet<Sink>) {
-    for &sink in graph.sinks(source) {
-        if !seen.insert(sink) {
-            continue;
-        }
-        match sink {
-            Sink::Port { node, .. } if structural(graph.kind(node)) => {
-                for port in 0..graph.kind(node).arity().outputs {
-                    readers(graph, Source::Port { node, port }, found, seen);
-                }
-            }
-            _ => found.push(sink),
-        }
-    }
-}
-
 /// How the census names a box: the kind without its width or its literal, so
 /// that `push 1` and `push true` count together as `push`.
 fn census_name(kind: &NodeKind) -> String {
     match kind {
-        NodeKind::Id(_) => "id".to_string(),
-        NodeKind::Copy(_) => "copy".to_string(),
-        NodeKind::Drop(_) => "drop".to_string(),
         NodeKind::Call { .. } => "call".to_string(),
         NodeKind::Select { .. } => "branch".to_string(),
         NodeKind::Op(prim) => {
@@ -1005,8 +933,8 @@ impl fmt::Display for Listing<'_> {
         let graph = self.graph;
         let mut inside = nesting(graph);
         let arms = arms(graph, &mut inside);
-        let written = schedule(graph, &inside, &arms, self.elide);
-        let shown = |id: NodeId| !self.elide || !structural(graph.kind(id));
+        let written = schedule(graph, &inside, &arms);
+        let shown = |_id: NodeId| true;
 
         // A box's branches, outermost first: the chain it is nested in, and
         // so the depth it and each of its brackets are drawn at.
@@ -1029,11 +957,6 @@ impl fmt::Display for Listing<'_> {
             .filter_map(|(id, kind)| match kind {
                 NodeKind::Select { .. } => {
                     let source = *graph.sources(id).first()?;
-                    let source = if self.elide {
-                        resolve(graph, source)
-                    } else {
-                        source
-                    };
                     Some((name_of(id), source.to_string()))
                 }
                 _ => None,
@@ -1168,14 +1091,7 @@ impl fmt::Display for Listing<'_> {
             let sources: Vec<String> = graph
                 .sources(id)
                 .iter()
-                .map(|&source| {
-                    let source = if self.elide {
-                        resolve(graph, source)
-                    } else {
-                        source
-                    };
-                    source.to_string()
-                })
+                .map(|&source| source.to_string())
                 .collect();
             // A select reads its condition at port 0 and the label has
             // already said so, so what is left for this column is what it
@@ -1222,14 +1138,7 @@ impl fmt::Display for Listing<'_> {
         let outputs: Vec<String> = graph
             .outputs()
             .iter()
-            .map(|&source| {
-                let source = if self.elide {
-                    resolve(graph, source)
-                } else {
-                    source
-                };
-                source.to_string()
-            })
+            .map(|&source| source.to_string())
             .collect();
         match outputs.is_empty() {
             true => writeln!(f, "\n  out   ()"),
@@ -1272,7 +1181,7 @@ mod tests {
             .unwrap_or_else(|| {
                 panic!(
                     "the hoist left no operand read twice:\n{}",
-                    listing(&graph, "left").all_boxes()
+                    listing(&graph, "left")
                 )
             });
         (graph, shared)
@@ -1290,7 +1199,7 @@ mod tests {
     #[test]
     fn a_listing_names_every_box_it_shows() {
         let graph = built("push 1 push 2 add");
-        let text = listing(&graph, "left").all_boxes().to_string();
+        let text = listing(&graph, "left").to_string();
         for (id, _) in graph.live() {
             assert!(
                 text.contains(&format!("  {} ", id)),
@@ -1301,29 +1210,12 @@ mod tests {
         }
     }
 
-    /// Reading through `id` and `copy` hides boxes and nothing else: what is
-    /// left still says where every value it names comes from.
-    #[test]
-    fn reading_through_structure_hides_only_structure() {
-        let graph = built("pick 0 add");
-        let lean = listing(&graph, "left").to_string();
-        let full = listing(&graph, "left").all_boxes().to_string();
-        let structure = graph.live().filter(|(_, kind)| structural(kind)).count();
-        assert!(structure > 0, "the body was chosen to have some");
-        assert_eq!(
-            full.lines().count() - lean.lines().count(),
-            structure,
-            "one line per hidden box, and no other difference in size"
-        );
-        assert!(lean.contains("id/copy read through"));
-    }
-
     /// The listing shows every live box when nothing is elided — a report
     /// that quietly drops one is worse than a long one.
     #[test]
     fn nothing_live_goes_unlisted() {
         let graph = built("push 1 pick 0 swap drop 0");
-        let text = listing(&graph, "left").all_boxes().to_string();
+        let text = listing(&graph, "left").to_string();
         let listed: HashSet<&str> = text
             .lines()
             .filter_map(|line| line.split_whitespace().next())
@@ -1396,7 +1288,7 @@ mod tests {
         let graph = built("push 1 pick 0 add branch { push 3 } { push 4 }");
         let mut inside = nesting(&graph);
         let arms = arms(&graph, &mut inside);
-        let written = schedule(&graph, &inside, &arms, true);
+        let written = schedule(&graph, &inside, &arms);
         let mut placed: HashSet<NodeId> = HashSet::new();
         for printing in &written {
             for &source in graph.sources(printing.id) {
@@ -1432,7 +1324,7 @@ mod tests {
             inside.get(&shared).is_none_or(|mine| mine.is_empty()),
             "{} is drawn inside a branch its two arms share it:\n{}",
             shared,
-            listing(&graph, "left").all_boxes()
+            listing(&graph, "left")
         );
         assert!(
             !arms.keys().any(|&(id, _)| id == shared),
@@ -1442,7 +1334,7 @@ mod tests {
 
         // Which is what keeps the schedule topological: the other arm's
         // reader would otherwise be listed before the box it reads.
-        let written = schedule(&graph, &inside, &arms, true);
+        let written = schedule(&graph, &inside, &arms);
         let mut placed: HashSet<NodeId> = HashSet::new();
         for printing in &written {
             for &source in graph.sources(printing.id) {
@@ -1452,7 +1344,7 @@ mod tests {
                         "{} is listed before {}:\n{}",
                         printing.id,
                         node,
-                        listing(&graph, "left").all_boxes()
+                        listing(&graph, "left")
                     );
                 }
             }
@@ -1472,7 +1364,7 @@ mod tests {
             2,
             "the operand both arms read is written {} time(s):\n{}",
             written_at.len(),
-            listing(&graph, "left").all_boxes()
+            listing(&graph, "left")
         );
     }
 
@@ -1488,7 +1380,7 @@ mod tests {
     #[test]
     fn a_value_read_from_two_arms_is_written_in_both() {
         let (graph, shared) = grown();
-        let text = listing(&graph, "left").all_boxes().to_string();
+        let text = listing(&graph, "left").to_string();
         let mine: Vec<&str> = text
             .lines()
             .filter(|line| line.contains(&format!("({})", shared)))
@@ -1567,7 +1459,7 @@ mod tests {
             let graph = built(body);
             let mut inside = nesting(&graph);
             let arms = arms(&graph, &mut inside);
-            let written = schedule(&graph, &inside, &arms, false);
+            let written = schedule(&graph, &inside, &arms);
             ever_nested |= inside.values().any(|mine| mine.len() > 1);
 
             let once: HashSet<NodeId> = written.iter().map(|p| p.id).collect();
@@ -1615,7 +1507,7 @@ mod tests {
                         body,
                         printing.id,
                         branch,
-                        listing(&graph, "left").all_boxes()
+                        listing(&graph, "left")
                     );
                 }
             }
@@ -1623,7 +1515,7 @@ mod tests {
             // And the drawing balances: every `if` reaches an `endif` at
             // the depth it opened, innermost first, with any `else` in
             // between at that same depth.
-            let text = listing(&graph, "left").all_boxes().to_string();
+            let text = listing(&graph, "left").to_string();
             let mut stack: Vec<(String, usize)> = Vec::new();
             let mut blocks = 0;
             for line in text.lines() {

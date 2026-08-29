@@ -950,11 +950,9 @@ mod tests {
         );
         assert_eq!(
             kinds(&residual.rhs_graph),
-            vec![
-                NodeKind::Drop(1),
-                NodeKind::Op(Prim::Push(Value::Bool(true)))
-            ],
-            "the right is the drop and the literal it was written as"
+            vec![NodeKind::Op(Prim::Push(Value::Bool(true)))],
+            "the right is the literal it was written as; the `drop 0` is \
+             not a box, it is the boundary not naming what it discards"
         );
         assert!(residual.path.is_empty());
     }
@@ -1016,13 +1014,12 @@ mod tests {
     /// closes by the auto-close, and the proof says which sides were spent.
     #[test]
     fn a_rewritten_side_closes_by_isomorphism() {
-        // A directed law leads the left — `dedup`, then the cleanup — and
-        // the driver alone takes the right: the two spellings settle on the
-        // one graph, a literal read twice.
+        // A directed law leads the left and the driver alone takes the
+        // right: the two sides settle on the one graph.
         let (_ctx, outcome) = prove_with(
-            "identity probe { push 1 push 1 add } = { push 1 pick 0 add };",
+            "identity probe { push 1 push 2 add } = { push 2 push 1 add };",
             "probe",
-            Some("lhs(fire(dedup) saturate) rhs(saturate) exact"),
+            Some("lhs(fire(fold)) rhs(decide) exact"),
         );
         let Outcome::Closed(proof) = outcome else {
             panic!("the two spellings settle together");
@@ -1036,16 +1033,14 @@ mod tests {
             summary
         );
 
-        // `both` spends each side in turn — the right side's rewrites
-        // include the very `id` the goal's own padding built, which
-        // nothing but a rewrite takes back out.
+        // `both` spends each side in turn.
         let (_ctx, outcome) = prove_with(
-            "identity probe { swap swap not } = { not };",
+            "identity probe { not not not } = { as_bool not };",
             "probe",
-            Some("both(saturate) exact"),
+            Some("both(saturate(not-not)) exact"),
         );
         let Outcome::Closed(proof) = outcome else {
-            panic!("two crossings and a padding wire, all spent");
+            panic!("the double negative is the coercion on both sides");
         };
         let summary = proof.summary();
         assert!(
@@ -1061,9 +1056,9 @@ mod tests {
     #[test]
     fn a_stuck_tactic_shows_the_goal_standing() {
         let (_ctx, outcome) = prove_with(
-            "identity probe { push 1 push 1 add } = { push 2 };",
+            "identity probe { push 1 push 2 add } = { push 4 };",
             "probe",
-            Some("lhs(fire(dedup) fire(tuple-cancel)) exact"),
+            Some("lhs(fire(fold) fire(tuple-cancel)) exact"),
         );
         let Outcome::Stuck(residual) = outcome else {
             panic!("there is no tuple to cancel");
@@ -1073,25 +1068,14 @@ mod tests {
             "{}",
             residual.stopped
         );
-        // The dedup landed and stands: the two literals became one box,
-        // and the `add` and the second reader both read its port.
+        // The fold landed and stands.
         let graph = &residual.lhs_graph;
-        let pushes: Vec<NodeId> = graph
+        let folded: Vec<NodeId> = graph
             .live()
-            .filter(|(_, kind)| matches!(kind, NodeKind::Op(Prim::Push(Value::Int(1)))))
+            .filter(|(_, kind)| matches!(kind, NodeKind::Op(Prim::Push(Value::Int(3)))))
             .map(|(id, _)| id)
             .collect();
-        assert_eq!(pushes.len(), 1, "the two literals are one:\n{}", graph);
-        let port = Source::Port {
-            node: pushes[0],
-            port: 0,
-        };
-        assert_eq!(
-            graph.sinks(port).len(),
-            2,
-            "the one literal is read twice:\n{}",
-            graph
-        );
+        assert_eq!(folded.len(), 1, "the sum was worked out:\n{}", graph);
     }
 
     #[test]
@@ -1106,9 +1090,9 @@ mod tests {
             "{}",
             residual.stopped
         );
-        let (_ctx, outcome) = prove_with(code, "probe", Some("lhs(fire(copy-elim)) diagram"));
+        let (_ctx, outcome) = prove_with(code, "probe", Some("lhs(fire(tuple-cancel)) diagram"));
         let Outcome::Stuck(residual) = outcome else {
-            panic!("there is no copy to spend");
+            panic!("there is no tuple to cancel");
         };
         assert!(
             residual.stopped.contains("`lhs(…)`"),
@@ -1256,7 +1240,7 @@ mod tests {
 
         // An honest proof of a different claim does not transplant: its
         // recorded drive re-applies against boxes this goal does not have.
-        let true_lib = assemble("identity probe { swap swap } = { pick 0 drop 0 };").unwrap();
+        let true_lib = assemble("identity probe { push 1 push 2 add } = { push 3 };").unwrap();
         let mut true_ctx = Context::new();
         let idx = true_lib.identity_by_name("probe").unwrap();
         let true_goal = Goal::of_identity(&mut true_ctx, &true_lib, idx).unwrap();
@@ -1264,7 +1248,7 @@ mod tests {
             .prove(&mut true_ctx, true_goal, None)
             .unwrap();
         let Outcome::Closed(stolen) = outcome else {
-            panic!("two crossings and a copied drop close");
+            panic!("the sum folds");
         };
         let err = stolen.check(false_goal, &mut ctx, &false_lib).unwrap_err();
         assert!(err.contains("does not re-apply"), "{}", err);
@@ -1410,21 +1394,21 @@ mod tests {
         use crate::diagram2::render;
         use crate::graph::NodeKind;
 
-        let code = "identity probe { pick 1 pick 1 equal drop 0 } = { };";
+        let code = "identity probe { push 1 push 2 add } = { push 3 };";
 
         // `exact` fails on purpose — the report is its whole job.
         let (_ctx, outcome) = prove_with(code, "probe", Some("exact"));
         let Outcome::Stuck(residual) = outcome else {
             panic!("the sides are not one diagram yet");
         };
-        let (dead, _) = residual
+        let (add, _) = residual
             .lhs_graph
             .live()
-            .find(|(_, kind)| matches!(kind, NodeKind::Drop(_)))
-            .expect("the discarded comparison");
+            .find(|(_, kind)| matches!(kind, NodeKind::Op(Prim::Add)))
+            .expect("the sum, unspent");
         let listing = render::listing(&residual.lhs_graph, "left").to_string();
         assert!(
-            listing.contains(&dead.to_string()),
+            listing.contains(&add.to_string()),
             "the listing names the box a proof would name:\n{}",
             listing
         );
@@ -1433,10 +1417,10 @@ mod tests {
         let (_ctx, outcome) = prove_with(
             code,
             "probe",
-            Some(&format!("lhs(at({}, dead-node)) diagram", dead)),
+            Some(&format!("lhs(at({}, fold)) diagram", add)),
         );
         let Outcome::Closed(proof) = outcome else {
-            panic!("the named box is dead and `dead-node` collects it");
+            panic!("the named box is a fold the machine can work out");
         };
         assert!(
             proof.summary().contains("lhs: 1 rewrite"),
@@ -1445,7 +1429,7 @@ mod tests {
         );
 
         // A box the side does not have is its own mistake, said as one.
-        let (_ctx, outcome) = prove_with(code, "probe", Some("lhs(at(#999, dead-node)) diagram"));
+        let (_ctx, outcome) = prove_with(code, "probe", Some("lhs(at(#999, fold)) diagram"));
         let Outcome::Stuck(residual) = outcome else {
             panic!("there is no #999")
         };
@@ -1459,15 +1443,15 @@ mod tests {
         let (_ctx, outcome) = prove_with(
             code,
             "probe",
-            Some(&format!("lhs(at({}, equal-refl)) diagram", dead)),
+            Some(&format!("lhs(at({}, equal-refl)) diagram", add)),
         );
         let Outcome::Stuck(residual) = outcome else {
-            panic!("a `drop` is no `equal`")
+            panic!("an `add` is no `equal`")
         };
         assert!(
             residual
                 .stopped
-                .contains(&format!("no forward `equal-refl` match holds {}", dead)),
+                .contains(&format!("no forward `equal-refl` match holds {}", add)),
             "{}",
             residual.stopped
         );

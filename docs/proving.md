@@ -34,9 +34,7 @@ identity result: ok. 24 passed; 0 failed; 0 problem(s); 0 filtered out
 
 Exit codes: `0` every identity proved, `1` a claim unproved or a hint
 orphaned, `2` the corpus would not build or the arguments were wrong.
-`--expand` additionally cashes every citation (see below); `--boxes`
-chooses how much of a stuck goal is printed (see the failure output,
-below).
+`--expand` additionally cashes every citation (see below).
 
 ## The pieces
 
@@ -129,17 +127,16 @@ is for.
 ### The tactic language, in brief
 
 Inside `lhs(…)`, `rhs(…)` and `both(…)` is the rewrite language of
-[docs/tactics.md](tactics.md), juxtaposed like steps are: `saturate` (the
-structural laws to fixpoint), `saturate(law, …)`, `branches` (the branch
-layer with its cleanup), `decide` (the whole table — what `diagram`
-drives), `fire(law, …)` (one directed firing), `at(#box, law)` (one
-firing at a **named box**), `repeat(…)` and `try(…)`. Laws are named as
-[docs/rules.md](rules.md) names them — `copy-elim`, `select-same`,
-`dead-node` — and `structural` and `branching` name the two lists.
+[docs/tactics.md](tactics.md), juxtaposed like steps are: `saturate(law,
+…)` (those laws to fixpoint), `branches` (the branch layer), `decide`
+(the whole table — what `diagram` drives), `fire(law, …)` (one directed
+firing), `at(#box, law)` (one firing at a **named box**), `repeat(…)` and
+`try(…)`. Laws are named as [docs/rules.md](rules.md) names them —
+`fold`, `select-same`, `not-not` — and `branching` names the list.
 
 `at` is the step that answers a report in the report's own words. `fire`
 takes the first match it is offered anywhere on the side; when that is
-the wrong one, `at(#41, dedup)` names the box the residual listing
+the wrong one, `at(#41, fold)` names the box the residual listing
 printed beside the line, and fires the law in a match that holds *that*
 box — anywhere in the match, not only where the law's pattern happens to
 anchor. A third field is the direction, `forward` when left out:
@@ -207,9 +204,9 @@ that computes `op`, at the earliest such wire, and that firing is an
 ordinary checked rewrite. The power is in what the rest of the table does
 *afterwards*, inside the copies, where the assumption is now a literal: a
 branch on it resolves (`select-literal`), a test against it computes
-(`fold`), untouched code falls away (`dead-node`). When both copies
-simplify to the same thing, the introduced branch collapses too (`dedup`,
-then `select-same`), and the goal closes by plain rewriting — the case
+(`fold`), untouched code falls away by not being reached. When both
+copies simplify to the same thing, the introduced branch collapses too
+(`select-same`), and the goal closes by plain rewriting — the case
 analysis happened, and every step of it is in the proof's record.
 
 Two practical notes. *Earliest matters*: splitting on a result computed
@@ -217,11 +214,18 @@ late says nothing usable about the computations feeding it, so the step
 takes the earliest test and leaves later ones to be decided along the
 way — or split in turn: `cases(equal) cases(equal)` is a two-variable
 case analysis, four leaves, all folded shut by the closing `diagram`.
-And *identification comes first*: a program often retests one condition
-in several places (through copies, and in both arms of a branch), and the
-split only helps once the driver has recognized those as a single wire —
-which `both(decide)` does, via `copy-elim` and `dedup` — so `cases`
-almost always follows a drive.
+And *identification is free*: a program often retests one condition in
+several places, and the split only helps once those are recognized as a
+single wire. They are, from the moment the graph is written: a box is
+its kind and what it reads, so two spellings of one test are one box.
+`cases` still usually follows a drive, but for the ordinary reason — the
+wire it wants may only appear once a branch has folded.
+
+*And which wire*: an unaddressed `cases(op)` takes the first it is
+offered, so a goal with several tests of one shape needs the split said
+more precisely — `cases(equal(lit))` names one by its literal, and a
+second split of the same shape goes **inside an arm** of the first,
+where the wire already decided is a literal and no longer on offer.
 
 The first worked example, the `types_test` contract claim — a case
 analysis over the two tags an input might be:
@@ -269,11 +273,11 @@ Two things to know when writing one:
   afterwards — say, by `tuple-cancel` taking a shape guard apart inside
   an arm — reads the wire undecided, and the move that decides it is to
   **split again inside the arm**: the new readers are downstream there,
-  and the drive dedups the re-test into the old wire.
+  and a re-test of the old wire *is* the old wire.
 
 A hypothesis the goal never computes can still be had: compute the test
-and discard it (a backward `dead-node` — computing and discarding is
-free, totality and purity footing the bill), then split on it. What
+— an unread box costs nothing, totality and purity footing the bill —
+and split on it. What
 stays out of reach is a fact no test in the language expresses — see
 [docs/invariants.md](invariants.md) for that boundary.
 
@@ -339,24 +343,23 @@ them. Only the `endif` is a box; the other two lines the listing draws,
 which is what their empty id column says. The condition is named on all
 three lines, so a block deep in a nest says which wire it turns on. This is what the tactics acted on, so a next step
 names the boxes it names — literally, with `at(#41, law)` — and a
-`NodeId` is stable for the life of a graph (nodes are only deleted, never
-moved), so two reports of one proof compare, which is what watching a
-proof means. Four things keep a large listing legible, each stated in
+`NodeId` is stable for the life of a graph (a box is named by what it
+computes, and nothing edits one), so two reports of one proof compare, which is what watching a
+proof means. Three things keep a large listing legible, each stated in
 `lang/rewrite/src/diagram2/render.rs`: branch membership is *computed*
 (upstream of the select's blocks, less what feeds its condition, less
 whatever something outside reads) rather than guessed from what sits
 between two lines; the order stays inside a branch once it
 enters one; a box that reads nothing is placed just before the box that
-reads it, so an operand sits with its `equal`; and `id` and `copy` are
-read through, since a `copy` says what the links already say.
+reads it, so an operand sits with its `equal`.
 
 The sides are shown as graphs and only as graphs. A graph is a DAG and a
 term is a spine, so anything spelling one back out has to reimpose a
 stack and pay for it in routing, and a term has no name for a box, so two
-reports of one proof could not be compared. `--boxes` is the only dial:
-it stops reading through the `id` and `copy` boxes the structural laws
-would delete. A `via` answering the report is written by hand off the
-boxes the listing names.
+reports of one proof could not be compared. There is no dial: every box
+the boundary reaches is listed, because every box is an operation now. A
+`via` answering the report is written by hand off the boxes the listing
+names.
 
 ## Trust, in one paragraph
 
