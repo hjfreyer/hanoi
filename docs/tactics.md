@@ -21,6 +21,7 @@ steps are:
 | `saturate(law, …)` | those laws to fixpoint |
 | `branches` | the branch layer to fixpoint |
 | `decide` | the whole table to fixpoint — what the `diagram` closer drives |
+| `tree` | `select-hoist` to fixpoint, past everything but another branch — the decision tree |
 | `fire(law, …)` | the first proposal of those laws, once — fails finding none |
 | `at(#box, law)` | that law, once, in a match that holds **that box** — the address the residual printed |
 | `at(#box, law, backward)` | the same, reading the law's equation right to left |
@@ -75,7 +76,7 @@ answers to it (`NoSuchBox`) or two boxes do (`ManyBoxes`).
 
 ### The library drives
 
-Three drivers ship as library tactics — data a proof cites, not an
+Four drivers ship as library tactics — data a proof cites, not an
 ordering an engine hardcodes.
 
 - `saturate(law, …)` — those laws to fixpoint. Termination is the
@@ -89,6 +90,44 @@ ordering an engine hardcodes.
   not run to fixpoint, and a proof names those. The closest thing to a
   normalizer, and still a strategy: those laws, in that order, replaceable
   by any proof that chooses differently.
+- `tree` — `select-hoist` spent everywhere it will go, with one stop
+  written into the body it carries. See below.
+
+### `tree`, and the body it carries
+
+`select-hoist` says that what runs *after* a branch runs inside whichever
+arm the branch takes ([docs/rules.md](rules.md)), and the region it moves
+over rides as its payload. Which region that is, is a **strategy's**
+decision rather than the table's, and the two readings that matter differ
+by one thing:
+
+- `fire(select-hoist)` takes the payload `rules::propose` reads, which is
+  the whole cone below the select — branches in it included, copied along
+  with everything else. That is what a proof asking for one firing wants.
+- `tree` reads the same cone with every other `select` **left standing**:
+  a branch is never copied, and never moved through another branch.
+
+Spent to fixpoint, the second sorts a graph into two halves — the work,
+which reads nothing a branch answers, and the branches, which read the
+work and each other. That is a decision tree said in a graph, and the
+fixpoint is exactly the sentence *no box but a select reads what a select
+answers*: the selects end up bunched at the output.
+
+The order is the drive's own, and it has to find one: a branch whose body
+reads what a branch **below** it answers cannot go first, since the step
+would hand that body's readers a new select the body itself feeds back
+into. The tactic declines such a branch and takes another; one is always
+available, because blocking runs downstream and the cone below a select
+is finite, so the bottom of any chain of blocked branches is blocked by
+nothing.
+
+It **grows** a graph — that is why no list drives the row — so a value
+under `n` branches can end up written `2^n` times. This is for a goal
+that wants its cases laid out, not for tidying a large one. It does
+terminate: a hoist replaces each body box with two boxes reading that
+branch's blocks rather than its answers, so each copy has strictly fewer
+branches above it than the box it came from, and a multiset of naturals
+with one member replaced by finitely many smaller ones decreases.
 
 ## The model underneath
 
@@ -218,6 +257,12 @@ pub enum RuleSpec {
     /// Read the payload off the bound anchor, law by law — the propose
     /// path. Wildcards resolve here.
     ReadOff { laws: Vec<Law>, anchor: Var },
+    /// `select-hoist` with the body read here rather than by `propose`:
+    /// the cone below the bound select, every other select left
+    /// standing. What `tree` spends, and a **stated** step — the body
+    /// was lifted off those very boxes, so the match is said rather
+    /// than searched for.
+    Hoist { anchor: Var },
 }
 
 pub enum Tactic {

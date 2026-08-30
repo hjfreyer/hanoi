@@ -87,8 +87,8 @@ use std::fmt;
 use super::query::{self, Bindings, Query, Var};
 use super::rules::{self, Derivation, Law, Rule, Step};
 use crate::graph::{
-    Address, Direction, Graph, Match, Named, NodeId, NodeKind, Prefix, Source, find_over,
-    find_pinned,
+    Address, Direction, Graph, Lifted, Match, Named, NodeId, NodeKind, Prefix, Sink, Source,
+    find_over, find_pinned, lift,
 };
 
 // ---- what a step says ------------------------------------------------------------
@@ -116,6 +116,23 @@ pub enum RuleSpec {
     /// [`rules::propose`] path, and where a query's payload blanks
     /// resolve into the concrete rules the trusted side sees.
     ReadOff { laws: Vec<Law>, anchor: Var },
+    /// [`Law::SelectHoist`] with the body computed **here**: everything
+    /// downstream of the bound select's answers except another select
+    /// ([`hoistable`]).
+    ///
+    /// The payload a `select-hoist` carries is a region, and how much of
+    /// one a branch should swallow is a strategy's decision rather than
+    /// the table's. [`rules::propose`] reads the whole cone, branches
+    /// and all, which is what a proof asking for one firing wants. A
+    /// decision tree wants the other reading — every branch it meets
+    /// left standing, so that hoisting sorts the selects to the end
+    /// instead of copying them — and this is where it is said.
+    ///
+    /// A **stated** step, for the reason every stated step is one: the
+    /// body was lifted off particular host boxes, and which boxes those
+    /// were is a reading nothing in the pattern records. The match says
+    /// it outright.
+    Hoist { anchor: Var },
 }
 
 /// A source, described rather than named — resolved against the bindings
@@ -717,6 +734,37 @@ impl Runner<'_> {
                     .ok_or(TacticError::Unresolved { var: *anchor })?;
                 Ok(rules::propose(self.graph, laws, id))
             }
+            RuleSpec::Hoist { anchor } => {
+                let id = b
+                    .get(*anchor)
+                    .ok_or(TacticError::Unresolved { var: *anchor })?;
+                let NodeKind::Select { arity } = *self.graph.kind(id) else {
+                    return Ok(Vec::new());
+                };
+                let Some(body) = hoistable(self.graph, id) else {
+                    return Ok(Vec::new());
+                };
+                // Stated rather than searched for, and it has to be:
+                // the body was lifted off these very boxes, and a
+                // search would answer with every *other* embedding of
+                // it besides — two pattern boxes on one host box among
+                // them, which is an embedding like any other and not
+                // the region this step is about. The match is a reading
+                // of what `hoistable` already read, and `apply` judges
+                // it like any other claim.
+                let mut nodes = vec![id];
+                nodes.extend(body.boxes.iter().copied());
+                let mut inputs = self.graph.sources(id).to_vec();
+                inputs.extend(body.outside.iter().copied());
+                Ok(vec![Step {
+                    rule: Rule::SelectHoist {
+                        arity,
+                        body: body.graph,
+                    },
+                    dir: Direction::Forward,
+                    at: Match { nodes, inputs },
+                }])
+            }
             RuleSpec::Concrete { rule, anchor, pin } => {
                 let id = b
                     .get(*anchor)
@@ -891,6 +939,132 @@ pub fn branch_on(graph: &Graph, cond: Source) -> Option<NodeId> {
     outermost.or_else(|| candidates.first().copied())
 }
 
+// ---- what a branch may grow over -------------------------------------------------
+
+/// Everything the wires feed, transitively — the whole cone below them.
+fn downstream(graph: &Graph, from: &[Source]) -> HashSet<NodeId> {
+    let mut seen = HashSet::new();
+    let mut todo = from.to_vec();
+    while let Some(src) = todo.pop() {
+        for sink in graph.sinks(src) {
+            let Sink::Port { node, .. } = sink else {
+                continue;
+            };
+            if !seen.insert(node) {
+                continue;
+            }
+            for port in 0..graph.kind(node).arity().outputs {
+                todo.push(Source::Port { node, port });
+            }
+        }
+    }
+    seen
+}
+
+/// The body a branch may grow forward over without swallowing another
+/// branch: everything downstream of its answers **that is not itself a
+/// `select`**, lifted out as a graph — the payload for a
+/// [`Rule::SelectHoist`] that sorts branches towards the boundary rather
+/// than copying them.
+///
+/// [`rules::propose`] reads the same law's body as the whole cone, and
+/// the two readings are the whole difference between one firing a proof
+/// asked for and the drive [`tree`] is. Stopping at a select is what
+/// makes the second terminate in the shape it is named for: a select is
+/// never duplicated, so the branches keep their count while the work
+/// between them is pushed above them, one hoist at a time, until nothing
+/// but a select or the boundary reads a select.
+///
+/// What comes back out is what anything **outside** the region reads of
+/// it: a region box's port with a reader that is not a region box, and —
+/// passed straight through, the way [`Rule::SelectHoist`] asks for it —
+/// an answer read by the boundary or by a select the region left
+/// standing. Both re-point onto the new select, which is what takes the
+/// old one out of the program.
+///
+/// `None` where there is nothing to move, and where moving would be a
+/// mistake:
+///
+/// - **Nothing downstream but branches.** The select is where a decision
+///   tree wants it already.
+/// - **A body reading what a branch below this one answers.** The step
+///   would put down a select the body's own readers feed back into, so
+///   the branch below is hoisted first. One always can be: blocking runs
+///   downstream, and the cone below a select is finite, so the bottom of
+///   any chain of blocked branches is a branch nothing blocks.
+fn hoistable(graph: &Graph, select: NodeId) -> Option<Lifted> {
+    let NodeKind::Select { arity } = *graph.kind(select) else {
+        return None;
+    };
+    let answers: Vec<Source> = (0..arity)
+        .map(|port| Source::Port { node: select, port })
+        .collect();
+
+    // The region: transitive readers of the answers, with every select
+    // left standing and not read through.
+    let mut region: Vec<NodeId> = Vec::new();
+    let mut todo = answers.clone();
+    while let Some(src) = todo.pop() {
+        for sink in graph.sinks(src) {
+            let Sink::Port { node, .. } = sink else {
+                continue;
+            };
+            if matches!(graph.kind(node), NodeKind::Select { .. }) || region.contains(&node) {
+                continue;
+            }
+            region.push(node);
+            for port in 0..graph.kind(node).arity().outputs {
+                todo.push(Source::Port { node, port });
+            }
+        }
+    }
+    if region.is_empty() {
+        return None;
+    }
+    let mine: HashSet<NodeId> = region.iter().copied().collect();
+
+    // Nothing the region reads may be below the branch it is about to
+    // move past — which it can only be by way of a select the region
+    // stopped at.
+    let below = downstream(graph, &answers);
+    let reads_below = region
+        .iter()
+        .flat_map(|&node| graph.sources(node).iter().copied())
+        .any(|src| match src {
+            Source::Port { node, .. } => !mine.contains(&node) && below.contains(&node),
+            Source::Input(_) => false,
+        });
+    if reads_below {
+        return None;
+    }
+
+    // What is read from outside the region, region ports first and the
+    // answers that pass straight through after them.
+    let outside = |src: Source| {
+        graph.sinks(src).iter().any(|sink| match sink {
+            Sink::Output(_) => true,
+            Sink::Port { node, .. } => !mine.contains(node),
+        })
+    };
+    let mut leaves: Vec<Source> = Vec::new();
+    let mut ports: Vec<NodeId> = region.clone();
+    ports.sort_unstable();
+    for node in ports {
+        for port in 0..graph.kind(node).arity().outputs {
+            let src = Source::Port { node, port };
+            if outside(src) {
+                leaves.push(src);
+            }
+        }
+    }
+    leaves.extend(answers.iter().copied().filter(|&src| outside(src)));
+    if leaves.is_empty() {
+        return None;
+    }
+
+    lift(graph, &region, &answers, &leaves)
+}
+
 // ---- resolving a stated match ----------------------------------------------------
 
 /// [`MatchSpec`] × [`Bindings`] × the current graph → a concrete
@@ -986,6 +1160,45 @@ pub fn decide() -> Tactic {
 /// was advice in a doc comment is a program here.
 pub fn branch_pass() -> Tactic {
     Tactic::Repeat(Box::new(fire_first(rules::branching())), None)
+}
+
+/// Every branch grown forward over everything but another branch, to
+/// fixpoint: the **decision tree**.
+///
+/// `select-hoist` says that what runs after a branch runs inside
+/// whichever arm the branch takes. Spent everywhere it will go, with
+/// [`hoistable`]'s reading of the body — the cone below a select, every
+/// other select left standing — it sorts a graph into two halves: the
+/// work, which reads nothing a branch answers, and the branches, which
+/// read the work and each other. That is a decision tree said in a
+/// graph, and the fixpoint is exactly the sentence "no box but a select
+/// reads what a select answers".
+///
+/// It **grows** a graph, which is why no list drives the row and why
+/// this is a tactic a proof names rather than something `decide` runs. A
+/// branch's body goes into both arms, so a value under `n` branches ends
+/// up written `2^n` times in the worst case, and the worst case is a
+/// real program: this is for a goal that wants its cases laid out, not
+/// for tidying a large one.
+///
+/// It terminates, and the measure is what the copies read. A hoist
+/// replaces each body box with two boxes reading that branch's blocks
+/// instead of its answers, so each copy has strictly fewer branches
+/// above it than the box it came from, and no box outside the body
+/// gains one. A multiset of naturals with one member replaced by
+/// finitely many smaller ones is a decreasing multiset, and nothing
+/// else in the round changes: a select is never copied, so the branches
+/// keep their count, and the branch that fired loses its last reader
+/// and drops out of the program.
+pub fn tree() -> Tactic {
+    Tactic::Repeat(
+        Box::new(Tactic::Fire {
+            at: Query::new().is("sel", query::NodePred::Kind(query::KindPat::Select)),
+            rule: RuleSpec::Hoist { anchor: Var("sel") },
+            pick: Pick::First,
+        }),
+        None,
+    )
 }
 
 #[cfg(test)]
@@ -1408,6 +1621,154 @@ mod tests {
         assert_eq!(graph.live_count(), 1, "\n{}", graph);
         let (_, kind) = graph.live().next().unwrap();
         assert_eq!(kind, &NodeKind::Op(Prim::Push(Value::Int(1))));
+    }
+
+    /// Whether every branch is where a decision tree wants it: nothing
+    /// but another select, or the boundary, reads what a select answers.
+    fn bunched(graph: &Graph) -> bool {
+        graph
+            .live()
+            .filter(|(_, kind)| matches!(kind, NodeKind::Select { .. }))
+            .flat_map(|(id, kind)| {
+                (0..kind.arity().outputs).map(move |port| Source::Port { node: id, port })
+            })
+            .flat_map(|src| graph.sinks(src))
+            .all(|sink| match sink {
+                crate::graph::Sink::Output(_) => true,
+                crate::graph::Sink::Port { node, .. } => {
+                    matches!(graph.kind(node), NodeKind::Select { .. })
+                }
+            })
+    }
+
+    /// The decision tree, run to its fixpoint: what the drive is *for* is
+    /// the shape it leaves, and the shape is one sentence — no box but a
+    /// select reads what a select answers.
+    ///
+    /// Not oracle-judgeable, and for the reason `select-hoist` is not:
+    /// the opaque reading is a `Choice` per output and cannot push an
+    /// application through one, which is the whole content of the law.
+    /// The law itself is held to the machine in [`rules`]; what is
+    /// claimed here is that the drive spends it to the shape it is named
+    /// for, and that what it did replays.
+    #[test]
+    fn a_tree_leaves_the_branches_at_the_output() {
+        for (body, selects) in [
+            // One branch and one box after it: the branch grows over the
+            // `negate`, which is the corpus's own `select-hoist` claim.
+            ("branch { not } { as_bool } negate", 1),
+            // Work between two branches and work after both. Every box of
+            // it ends up above every branch.
+            (
+                "pick 1 branch { not } { as_bool } negate branch { negate } { not } is_int",
+                2,
+            ),
+            // A branch whose answer two boxes read, one of them the
+            // condition of the branch after it.
+            (
+                "pick 0 branch { not } { as_bool } pick 0 is_bool branch { negate } { not }",
+                2,
+            ),
+        ] {
+            let mut graph = built(body);
+            let mut deriv = Derivation::default();
+            let before = graph.clone();
+            run(&mut graph, &mut deriv, &tree()).expect(body);
+            graph.check().unwrap_or_else(|e| panic!("{}: {}", body, e));
+            assert!(
+                bunched(&graph),
+                "{}: a branch is still read by something that is not one:\n{}",
+                body,
+                graph
+            );
+            assert_eq!(
+                graph
+                    .live()
+                    .filter(|(_, k)| matches!(k, NodeKind::Select { .. }))
+                    .count(),
+                selects,
+                "{}: a select was copied or lost:\n{}",
+                body,
+                graph
+            );
+            // Every step of it is a checked instance of the table, and
+            // the run is a derivation like any other.
+            let mut again = before;
+            let steps: Vec<Step> = deriv.steps().cloned().collect();
+            replay(&mut again, &steps).unwrap_or_else(|e| panic!("{}: {}", body, e));
+            assert_eq!(again, graph, "{}: the run does not replay", body);
+        }
+    }
+
+    /// A graph with no branch in it has nothing for the drive to spend,
+    /// and saying so is not a failure: a `Repeat` whose body finds
+    /// nothing on its first round is done rather than broken.
+    #[test]
+    fn a_tree_of_no_branches_is_the_graph_itself() {
+        let original = built("push 1 push 2 add");
+        let mut graph = original.clone();
+        let mut deriv = Derivation::default();
+        assert_eq!(
+            run(&mut graph, &mut deriv, &tree()),
+            Ok(Progress::Unchanged)
+        );
+        assert_eq!(graph, original);
+        assert_eq!(deriv.len(), 0);
+    }
+
+    /// The order the drive has to find for itself: a branch whose body
+    /// reads what a branch **below** it answers cannot go first.
+    ///
+    /// `S` answers a wire that a `not` and an `add` read; the `not`
+    /// decides `T`, and the `add` reads `T`'s answer as well. Hoisting
+    /// `S` first would hand the `add`'s readers a new select the `add`
+    /// itself feeds back into, so [`hoistable`] declines it and offers
+    /// `T` instead — after which `S` has nothing below it and goes.
+    #[test]
+    fn a_branch_below_is_hoisted_first() {
+        let mut graph = Graph::empty(5);
+        let answered = graph.add(
+            NodeKind::Select { arity: 1 },
+            (0..3).map(Source::Input).collect(),
+        );
+        let decided = graph.add(NodeKind::Op(Prim::Not), vec![answered[0]]);
+        let inner = graph.add(
+            NodeKind::Select { arity: 1 },
+            vec![decided[0], Source::Input(3), Source::Input(4)],
+        );
+        let summed = graph.add(NodeKind::Op(Prim::Add), vec![answered[0], inner[0]]);
+        graph.close(summed);
+        graph.check().unwrap();
+
+        let select = |graph: &Graph, at: usize| {
+            graph
+                .live()
+                .filter(|(_, k)| matches!(k, NodeKind::Select { .. }))
+                .map(|(id, _)| id)
+                .nth(at)
+                .expect("a branch")
+        };
+        let outer = select(&graph, 0);
+        assert!(
+            hoistable(&graph, outer).is_none(),
+            "the outer branch's body reads what the inner one answers:\n{}",
+            graph
+        );
+        assert!(hoistable(&graph, select(&graph, 1)).is_some());
+
+        let mut deriv = Derivation::default();
+        run(&mut graph, &mut deriv, &tree()).expect("the inner branch goes first");
+        graph.check().unwrap();
+        assert!(bunched(&graph), "\n{}", graph);
+        assert_eq!(
+            graph
+                .live()
+                .filter(|(_, k)| matches!(k, NodeKind::Select { .. }))
+                .count(),
+            2,
+            "\n{}",
+            graph
+        );
     }
 
     /// The one address that is a **name** rather than a description, and

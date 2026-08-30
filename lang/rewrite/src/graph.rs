@@ -906,6 +906,116 @@ impl Graph {
     }
 }
 
+// ---- lifting a region out --------------------------------------------------------
+
+/// Some of a graph's boxes, lifted out as a graph of their own — the body
+/// a region-carrying rule ([`Rule::Shannon`](crate::diagram2::rules::Rule),
+/// [`SelectHoist`](crate::diagram2::rules::Rule)) puts in its payload.
+///
+/// A region is a **reading** of the host and never a choice, so everything
+/// here is said by the caller and nothing is inferred: `region` is which
+/// boxes, `answers` are the sources they were gathered downstream of —
+/// boundary inputs `0..answers.len()` of the lifted graph — and `leaves`
+/// says what the region answers with, in the host's own sources. Whatever
+/// else the boxes read follows the answers as an input apiece, in
+/// encounter order.
+///
+/// A leaf is a port of a lifted box, or one of the answers passed straight
+/// through from the input standing for it. `None` for anything else, for
+/// boxes that do not order by their own edges, and for a lifting that is
+/// not a graph — a caller's mistake costs a payload it does not get,
+/// rather than a graph nobody can check.
+///
+/// What comes back with the graph is how it lines up with the host, which
+/// is what a caller needs to say where the payload goes: [`boxes`] is the
+/// host box each lifted box came from, in the lifted graph's own node
+/// order, and [`outside`] is what the answers are followed by, in input
+/// order.
+///
+/// [`boxes`]: Lifted::boxes
+/// [`outside`]: Lifted::outside
+pub(crate) struct Lifted {
+    pub(crate) graph: Graph,
+    pub(crate) boxes: Vec<NodeId>,
+    pub(crate) outside: Vec<Source>,
+}
+
+pub(crate) fn lift(
+    graph: &Graph,
+    region: &[NodeId],
+    answers: &[Source],
+    leaves: &[Source],
+) -> Option<Lifted> {
+    let mut region: Vec<NodeId> = region.to_vec();
+    region.sort_unstable();
+    region.dedup();
+    let mine: HashSet<NodeId> = region.iter().copied().collect();
+    let held = |src: Source| matches!(src, Source::Port { node, .. } if mine.contains(&node));
+    if !leaves.iter().all(|src| held(*src) || answers.contains(src)) {
+        return None;
+    }
+
+    // An order the region can be rebuilt in — by its own edges, since a
+    // rewrite can leave a low id reading a high one.
+    let mut order: Vec<NodeId> = Vec::with_capacity(region.len());
+    while order.len() < region.len() {
+        let stuck = order.len();
+        for &node in &region {
+            if order.contains(&node) {
+                continue;
+            }
+            let ready = graph.sources(node).iter().all(|src| match src {
+                Source::Port { node: made, .. } => !mine.contains(made) || order.contains(made),
+                Source::Input(_) => true,
+            });
+            if ready {
+                order.push(node);
+            }
+        }
+        if order.len() == stuck {
+            return None;
+        }
+    }
+
+    // What it reads that it does not own, the answers aside.
+    let mut extra: Vec<Source> = Vec::new();
+    for src in order
+        .iter()
+        .flat_map(|&node| graph.sources(node).iter().copied())
+    {
+        if !answers.contains(&src) && !held(src) && !extra.contains(&src) {
+            extra.push(src);
+        }
+    }
+
+    let place: HashMap<NodeId, usize> = order.iter().enumerate().map(|(i, &n)| (n, i)).collect();
+    let inside = |src: Source| match src {
+        Source::Port { node, port } if mine.contains(&node) => Source::Port {
+            node: NodeId::at(place[&node]),
+            port,
+        },
+        other => match answers.iter().position(|&a| a == other) {
+            Some(i) => Source::Input(i),
+            None => Source::Input(
+                answers.len() + extra.iter().position(|&e| e == other).expect("noted"),
+            ),
+        },
+    };
+
+    let mut lifted = Graph::empty(answers.len() + extra.len());
+    for &node in &order {
+        let takes = graph.sources(node).iter().map(|&s| inside(s)).collect();
+        lifted.add(graph.kind(node).clone(), takes);
+    }
+    lifted.close(leaves.iter().map(|&s| inside(s)).collect());
+    lifted.check().ok()?;
+    Some(Lifted {
+        graph: lifted,
+        boxes: order,
+        outside: extra,
+    })
+}
+
 // ---- padding ---------------------------------------------------------------------
 
 /// The graph as `id(k) * itself` reads: `k` fresh boundary wires passed

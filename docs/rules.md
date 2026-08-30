@@ -195,7 +195,10 @@ this holds of **any** branch, whatever computed its condition. It is the
 row that lets a branch grow *forwards*. Backwards is free — work in front
 of a branch is shared by both arms as a matter of naming, and doing it
 twice is having it once; this is the same freedom at the other end. It duplicates the region it moves over, so no list drives
-it.
+it. The region rides as payload and *which* region it is, is the
+naming strategy's: the `tree` tactic of [docs/tactics.md](tactics.md)
+spends this row to a fixpoint over a body that stops at every other
+branch, which is what leaves the selects bunched at the output.
 
 **`comm`** — the other way round is the same answer, for any `op` the
 instruction set says is `commutative`:

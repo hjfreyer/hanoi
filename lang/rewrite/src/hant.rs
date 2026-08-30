@@ -103,6 +103,7 @@
 //! | `saturate(law, …)` | those laws to fixpoint |
 //! | `branches` | the branch layer with its cleanup, to fixpoint |
 //! | `decide` | the whole table to fixpoint — what the `diagram` closer drives |
+//! | `tree` | `select-hoist` to fixpoint, past everything but another branch — the decision tree |
 //! | `fire(law, …)` | the first proposal of those laws, once — fails finding none |
 //! | `at(#box, law)` | that law, once, in a match that holds **that box** — the address the residual printed |
 //! | `at(#box, law, backward)` | the same, reading the law's equation right to left |
@@ -684,6 +685,9 @@ fn parse_tactic(input: &str) -> Result<(Tactic, &str), String> {
         }
         "branches" => Ok((tactic::branch_pass(), rest)),
         "decide" => Ok((tactic::decide(), rest)),
+        // The decision tree: every branch grown forward over everything
+        // but another branch, until the selects are all at the output.
+        "tree" => Ok((tactic::tree(), rest)),
         "fire" => {
             let after = rest
                 .trim_start()
@@ -1057,7 +1061,7 @@ mod tests {
         );
 
         let entries =
-            parse_hant("proof p = both(decide branches try(fire(not-not))) diagram;").unwrap();
+            parse_hant("proof p = both(decide branches tree try(fire(not-not))) diagram;").unwrap();
         let [Step::Rewrite { side, tactic }, Step::Diagram] = &entries[0].strategy[..] else {
             panic!("{:?}", entries[0].strategy);
         };
@@ -1067,8 +1071,9 @@ mod tests {
         };
         assert_eq!(steps[0], tactic::decide());
         assert_eq!(steps[1], tactic::branch_pass());
+        assert_eq!(steps[2], tactic::tree());
         assert_eq!(
-            steps[2],
+            steps[3],
             Tactic::Try(Box::new(tactic::fire_first(vec![Law::NotNot])))
         );
 
