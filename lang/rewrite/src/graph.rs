@@ -68,10 +68,10 @@
 //! `not-not` declined on a first `not` somebody else read, and the fix was
 //! to unshare first. Substitution has no such condition: a reader outside
 //! the window keeps reading the node it always read, because that node is
-//! still there and still means what it meant. The three conditions
-//! [`check_match`] is left with are that the boxes are the right boxes,
-//! that they read what the pattern says, and that the answer does not read
-//! itself.
+//! still there and still means what it meant. What [`check_match`] is
+//! left with is that the boxes are the right boxes and that they read
+//! what the pattern says — even an equation spent on its own answer is a
+//! step, which compounds, and which its inverse un-compounds.
 //!
 //! ## Two graphs are one program by looking
 //!
@@ -882,28 +882,6 @@ impl Graph {
             .collect();
         self.close(outputs);
     }
-
-    /// Everything a source reads, transitively.
-    fn upstream(&self, src: Source) -> HashSet<Source> {
-        let mut seen = HashSet::new();
-        let mut todo = vec![src];
-        while let Some(src) = todo.pop() {
-            if !seen.insert(src) {
-                continue;
-            }
-            if let Source::Port { node, .. } = src {
-                for &input in &self.nodes[node.index()].inputs {
-                    todo.push(input);
-                }
-                // Every port of a box is upstream of anything the box is,
-                // since replacing one is replacing what the box computes.
-                for port in 0..self.kind(node).arity().outputs {
-                    todo.push(Source::Port { node, port });
-                }
-            }
-        }
-        seen
-    }
 }
 
 // ---- lifting a region out --------------------------------------------------------
@@ -1206,9 +1184,12 @@ impl Pair {
     /// mentioned: that reader goes on reading the box it always read,
     /// which is still there and still means what it meant. So a law fires
     /// in a window other things read into, which is what it always meant.
-    /// The one thing to refuse is a replacement that is *already* part of
-    /// what it replaces — an equation spent on its own answer, which says
-    /// nothing and would only grow the graph.
+    /// An equation spent on its own answer is no exception: the standing
+    /// answer's readers ride a further copy of the window — every entry of
+    /// the substitution is an equality, so a re-stated step **compounds**
+    /// honestly, and interning is what lets its inverse fold the copies
+    /// back onto the boxes that stood. Whether saying a thing again is
+    /// worth a step is a strategy's question, not this module's.
     ///
     /// The answer is the **embedding of what went in**, which is where the
     /// way back lands: a [`Match`] names host [`NodeId`]s, so the inverse
@@ -1227,10 +1208,6 @@ impl Pair {
                 port,
             },
         };
-        // A snapshot: what follows adds boxes, and what was here before
-        // them is the question.
-        let before = graph.reachable().to_vec();
-
         // The other side, built where the match says it goes.
         let mut fresh: Vec<NodeId> = Vec::with_capacity(replacement.nodes.len());
         let carry = |src: Source, fresh: &[NodeId]| match src {
@@ -1260,14 +1237,6 @@ impl Pair {
             match sigma.insert(key, leaves[j]) {
                 Some(other) if other != leaves[j] => return Err(Mismatch::Conflict(key)),
                 _ => {}
-            }
-        }
-        // A replacement the graph already held, and that reads what it is
-        // standing in for, would be rebuilt into a reading of itself.
-        for (&key, &val) in &sigma {
-            let standing = matches!(val, Source::Port { node, .. } if reaches(&before, node));
-            if standing && graph.upstream(val).iter().any(|s| sigma.contains_key(s)) {
-                return Err(Mismatch::Circular(key));
             }
         }
         graph.substitute(&sigma);
@@ -1422,9 +1391,6 @@ pub enum Mismatch {
     /// The pattern exports one value twice and the match sends it two
     /// ways, which is two answers to one question.
     Conflict(Source),
-    /// The replacement is already part of what it replaces, so putting it
-    /// in would be reading it out of itself.
-    Circular(Source),
 }
 
 impl fmt::Display for Mismatch {
@@ -1443,11 +1409,6 @@ impl fmt::Display for Mismatch {
             Mismatch::Conflict(src) => {
                 write!(f, "{} is answered two ways by one match", src)
             }
-            Mismatch::Circular(src) => write!(
-                f,
-                "what would stand for {} already reads it, so the step says nothing",
-                src
-            ),
         }
     }
 }
@@ -2076,19 +2037,25 @@ mod tests {
         assert_eq!(spoiled, host, "a refusal changes nothing");
     }
 
-    /// The one refusal substitution has of its own: a replacement the
-    /// graph already holds, that reads the very value it would stand for.
+    /// An equation spent where its answer already stands is a step like
+    /// any other: it compounds. Every entry of the substitution is an
+    /// equality, so the standing answer's readers ride a further copy of
+    /// the window — and the recorded inverse folds the copies back onto
+    /// the boxes that stood, interning doing the folding.
     ///
     /// `promised-bool` says `op = op ; as_bool`, and where the `as_bool`
-    /// is already standing the step says nothing — putting it in would
-    /// rebuild it into a reading of itself.
+    /// is already standing the step stacks a second one on it. Not
+    /// re-saying it forever is a strategy's business — `propose` already
+    /// declines an answer that carries its promise — and no business of
+    /// the checker's.
     #[test]
-    fn a_replacement_that_reads_what_it_replaces_is_refused() {
+    fn a_replacement_that_reads_what_it_replaces_compounds() {
         let mut host = Graph::empty(1);
         let test = host.add(NodeKind::Op(Prim::IsBool), vec![Source::Input(0)]);
         let coerced = host.add(NodeKind::Op(Prim::AsBool), test.clone());
         host.close(coerced);
         host.check().unwrap();
+        let before = host.clone();
 
         let pair = Pair::new(Graph::of_box(NodeKind::Op(Prim::IsBool)), {
             let mut g = Graph::empty(1);
@@ -2108,12 +2075,74 @@ mod tests {
             ],
             inputs: vec![Source::Input(0)],
         };
-        let before = host.clone();
-        assert_eq!(
-            pair.apply(&mut host, Direction::Forward, &at),
-            Err(Mismatch::Circular(test[0]))
+        let back = pair
+            .apply(&mut host, Direction::Forward, &at)
+            .expect("a re-stated promise is a step");
+        host.check().unwrap();
+        assert_eq!(host.live_count(), 3, "the promise stacked:\n{}", host);
+
+        // And the way back folds the stack onto the coercion that stood.
+        pair.apply(&mut host, Direction::Backward, &back)
+            .expect("the inverse fires");
+        host.check().unwrap();
+        assert!(isomorphic(&host, &before), "\n{}\n{}", host, before);
+        assert_eq!(host, before, "the very boxes, not merely the program");
+    }
+
+    /// The same fact on the introduction a proof wants it for: stating
+    /// `tuple ; untuple = id` right-to-left on wires the pair already
+    /// cancels stacks a second round trip — a true thing said one layer
+    /// deeper, not an error — and the inverse un-compounds it exactly.
+    #[test]
+    fn a_restated_cancelling_pair_compounds_and_uncompounds() {
+        // The pair standing on both inputs, the boundary reading a bare
+        // wire and both of the untuple's answers.
+        let mut host = Graph::empty(2);
+        let tuple = host.add(
+            NodeKind::Op(Prim::Tuple(2)),
+            vec![Source::Input(0), Source::Input(1)],
         );
-        assert_eq!(host, before, "a refusal changes nothing");
+        let apart = host.add(NodeKind::Op(Prim::Untuple(2)), tuple);
+        host.close(vec![Source::Input(0), apart[0], apart[1]]);
+        host.check().unwrap();
+        let before = host.clone();
+
+        // `tuple 2 ; untuple 2 = id(2)`, as the table states it.
+        let pair = Pair::new(
+            {
+                let mut g = Graph::empty(2);
+                let tuple = g.add(
+                    NodeKind::Op(Prim::Tuple(2)),
+                    vec![Source::Input(0), Source::Input(1)],
+                );
+                let apart = g.add(NodeKind::Op(Prim::Untuple(2)), tuple);
+                g.close(apart);
+                g
+            },
+            {
+                let mut g = Graph::empty(2);
+                g.close(vec![Source::Input(0), Source::Input(1)]);
+                g
+            },
+        )
+        .unwrap();
+
+        // Backward, stated on the very wires the standing pair cancels.
+        let at = Match {
+            nodes: Vec::new(),
+            inputs: vec![Source::Input(0), Source::Input(1)],
+        };
+        let back = pair
+            .apply(&mut host, Direction::Backward, &at)
+            .expect("a re-stated pair is a step");
+        host.check().unwrap();
+        assert_eq!(host.live_count(), 4, "a second trip stacked:\n{}", host);
+        assert!(!isomorphic(&host, &before), "not vacuous — it compounded");
+
+        pair.apply(&mut host, Direction::Forward, &back)
+            .expect("the inverse fires");
+        host.check().unwrap();
+        assert!(isomorphic(&host, &before), "\n{}\n{}", host, before);
     }
 
     // ---- one embedding read through another ----
