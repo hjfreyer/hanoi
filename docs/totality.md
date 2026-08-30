@@ -368,7 +368,7 @@ a guard that asks `is_tuple n` hands over a test instead, and a test of a
 built tuple had no row at all. Written without one, the barista's contract
 claim stalls on a nest of `tuple n ; is_tuple n` nobody can decide. The row is
 `as-tuple-built`'s sibling — `tuple m ; is_tuple n` = `tuple m ; push (m ==
-n)`, the tuple kept for its other readers the way that law keeps it — and with
+n)`, the tuple untouched and standing for whatever else reads it — and with
 it in the table the claim closes in fewer rewrites than it did before, there
 being less guard to rewrite.
 
