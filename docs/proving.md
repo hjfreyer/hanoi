@@ -169,8 +169,11 @@ Inside `lhs(…)`, `rhs(…)` and `both(…)` is the rewrite language of
 (the whole table — what `diagram` drives), `tree` (`select-hoist` past
 everything but another branch, until the selects are all at the output),
 `fire(law, …)` (one directed firing), `at(#box, law)` (one firing at a
-**named box**), `repeat(…)` and `try(…)`. Laws are named as [docs/rules.md](rules.md) names them —
-`fold`, `select-same`, `not-not` — and `branching` names the list.
+**named box**), `on(#wire …, law)` (a law stated onto **named wires** —
+the introduction no search anchors, `on(in0 in1, tuple-cancel)` putting
+the cancelling pair in), `repeat(…)` and `try(…)`. Laws are named as
+[docs/rules.md](rules.md) names them — `fold`, `select-same`, `not-not`
+— and `branching` names the list.
 
 `at` is the step that answers a report in the report's own words. `fire`
 takes the first match it is offered anywhere on the side; when that is

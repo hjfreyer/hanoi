@@ -2020,6 +2020,26 @@ pub fn instances(graph: &Graph, law: Law) -> Vec<Rule> {
     out
 }
 
+/// The instance of `law` one side of which is **bare wires** — no boxes,
+/// `wires` boundary inputs handed straight through — with the direction
+/// that reads the equation from that side, so the wires are the pattern
+/// and the law's window is what goes in.
+///
+/// This is the payload of an **introduction**. A side with no boxes
+/// anchors nowhere ([`pins_itself`](crate::graph::pins_itself) says why),
+/// so no search ever proposes these steps: they are *stated*, the wires
+/// named outright, and this is where a statement's width becomes a
+/// payload. `tuple-cancel` is the row today — its right side is `id(n)`,
+/// so the pair is introduced backward, on any `n` wires. `None` for a law
+/// both of whose sides hold boxes, and for one whose bare side would take
+/// more payload than a width: nothing here is guessed.
+pub fn boxless(law: Law, wires: usize) -> Option<(Rule, Direction)> {
+    match law {
+        Law::TupleCancel => Some((Rule::TupleCancel { n: wires }, Direction::Backward)),
+        _ => None,
+    }
+}
+
 /// Everything downstream of one box's single answer, lifted out as a graph
 /// of its own — the body a [`Rule::Shannon`] carries.
 fn downstream(graph: &Graph, of: NodeId) -> Option<Graph> {

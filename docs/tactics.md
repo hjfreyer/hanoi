@@ -25,6 +25,7 @@ steps are:
 | `fire(law, …)` | the first proposal of those laws, once — fails finding none |
 | `at(#box, law)` | that law, once, in a match that holds **that box** — the address the residual printed |
 | `at(#box, law, backward)` | the same, reading the law's equation right to left |
+| `on(#wire …, law)` | that law stated onto named wires — the introduction whose bare side no search anchors |
 | `repeat(t …)` | the sequence until it stops advancing |
 | `try(t …)` | the sequence, or nothing — failure becomes no progress |
 
@@ -73,6 +74,35 @@ computing what it computed. What it buys is that no other spelling of
 "that one" exists. The name is never *held* across a rewrite either — it
 is looked up live at every entry, and fails by name the moment nothing
 answers to it (`NoSuchBox`) or two boxes do (`ManyBoxes`).
+
+### `on`
+
+`on(#nk in0, tuple-cancel)` states what no search can find. A law whose
+one side is **bare wires** — `tuple-cancel`'s right side is `id(n)`
+outright — has nothing there for the matcher to anchor on, so
+introducing its window is a *statement*: the wires are named in order,
+`#nk` a box's answer by the address the listing printed (`#nk.1` for a
+later port), `in0` a boundary input, and the law's window goes in **on**
+them. Every reader of each wire, the goal boundary included, comes to
+read through the introduced pair; the order is the window's shape, so
+`on(in1 in0, tuple-cancel)` builds the other tuple.
+
+The direction is the law's own — the bare side is the pattern, so
+`tuple-cancel` reads backward — and writing it out is allowed and
+checked rather than obeyed. Wire names follow `at`'s discipline: looked
+up live at every entry, never held, failing by name (`NoSuchBox`,
+`ManyBoxes`, a port the box lacks) rather than firing somewhere else.
+Stated on wires the pair already cancels, the step **compounds** — a
+second trip stacks on the first, a true thing said one layer deeper, and
+never an error — so a `repeat` around an `on` is the author claiming
+what a `repeat` always claims. `rules::boxless` is the table of laws
+`on` can state: a law both of whose sides hold boxes is not on it, and
+neither is one whose bare side would take more payload than a width.
+
+What it is for: manifesting a window. A lemma proved about a packed
+value cannot be spent in a goal that never packs until the shape exists;
+a side that never packs meets one that does by stating the pair onto the
+bare wires and letting `exact` or `decide` take both sides home.
 
 ### The library drives
 
@@ -211,11 +241,14 @@ against the live graph at every entry rather than held.)
 
 ### Found and stated steps
 
-`find` declines exactly one thing: a pattern with **no boxes**, which
-has nothing to anchor on and whose image would be a pure guess. Those
-steps are **stated** rather than found. Everything else is searchable in
-either direction — a substitution re-points every reader of the value it
-replaces, so no pattern leaves a reader-split for the host to settle.
+`find` declines a pattern that does not pin its own match: one with
+**no boxes**, which has nothing to anchor on and whose image would be a
+pure guess, and one with a boundary input nothing in it reads, which
+cannot say what that input stands for. Those steps are **stated** rather
+than found — `on` is the surface spelling for the bare-wires case.
+Everything else is searchable in either direction — a substitution
+re-points every reader of the value it replaces, so no pattern leaves a
+reader-split for the host to settle.
 
 A stated step is what is read, and nothing else:
 
@@ -224,9 +257,12 @@ A stated step is what is read, and nothing else:
 /// A source, described rather than named — resolved against bindings
 /// and the live graph at the moment the step fires.
 pub enum SrcExpr {
-    PortOf(Var, usize),   // output `port` of the bound node
-    FeedOf(Var, usize),   // whatever input `port` of the bound node reads
-    Input(usize),         // boundary input of the host
+    PortOf(Var, usize),      // output `port` of the bound node
+    FeedOf(Var, usize),      // whatever input `port` of the bound node reads
+    Input(usize),            // boundary input of the host
+    Addressed(Prefix, usize),// output `port` of the box the written address
+                             // names — `at`'s discipline: looked up live,
+                             // never held, failing by name
 }
 
 /// The recipe for a stated Match against one side of one rule. Nothing
@@ -426,8 +462,9 @@ the program.
 
 ## What is not here yet
 
-- A surface spelling for queries and for the stated steps — both exist
-  as data only, and grow syntax when a proof needs it.
+- A surface spelling for queries, and for stated steps beyond `on`'s
+  bare-wires slice — both exist as data only, and grow syntax when a
+  proof needs it.
 - Serialization for `Tactic` beyond the surface subset.
 - Custom equations. When they come, they come as lemmas with stored
   derivations — the `Rule::Lemma { lhs, rhs, warrant }` seam — never as
