@@ -125,9 +125,10 @@
 //! [`Law::Shannon`] does, and carries it as payload for the same reason.
 //! What it says is `select(C, T, E) ; A = select(C, T ; A, E ; A)` — the
 //! commuting conversion, what runs *after* a branch runs inside whichever
-//! arm the branch takes. Said as a composition on purpose: `select(…) ; A`
-//! is the side condition as well as the shape, since a composition is
-//! exactly the claim that the answers go into `A` and nowhere else.
+//! arm the branch takes. Said as a composition on purpose: the answers
+//! are read inside the window, and what the rewrite replaces is what `A`
+//! leaves — an answer read from outside the carried region keeps the
+//! select it always read.
 //!
 //! A branch grows *backwards* for free: work in front of one is shared by
 //! both arms as a matter of naming, and doing it twice is having it once.
@@ -202,11 +203,11 @@
 //!
 //! [`find`](crate::graph::find) is partial, in the two places a pattern does
 //! not pin its own match: a pattern with **no boxes** has nothing to anchor
-//! on (which is every rule's right-hand side but `not-not`'s), and a pattern
-//! that exports **one port twice** leaves the split of that port's readers a
-//! choice rather than a reading. Those are decisions, and they belong to
-//! whatever writes a derivation — which is exactly why [`Match`] carries the
-//! split rather than deriving it.
+//! on (`tuple-cancel`'s right side, say, which is `id(n)` outright), and a
+//! pattern with a boundary input **nothing in it reads** cannot say which
+//! wire that input stands for. A step at such a side is stated rather than
+//! searched for — which is exactly why [`Match`] is a claim anyone may
+//! write down.
 
 use std::collections::{HashMap, HashSet};
 use std::fmt;
@@ -364,11 +365,10 @@ pub enum Rule {
     /// the discard licensed the way every discard here is, by totality
     /// and purity.
     ///
-    /// The literal stays **exported** on both sides, the way
-    /// [`Rule::Fold`] keeps its operands: a deduped literal is one box
-    /// with many readers, and a window that claimed all of them would
-    /// never match. A literal the `and` alone read is left reader-less,
-    /// and `dead-node` collects it.
+    /// The literal is inside the window and not part of the equation: the
+    /// rewrite replaces the `and`'s answer, and a deduped literal with
+    /// readers of its own goes on standing for them. One the `and` alone
+    /// read is left unreachable, which is the whole of deletion here.
     ///
     /// This is the row that lets a case split spend a **conjunction**: a
     /// guard `and(a, b)` branch-tested as one opaque bool decomposes only
@@ -386,21 +386,19 @@ pub enum Rule {
     /// `push true`, the other operand discarded.
     ///
     /// Everything the sibling row says about the window holds here for the
-    /// same reasons: the literal stays **exported** on both sides, since a
-    /// deduped literal is one box with many readers; the discard is the one
-    /// totality and purity license; and this is what lets a case split
-    /// spend a **disjunction** one disjunct at a time.
+    /// same reasons: the literal is not part of the equation; the discard
+    /// is the one totality and purity license; and this is what lets a case
+    /// split spend a **disjunction** one disjunct at a time.
     ///
     /// `literal` names the operand the pushed value feeds.
     OrLiteral { literal: Side, value: Value },
     /// Taking apart what `tuple n` built answers the built elements:
-    /// `tuple n ; untuple n = id(n)` — tuple cancellation, stated with
-    /// the tuple **kept**, since its port may
-    /// have other readers: the equation re-points the untuple's readers
-    /// at the element wires and leaves the tuple standing for whoever
-    /// else holds it; a tuple nobody else reads falls to `dead-node`.
-    /// The machine's promise that `untuple` inverts `tuple` exactly is
-    /// what makes this a row rather than wiring.
+    /// `tuple n ; untuple n = id(n)` — tuple cancellation. The rewrite
+    /// re-points the untuple's readers at the element wires; the tuple is
+    /// not part of the equation, and in a host it goes on standing for
+    /// whoever else reads it, since a substitution deletes nothing. The
+    /// machine's promise that `untuple` inverts `tuple` exactly is what
+    /// makes this a row rather than wiring.
     TupleCancel { n: usize },
     /// The coercion is a no-op on a value `tuple n` built: `tuple n ;
     /// as_tuple n` answers the tuple itself. This is the witness a shape
@@ -420,16 +418,17 @@ pub enum Rule {
     /// then x else x = x`. The select keeps its other blocks and narrows by
     /// one.
     ///
-    /// The row that `branch { A } { A } = drop-top ; A` comes to, once
-    /// `dedup` has made the two arms' boxes one and `dead-node` has taken
-    /// the condition away.
+    /// The row that `branch { A } { A } = drop-top ; A` comes to: the two
+    /// arms' boxes are one by interning, and a condition nothing else
+    /// reads drops out of the program with the select.
     SelectSame { arity: usize, at: usize },
     /// β: a literal condition is the blocks it chooses. Sound on **every**
     /// value and not only on booleans, because `truthy` is total: `false`
     /// is the one falsy value and everything else takes the then block.
     ///
     /// The untaken arm is outside the window: its boxes lose their one
-    /// reader when the select goes, and `dead-node` collects them.
+    /// reader when the select goes, and a box the boundary no longer
+    /// reaches is not part of the program.
     ///
     /// `lit_blocks` names the block positions (over `2n`) that read the
     /// **literal itself** — the shape a `dedup` makes when the condition
@@ -450,11 +449,9 @@ pub enum Rule {
     /// [`Rule::SelectLiteral`] is: a select reads truthiness and `not`
     /// answers it.
     ///
-    /// The `not` is **not exported**, which is the same side condition
-    /// [`Rule::NotNot`] states: a negation something else reads is not this
-    /// window's box to spend. Nothing is stranded either way — a reader
-    /// outside goes on reading the box it always read, and the row swaps
-    /// only the blocks this select chose between.
+    /// The `not` is inside the window and not exported: the row swaps
+    /// only the blocks this select chose between, and a negation
+    /// something else reads goes on standing for that reader.
     ///
     /// `arity` is the select's width: every block moves, since the branch
     /// decided every one of them the other way.
@@ -542,12 +539,11 @@ pub enum Rule {
     /// select(C, T, E) ; A  =  select(C, T ; A, E ; A)
     /// ```
     ///
-    /// Written as a composition, which is the half of the statement that
-    /// is usually left to prose: `select(…) ; A` says the answers go into
-    /// `A` and nowhere else, and that is exactly the side condition, said
-    /// where it cannot be forgotten. `A` may read wires that are not
-    /// answers, so in full it is `(select(C, T, E) * id(k)) ; A`, and `k`
-    /// is what `body` carries past the answers.
+    /// Written as a composition: the answers are read inside the window,
+    /// and what the rewrite replaces is what `A` leaves. `A` may read
+    /// wires that are not answers, so in full it is
+    /// `(select(C, T, E) * id(k)) ; A`, and `k` is what `body` carries
+    /// past the answers.
     ///
     /// A branch grows *backwards* for free: work in front of one is shared
     /// by both arms as a matter of wiring, and two boxes doing it twice are
@@ -574,15 +570,14 @@ pub enum Rule {
     /// branch spends: total, pure, the untaken copy an answer nobody
     /// reads.
     ///
-    /// The side condition is carried by the interface rather than tested:
-    /// the left side exports `body`'s outputs and never the select's
-    /// answers, so the fullness clause of `check_match` forces every
-    /// answer to be read *inside* the window. It has to — the select is
-    /// gone on the right, and there would be nothing left to export them
-    /// from. An answer the host boundary reads is not stranded by that:
-    /// `downstream_of` hands it back as one of `body`'s own outputs,
-    /// passed straight through, and the new select chooses between the
-    /// blocks it chose between before.
+    /// The interface says what the rewrite replaces: the left side
+    /// exports `body`'s outputs and never the select's answers, so the
+    /// substitution re-points what the region leaves and nothing else.
+    /// An answer read from outside the carried region is no obstacle —
+    /// the old select goes on standing for that reader — and
+    /// `downstream_of` hands an answer the host boundary reads back as
+    /// one of `body`'s own outputs, passed straight through, so the new
+    /// select chooses between the blocks the old one chose between.
     ///
     /// Like [`Rule::Shannon`] and the two unpackings, it **grows** a
     /// graph, so no list drives it and a proof names where to spend it.
@@ -626,11 +621,11 @@ pub enum Rule {
     /// where a termination argument belongs.
     PromisedBool { kind: NodeKind },
     /// A type test of an answer the instruction set promises is a bool is
-    /// **decided**, and the answer itself is untouched: `op ; is_T` on one
-    /// wire is `op` and `push (T is Bool)` side by side. The promise is
+    /// **decided**, and the answer itself is untouched: `op ; is_T` folds
+    /// the test to `push (T is Bool)`. The promise is
     /// [`yields_bool`](bytecode::Instruction::yields_bool), measured by
-    /// `vm`; the answer stays exported, so the window does not care who
-    /// else reads it.
+    /// `vm`; the rewrite replaces only the test's answer, and `op` goes on
+    /// standing for whoever else reads it.
     ///
     /// One row for the whole family, because one fact answers all of it. A
     /// codomain does not only say which test succeeds — it says which
@@ -657,15 +652,12 @@ pub enum Rule {
     /// taking that apart and putting it back answers the very value it
     /// started from.
     ///
-    /// Not derivable from the two rows next to it, though it looks it:
-    /// `retuple` turns the tail into a second `as_tuple n`, and the table
-    /// has no idempotence row to collapse the pair. Stating it whole is
-    /// also what keeps the window honest — the parts are **not** exported,
-    /// so the rule declines a round trip something else reads into.
-    ///
-    /// The coercion's own port *is* exported, on both sides, the way
-    /// [`Rule::AsTupleBuilt`] exports its tuple: it may have other readers,
-    /// and a window that claimed all of them would rarely match.
+    /// `retuple` and `idem` reach the same place in two steps — the tail
+    /// becomes a second `as_tuple n`, and the pair collapses — where the
+    /// whole window is one; [`folding`] lists this row first so the longer
+    /// window wins. The coercion itself is not part of the equation: the
+    /// rewrite replaces the rebuilt tuple's value, and the coercion goes
+    /// on standing for whoever else reads it.
     AsTupleRoundTrip { n: usize },
     /// Asking a value `tuple m` built whether it is a tuple of width `n`
     /// is asking whether `m` is `n`: `tuple m ; is_tuple n` = `tuple m ;
@@ -675,8 +667,8 @@ pub enum Rule {
     /// reason: a value the window watched being built has a shape the
     /// window knows, so a test of that shape is decided rather than
     /// computed. `as-tuple-built` says the coercion changes nothing; this
-    /// says the test answers, and both keep the tuple **exported**, since
-    /// its port may have readers the window never held.
+    /// says the test answers. The tuple itself is untouched either way,
+    /// standing for whatever else reads it.
     ///
     /// Both widths ride in the payload rather than one, because both cases
     /// are useful and neither is harder than the other: the equal widths
@@ -704,11 +696,11 @@ pub enum Rule {
     /// coercion would be three copies of one sentence and a fourth to write
     /// whenever the instruction set grew one.
     ///
-    /// The middle port is **not exported**, the side condition
-    /// [`Rule::NotNot`] states in the same words: the pair has to be this
-    /// window's to collapse. Backwards it is the clone — one box becomes
-    /// two — which is what a proof wants when the shape it is heading for
-    /// spells the coercion twice.
+    /// The middle port is not exported, for [`Rule::NotNot`]'s reason: the
+    /// equation is about the composite's answer, and a first coercion
+    /// something else reads goes on standing for that reader. Backwards it
+    /// is the clone — one box becomes two — which is what a proof wants
+    /// when the shape it is heading for spells the coercion twice.
     ///
     /// The width rides in `kind`, as it does everywhere: `as_tuple 2 ;
     /// as_tuple 3` is two different questions and no instance of this at
@@ -870,8 +862,9 @@ pub fn folding() -> Vec<Law> {
         Law::Fold,
         Law::TestedBool,
         // The longer window first: both are read off the same `tuple` box,
-        // and `retuple` alone would turn a round trip that began at a
-        // coercion into two coercions the table has no row to collapse.
+        // and `retuple` alone would take a round trip that began at a
+        // coercion apart in two steps — a second coercion, then `idem` —
+        // where the whole window is one.
         Law::AsTupleRoundTrip,
         Law::Retuple,
         Law::IsTupleBuilt,
@@ -1023,8 +1016,9 @@ pub fn sides(rule: &Rule) -> Result<Pair, Error> {
         Rule::NotNot => {
             let mut long = Graph::empty(1);
             let first = long.add(NodeKind::Op(Prim::Not), vec![Source::Input(0)]);
-            // The middle port is not exported, which is the side condition:
-            // a `not` something else reads is not this window.
+            // The middle port is not exported: the equation is about the
+            // composite's answer, and a first `not` something else reads
+            // goes on standing for that reader.
             let second = long.add(NodeKind::Op(Prim::Not), first);
             long.close(second);
 
@@ -1042,20 +1036,19 @@ pub fn sides(rule: &Rule) -> Result<Pair, Error> {
                 Side::Top => vec![Source::Input(0), lit[0]],
             };
             let and = long.add(NodeKind::Op(Prim::And), operands);
-            long.close(vec![lit[0], and[0]]);
+            long.close(and);
 
             // The answer is `truthy`'s verdict on the literal, measured on
             // the value itself: truthy leaves the other operand's
             // coercion, the one falsy value leaves `false` and the other
             // operand unread.
             let mut short = Graph::empty(1);
-            let lit = short.add(NodeKind::Op(Prim::Push(value.clone())), Vec::new());
             let answer = if value.truthy() {
                 short.add(NodeKind::Op(Prim::AsBool), vec![Source::Input(0)])
             } else {
                 short.add(NodeKind::Op(Prim::Push(Value::Bool(false))), Vec::new())
             };
-            short.close(vec![lit[0], answer[0]]);
+            short.close(answer);
 
             (long, short)
         }
@@ -1067,19 +1060,18 @@ pub fn sides(rule: &Rule) -> Result<Pair, Error> {
                 Side::Top => vec![Source::Input(0), lit[0]],
             };
             let or = long.add(NodeKind::Op(Prim::Or), operands);
-            long.close(vec![lit[0], or[0]]);
+            long.close(or);
 
             // The poles of the sibling row, swapped: the one falsy value
             // leaves the other operand's coercion, and a truthy literal
             // leaves `true` and the other operand unread.
             let mut short = Graph::empty(1);
-            let lit = short.add(NodeKind::Op(Prim::Push(value.clone())), Vec::new());
             let answer = if value.truthy() {
                 short.add(NodeKind::Op(Prim::Push(Value::Bool(true))), Vec::new())
             } else {
                 short.add(NodeKind::Op(Prim::AsBool), vec![Source::Input(0)])
             };
-            short.close(vec![lit[0], answer[0]]);
+            short.close(answer);
 
             (long, short)
         }
@@ -1089,16 +1081,15 @@ pub fn sides(rule: &Rule) -> Result<Pair, Error> {
 
             let mut long = Graph::empty(n);
             let tuple = long.add(NodeKind::Op(Prim::Tuple(n)), elements.clone());
-            let apart = long.add(NodeKind::Op(Prim::Untuple(n)), tuple.clone());
-            let mut out = tuple.clone();
-            out.extend(apart);
-            long.close(out);
+            let apart = long.add(NodeKind::Op(Prim::Untuple(n)), tuple);
+            long.close(apart);
 
+            // `id(n)`, literally: the elements themselves. The tuple is
+            // not part of the equation — a tuple something else reads
+            // stays standing in the host, since a substitution deletes
+            // nothing.
             let mut short = Graph::empty(n);
-            let tuple = short.add(NodeKind::Op(Prim::Tuple(n)), elements.clone());
-            let mut out = tuple;
-            out.extend(elements);
-            short.close(out);
+            short.close(elements);
 
             (long, short)
         }
@@ -1108,12 +1099,12 @@ pub fn sides(rule: &Rule) -> Result<Pair, Error> {
 
             let mut long = Graph::empty(n);
             let tuple = long.add(NodeKind::Op(Prim::Tuple(n)), elements.clone());
-            let coerced = long.add(NodeKind::Op(Prim::AsTuple(n)), tuple.clone());
-            long.close(vec![tuple[0], coerced[0]]);
+            let coerced = long.add(NodeKind::Op(Prim::AsTuple(n)), tuple);
+            long.close(coerced);
 
             let mut short = Graph::empty(n);
             let tuple = short.add(NodeKind::Op(Prim::Tuple(n)), elements);
-            short.close(vec![tuple[0], tuple[0]]);
+            short.close(tuple);
 
             (long, short)
         }
@@ -1214,19 +1205,25 @@ pub fn sides(rule: &Rule) -> Result<Pair, Error> {
             let lit = both.add(NodeKind::Op(Prim::Push(value.clone())), Vec::new())[0];
             let mut takes = vec![lit];
             takes.extend((0..2 * n).map(|b| source(lit, b)));
-            let mut out = both.add(NodeKind::Select { arity: n }, takes);
-            // The literal is exported, so the rule does not also demand that
-            // nothing else reads it.
-            out.push(lit);
+            let out = both.add(NodeKind::Select { arity: n }, takes);
             both.close(out);
 
+            // The literal survives on the answer side only where a chosen
+            // block reads it; interning makes asking for it twice asking
+            // for the one box.
             let taken = value.truthy();
             let mut chosen = Graph::empty(width);
-            let lit = chosen.add(NodeKind::Op(Prim::Push(value.clone())), Vec::new())[0];
-            let mut out: Vec<Source> = (0..n)
-                .map(|j| source(lit, if taken { j } else { n + j }))
+            let out: Vec<Source> = (0..n)
+                .map(|j| {
+                    let b = if taken { j } else { n + j };
+                    if named.contains(&b) {
+                        chosen.add(NodeKind::Op(Prim::Push(value.clone())), Vec::new())[0]
+                    } else {
+                        let idx = outside.iter().position(|&o| o == b).expect("one or other");
+                        Source::Input(idx)
+                    }
+                })
                 .collect();
-            out.push(lit);
             chosen.close(out);
 
             (both, chosen)
@@ -1242,8 +1239,9 @@ pub fn sides(rule: &Rule) -> Result<Pair, Error> {
             let block = |i: usize| Source::Input(1 + i);
 
             let mut negated = Graph::empty(1 + 2 * n);
-            // Not exported, which is the side condition: a `not` something
-            // else reads is not this window.
+            // The `not` is inside the window, not exported: the equation
+            // replaces the select's answers, and a negation something else
+            // reads goes on standing for that reader.
             let flipped = negated.add(NodeKind::Op(Prim::Not), vec![Source::Input(0)]);
             let mut takes = vec![flipped[0]];
             takes.extend((0..2 * n).map(block));
@@ -1293,10 +1291,7 @@ pub fn sides(rule: &Rule) -> Result<Pair, Error> {
                 let mut takes = vec![test[0]];
                 takes.extend((0..n).map(|i| if folded && i == j { lit[0] } else { then(i) }));
                 takes.extend((0..n).map(els));
-                let mut answers = g.add(NodeKind::Select { arity: n }, takes);
-                // Both the test and the literal stay readable from outside.
-                answers.push(test[0]);
-                answers.push(lit[0]);
+                let answers = g.add(NodeKind::Select { arity: n }, takes);
                 g.close(answers);
                 g
             };
@@ -1327,10 +1322,7 @@ pub fn sides(rule: &Rule) -> Result<Pair, Error> {
                 let mut takes = vec![coerced];
                 takes.extend((0..2 * n).map(|other| if other == b { known } else { block(other) }));
                 let answers = g.add(NodeKind::Select { arity: n }, takes);
-                // The coercion stays readable from outside.
-                let mut out = vec![coerced];
-                out.extend(answers);
-                g.close(out);
+                g.close(answers);
                 g
             };
             (build(false), build(true))
@@ -1364,9 +1356,16 @@ pub fn sides(rule: &Rule) -> Result<Pair, Error> {
 
             let build = |folded: bool| {
                 let mut g = Graph::empty(width);
-                let mut takes = vec![Source::Input(0)];
-                takes.extend((0..2 * m).map(iblock));
-                let chosen = g.add(NodeKind::Select { arity: m }, takes);
+                // The inner select: on the unfolded side the moved blocks
+                // read its answers; folded, they read its blocks straight,
+                // and the equation's answer side never mentions it. In a
+                // host it goes on standing for whatever else reads it —
+                // its own other side's blocks, usually.
+                let chosen = (!folded).then(|| {
+                    let mut takes = vec![Source::Input(0)];
+                    takes.extend((0..2 * m).map(iblock));
+                    g.add(NodeKind::Select { arity: m }, takes)
+                });
                 let mut takes = vec![Source::Input(0)];
                 takes.extend((0..2 * n).map(|b| {
                     match moves.iter().find(|&&(_, at)| at == b) {
@@ -1374,7 +1373,7 @@ pub fn sides(rule: &Rule) -> Result<Pair, Error> {
                         // answer, or — folded — the block that answer is,
                         // read straight.
                         Some(&(j, _)) if folded => iblock(if then { j } else { m + j }),
-                        Some(&(j, _)) => chosen[j],
+                        Some(&(j, _)) => chosen.as_ref().expect("the unfolded side")[j],
                         None => {
                             let idx = outside.iter().position(|&o| o == b).expect("one or other");
                             Source::Input(1 + 2 * m + idx)
@@ -1382,10 +1381,7 @@ pub fn sides(rule: &Rule) -> Result<Pair, Error> {
                     }
                 }));
                 let answers = g.add(NodeKind::Select { arity: n }, takes);
-                // The inner select stays, and stays readable from outside.
-                let mut out = chosen;
-                out.extend(answers);
-                g.close(out);
+                g.close(answers);
                 g
             };
             (build(false), build(true))
@@ -1411,8 +1407,7 @@ pub fn sides(rule: &Rule) -> Result<Pair, Error> {
             let answer = asked.add(kind.clone(), handed.clone());
             let mut takes = vec![answer[0]];
             takes.extend(outside.iter().copied());
-            let mut out = asked.implant(body, &takes);
-            out.push(answer[0]);
+            let out = asked.implant(body, &takes);
             asked.close(out);
 
             let mut split = Graph::empty(n + k);
@@ -1431,8 +1426,7 @@ pub fn sides(rule: &Rule) -> Result<Pair, Error> {
             let mut chooses = vec![answer[0]];
             chooses.extend(sure);
             chooses.extend(doubted);
-            let mut out = split.add(NodeKind::Select { arity: m }, chooses);
-            out.push(answer[0]);
+            let out = split.add(NodeKind::Select { arity: m }, chooses);
             split.close(out);
 
             (asked, split)
@@ -1511,21 +1505,14 @@ pub fn sides(rule: &Rule) -> Result<Pair, Error> {
                 .collect();
             let took = reads.iter().map(|&r| held[r]).collect();
             let out = long.add(NodeKind::Op(prim.clone()), took);
-            let mut exports = held;
-            exports.extend(out);
-            long.close(exports);
+            long.close(out);
 
             let mut short = Graph::empty(0);
-            let mut exports: Vec<Source> = operands
-                .iter()
-                .map(|v| short.add(NodeKind::Op(Prim::Push(v.clone())), Vec::new())[0])
+            let answers: Vec<Source> = answers
+                .into_iter()
+                .map(|v| short.add(NodeKind::Op(Prim::Push(v)), Vec::new())[0])
                 .collect();
-            exports.extend(
-                answers
-                    .into_iter()
-                    .map(|v| short.add(NodeKind::Op(Prim::Push(v)), Vec::new())[0]),
-            );
-            short.close(exports);
+            short.close(answers);
 
             (long, short)
         }
@@ -1573,20 +1560,16 @@ pub fn sides(rule: &Rule) -> Result<Pair, Error> {
             let ins: Vec<Source> = (0..arity.inputs).map(Source::Input).collect();
 
             let mut tested = Graph::empty(arity.inputs);
-            let answer = tested.add(kind.clone(), ins.clone());
-            let truth = tested.add(NodeKind::Op(test.clone()), answer.clone());
-            // The answer stays exported, so the window does not care who
-            // else reads it — `dead-node` collects it where nobody does.
-            let mut out = answer;
-            out.extend(truth);
-            tested.close(out);
+            let answer = tested.add(kind.clone(), ins);
+            let truth = tested.add(NodeKind::Op(test.clone()), answer);
+            tested.close(truth);
 
+            // The verdict alone: the equation replaces the test's answer,
+            // and the operation goes on standing in the host for whoever
+            // else reads it.
             let mut known = Graph::empty(arity.inputs);
-            let answer = known.add(kind.clone(), ins);
             let truth = known.add(NodeKind::Op(Prim::Push(Value::Bool(verdict))), Vec::new());
-            let mut out = answer;
-            out.extend(truth);
-            known.close(out);
+            known.close(truth);
 
             (tested, known)
         }
@@ -1597,8 +1580,8 @@ pub fn sides(rule: &Rule) -> Result<Pair, Error> {
             }
             let mut roundabout = Graph::empty(1);
             let parts = roundabout.add(NodeKind::Op(Prim::Untuple(n)), vec![Source::Input(0)]);
-            // The parts are not exported: rebuilding is the coercion only
-            // when the window holds the whole round trip.
+            // The whole round trip, said by the edges: every slot of the
+            // rebuild reads the matching part, or the pattern is not there.
             let rebuilt = roundabout.add(NodeKind::Op(Prim::Tuple(n)), parts);
             roundabout.close(rebuilt);
 
@@ -1615,16 +1598,15 @@ pub fn sides(rule: &Rule) -> Result<Pair, Error> {
             }
             let mut roundabout = Graph::empty(1);
             let coerced = roundabout.add(NodeKind::Op(Prim::AsTuple(n)), vec![Source::Input(0)]);
-            // The parts are not exported and the coercion is: the round
-            // trip has to be whole, and the value it starts from is free
-            // to have readers of its own.
-            let parts = roundabout.add(NodeKind::Op(Prim::Untuple(n)), coerced.clone());
+            // The pattern holds the whole round trip — the wholeness is
+            // said by its edges, not by anything about readers.
+            let parts = roundabout.add(NodeKind::Op(Prim::Untuple(n)), coerced);
             let rebuilt = roundabout.add(NodeKind::Op(Prim::Tuple(n)), parts);
-            roundabout.close(vec![coerced[0], rebuilt[0]]);
+            roundabout.close(rebuilt);
 
             let mut once = Graph::empty(1);
             let coerced = once.add(NodeKind::Op(Prim::AsTuple(n)), vec![Source::Input(0)]);
-            once.close(vec![coerced[0], coerced[0]]);
+            once.close(coerced);
 
             (roundabout, once)
         }
@@ -1633,20 +1615,19 @@ pub fn sides(rule: &Rule) -> Result<Pair, Error> {
             let elements: Vec<Source> = (0..built).map(Source::Input).collect();
 
             let mut question = Graph::empty(built);
-            let tuple = question.add(NodeKind::Op(Prim::Tuple(built)), elements.clone());
-            let answer = question.add(NodeKind::Op(Prim::IsTuple(Some(asked))), tuple.clone());
-            // The tuple stays exported, the way `as-tuple-built` keeps its
-            // own: a deduped tuple is one box with many readers, and a
-            // window claiming all of them would rarely match.
-            question.close(vec![tuple[0], answer[0]]);
+            let tuple = question.add(NodeKind::Op(Prim::Tuple(built)), elements);
+            let answer = question.add(NodeKind::Op(Prim::IsTuple(Some(asked))), tuple);
+            question.close(answer);
 
+            // The verdict alone: the equation replaces the test's answer,
+            // and the tuple goes on standing in the host for whoever else
+            // reads it.
             let mut settled = Graph::empty(built);
-            let tuple = settled.add(NodeKind::Op(Prim::Tuple(built)), elements);
             let answer = settled.add(
                 NodeKind::Op(Prim::Push(Value::Bool(built == asked))),
                 Vec::new(),
             );
-            settled.close(vec![tuple[0], answer[0]]);
+            settled.close(answer);
 
             (question, settled)
         }
@@ -1661,8 +1642,8 @@ pub fn sides(rule: &Rule) -> Result<Pair, Error> {
 
             let mut twice = Graph::empty(1);
             let first = twice.add(kind.clone(), vec![Source::Input(0)]);
-            // The middle port is not exported, the side condition
-            // `not-not` states in the same words.
+            // The middle port is not exported, for `not-not`'s reason: the
+            // equation is about the composite's answer.
             let second = twice.add(kind.clone(), first);
             twice.close(second);
 
@@ -2057,13 +2038,14 @@ fn downstream(graph: &Graph, of: NodeId) -> Option<Graph> {
 /// expansion with an empty body decides nothing.
 ///
 /// `spare` says what to do with an answer the host boundary reads
-/// **directly**. [`Rule::Shannon`] exports its answer from the window
-/// itself and wants it left alone. [`Rule::SelectHoist`] cannot — its
-/// select is gone on the other side of the equation — so it asks for the
-/// answer to come back as one of the body's own outputs, passed straight
-/// through from the input that stands for it. Then the copy on each side
-/// leaves that side's block, and the new select chooses between exactly
-/// the blocks the old one chose between.
+/// **directly**. [`Rule::Shannon`] leaves the reading alone: the box that
+/// made the answer is the split's own condition, so it stays in the
+/// program either way. [`Rule::SelectHoist`] asks for the answer to come
+/// back as one of the body's own outputs, passed straight through from
+/// the input that stands for it — the reading moves to the new select,
+/// and the old branch drops out of the program when nothing else holds
+/// it. Then the copy on each side leaves that side's block, and the new
+/// select chooses between exactly the blocks the old one chose between.
 fn downstream_of(graph: &Graph, answers: &[Source], spare: bool) -> Option<Graph> {
     let mut region: Vec<NodeId> = Vec::new();
     let mut todo: Vec<Source> = answers.to_vec();
@@ -2886,7 +2868,8 @@ mod tests {
     /// and the empty tuple all take the then block.
     ///
     /// The window is the literal and the select, and nothing else: the
-    /// untaken arm's boxes are left to `dead-node`.
+    /// untaken arm's boxes lose their reader with the select, and a box
+    /// the boundary does not reach is not in the program.
     #[test]
     fn a_literal_condition_keeps_its_blocks() {
         for value in [
@@ -3072,11 +3055,9 @@ mod tests {
     /// An answer the host boundary reads is not what stops the branch
     /// moving.
     ///
-    /// The select is gone on the far side of the equation, so the window
-    /// cannot export its answers the way `shannon` exports the wire it
-    /// splits — every one of them has to be read *inside* the body. An
-    /// answer that goes straight out is handed back as one of the body's
-    /// own outputs, passed through from the input standing for it, and the
+    /// The select is gone on the far side of the equation, so an answer
+    /// that goes straight out is handed back as one of the body's own
+    /// outputs, passed through from the input standing for it, and the
     /// new select then chooses between the very blocks the old one chose
     /// between. Read off a real graph, applied, and both sides run on the
     /// machine to check it.
@@ -3705,7 +3686,8 @@ mod tests {
         }
 
         // The round trip, with the coercion's port read by something else
-        // as well — which is exactly what exporting it on both sides buys.
+        // as well — no obstacle, since the rewrite replaces only the
+        // rebuilt tuple's value and the coercion stays for its reader.
         let mut graph = Graph::empty(1);
         let coerced = graph.add(NodeKind::Op(Prim::AsTuple(2)), vec![Source::Input(0)]);
         let parts = graph.add(NodeKind::Op(Prim::Untuple(2)), coerced.clone());

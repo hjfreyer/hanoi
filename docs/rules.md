@@ -117,7 +117,7 @@ whole graph rather than about a window.
 |---|---|
 | `select-literal` | β: `push c ; if { T } else { E }` = the blocks `truthy(c)` chooses. Sound on **every** value, not only bools: `truthy` is total, `false` the one falsy value. The untaken arm is outside the window: its boxes lose their reader when the select goes, and a box the boundary does not reach is not in the program. |
 | `select-same` | `if c { x } else { x } = x`, one block at a time: a block the select answers with either way is what it answers. The select keeps its other blocks and narrows by one. The strategy step of the same name ([docs/proving.md](proving.md)) is this row read as a proof: a goal whose left side answers with a branch becomes one goal per block, and this is what puts them back together. |
-| `not-branch` | `not ; if { A } else { B } = if { B } else { A }`: a negation in front of a branch is the branch with its arms exchanged, and the negation is spent. `not v` is truthy exactly where `v` is falsy — `false` being the one falsy value — so the two selects pick opposite blocks of the same pair. Sound on **every** value, for `select-literal`'s reason: truthiness is all a branch reads, and answering it is all `not` does. The `not` is not exported, the side condition `not-not` states in the same words. |
+| `not-branch` | `not ; if { A } else { B } = if { B } else { A }`: a negation in front of a branch is the branch with its arms exchanged, and the negation is spent. `not v` is truthy exactly where `v` is falsy — `false` being the one falsy value — so the two selects pick opposite blocks of the same pair. Sound on **every** value, for `select-literal`'s reason: truthiness is all a branch reads, and answering it is all `not` does. |
 | `specialize-equal` | a value that tested `equal` to a literal **is** that literal, in the block the test chose: `equal` answers `Bool(a == b)`, so a truthy answer is `a == b` and nothing weaker. |
 | `specialize-bool` | the very value a branch tested, when it is a bool, is what the branch decided: `true` in the then block, `false` in the else block. The window holds the `as_bool` that made the condition — that coercion's presence is what says the condition is a bool at all (a condition of `5` is truthy, and its then block reads `5`, not `true`). `promised-bool` is the row that puts the coercion there. |
 | `specialize-choice` | a branch inside an arm whose condition is the very value the outer branch tested is already decided: its then blocks are read in the outer then arm, its else blocks in the outer else arm — the same value tested twice answers the same. |
@@ -141,15 +141,15 @@ implementation of the semantics anywhere in the rewriter.
 | law | statement |
 |---|---|
 | `fold` | an operation on literal operands is the answer the machine gives, junk included: `push v̄ ; op` = the pushes of what `vm` answers. The answer side is *built from the run*, so a payload cannot lie about it. |
-| `tested-bool` | `op ; is_T` = `op` and `push (T is Bool)` side by side, for any `op` the instruction set promises answers a bool (`yields_bool`) and any type test `is_T`. One row for the whole family, because one fact answers all of it: a codomain says which test succeeds *and* which fail, and the failures fold a shape guard that asked the wrong question. The answer stays exported for its other readers. |
-| `as-tuple-round-trip` | `as_tuple n ; untuple n ; tuple n = as_tuple n`: a value already coerced survives the round trip — the coercion's codomain *is* "a tuple of exactly `n`". Not derivable from `retuple`, which would leave two coercions and no idempotence row to collapse them; listed before `retuple` so the longer window wins. |
+| `tested-bool` | `op ; is_T` = `op` and `push (T is Bool)` side by side, for any `op` the instruction set promises answers a bool (`yields_bool`) and any type test `is_T`. One row for the whole family, because one fact answers all of it: a codomain says which test succeeds *and* which fail, and the failures fold a shape guard that asked the wrong question. The rewrite replaces only the test's answer; `op` goes on standing for its other readers. |
+| `as-tuple-round-trip` | `as_tuple n ; untuple n ; tuple n = as_tuple n`: a value already coerced survives the round trip — the coercion's codomain *is* "a tuple of exactly `n`". `retuple` and `idem` reach the same place in two steps; listed before `retuple` so the longer window wins in one. |
 | `retuple` | `untuple n ; tuple n = as_tuple n`: rebuilding what `untuple` took apart is the coercion, not the identity — the slots may have been junk-filled. Whole or not at all. |
 | `is-tuple-built` | `tuple m ; is_tuple n` = `tuple m ; push (m == n)`: a shape the window watched being built answers a test of that shape. This is the row the `type`/`enum` sugar's guard (`pick 0 ; is_tuple n`) needs. |
 | `not-not` | `not ; not = as_bool` — the coercion spelled the long way round. |
 | `and-literal` | `and` with a literal operand is decided by `truthy` alone — short-circuiting as an equation. A truthy literal contributes only the coercion: the answer is `as_bool` of the other operand. The one falsy value decides everything: `push false`, the other operand discarded. This is the row that lets a case split spend a **conjunction** one conjunct at a time. |
 | `or-literal` | the dual of `and-literal`, with the poles exchanged: the one **falsy** value contributes only the coercion — the answer is `as_bool` of the other operand — and a truthy literal decides everything: `push true`, the other operand discarded. This is what lets a case split spend a **disjunction** one disjunct at a time. |
-| `idem` | `op ; op = op`, for any `op` the instruction set says is `idempotent`. One row for a family, and the family is the three coercions: a coercion's whole content is its **codomain**, so what it leaves is already of the type it forces. The middle port is not exported, the side condition `not-not` states. Backwards it is the clone, which is what a proof wants when the shape it is heading for spells the coercion twice. |
-| `tuple-cancel` | `tuple n ; untuple n = id(n)`: taking apart what `tuple n` built answers the built elements. The tuple is kept for its other readers. |
+| `idem` | `op ; op = op`, for any `op` the instruction set says is `idempotent`. One row for a family, and the family is the three coercions: a coercion's whole content is its **codomain**, so what it leaves is already of the type it forces. Backwards it is the clone, which is what a proof wants when the shape it is heading for spells the coercion twice. |
+| `tuple-cancel` | `tuple n ; untuple n = id(n)`: taking apart what `tuple n` built answers the built elements. The tuple is not part of the equation — a substitution deletes nothing, so one something else reads stays standing. |
 | `as-tuple-built` | `tuple n ; as_tuple n` answers the tuple itself: the coercion is a no-op on a value the window watched being built. |
 | `equal-refl` | `equal` on one wire read twice is `true`: `equal` is structural identity and the language is deterministic and pure. |
 
@@ -186,10 +186,10 @@ runs inside whichever arm the branch takes,
 select(C, T, E) ; A  =  select(C, T ; A, E ; A)
 ```
 
-Stated as a composition on purpose: `select(…) ; A` is the side condition
-as well as the shape, since composing is the claim that the select's
-answers go into `A` and nowhere else — and the interface carries it, by
-never exporting the answers. `A` rides as payload. Unlike `shannon`,
+Stated as a composition on purpose: the answers are read inside the
+window, and what the rewrite replaces is what `A` leaves — an answer
+read from outside the carried region keeps the select it always
+read. `A` rides as payload. Unlike `shannon`,
 nothing is pinned: the condition reaches the moved select untouched, so
 this holds of **any** branch, whatever computed its condition. It is the
 row that lets a branch grow *forwards*. Backwards is free — work in front
