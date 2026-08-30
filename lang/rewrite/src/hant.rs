@@ -107,6 +107,7 @@
 //! | `fire(law, …)` | the first proposal of those laws, once — fails finding none |
 //! | `at(#box, law)` | that law, once, in a match that holds **that box** — the address the residual printed |
 //! | `at(#box, law, backward)` | the same, reading the law's equation right to left |
+//! | `on(#wire …, law)` | that law stated onto named wires — the introduction whose bare side no search anchors |
 //! | `repeat(t …)` | the sequence until it stops advancing |
 //! | `try(t …)` | the sequence, or nothing — failure becomes no progress |
 //!
@@ -137,10 +138,27 @@
 //! left, which is how a proof says "put this back". Backward finds
 //! something only where the law's right-hand side names enough boxes to
 //! be looked for, and where the payload is one this graph's own boxes
-//! spell — most of the table's right-hand sides are bare wiring and pin
-//! nothing, and those steps stay [stated
-//! data](crate::diagram2::tactic::Tactic::State) with no spelling yet.
-//! Both failures say so by name.
+//! spell — a right-hand side that is bare wiring pins nothing, and `on`
+//! is how a proof states one of those instead of searching for it. Both
+//! failures say so by name.
+//!
+//! ## Pointing at wires
+//!
+//! `on(#nk in0, tuple-cancel)` states what no search can find: the law's
+//! **bare-wires side** is the pattern, so the wires are named outright —
+//! `#nk` a box's answer by the address the listing printed, `#nk.1` a
+//! later port, `in0` a boundary input — and the law's window goes in *on*
+//! them. Every reader of each wire, the goal boundary included, comes to
+//! read through the introduced pair, and the order is the window's shape:
+//! `on(in1 in0, tuple-cancel)` builds the other tuple. The direction is
+//! the law's own — `tuple-cancel`'s bare side is its right, so the
+//! equation reads backward — and writing `backward` out is allowed and
+//! checked rather than obeyed. Stated on wires the pair already cancels,
+//! the step **compounds**: a second trip stacks on the first, a true
+//! thing said one layer deeper, and never an error — so a `repeat` around
+//! an `on` is the author claiming what a `repeat` always claims.
+//! [`rules::boxless`] is the table of laws `on` can state, and a law
+//! whose bare side would take more payload than a width is not yet on it.
 //!
 //! An address is a box's **name**: a digest of what it computes and of
 //! what that is computed from, written in letters, and the same letters
@@ -192,8 +210,9 @@ use std::fmt;
 
 use bytecode::{IdentityIndex, SentenceIndex};
 
+use crate::diagram2::query::Query;
 use crate::diagram2::rules::{self, Law};
-use crate::diagram2::tactic::{self, Tactic};
+use crate::diagram2::tactic::{self, MatchSpec, Pick, SrcExpr, Tactic};
 use crate::graph::{Direction, Prefix};
 use crate::term::TermIndex;
 
@@ -683,6 +702,13 @@ fn parse_tactic(input: &str) -> Result<(Tactic, &str), String> {
                 .ok_or("`at` expects `(#box, law)` or `(#box, law, backward)`")?;
             Ok((parse_at(inside)?, after))
         }
+        // The introduction: a law stated onto named wires, where no
+        // search could anchor.
+        "on" => {
+            let (inside, after) = paren_block(rest.trim_start())
+                .ok_or("`on` expects `(#wire …, law)` or `(#wire …, law, backward)`")?;
+            Ok((parse_on(inside)?, after))
+        }
         "branches" => Ok((tactic::branch_pass(), rest)),
         "decide" => Ok((tactic::decide(), rest)),
         // The decision tree: every branch grown forward over everything
@@ -757,6 +783,116 @@ fn parse_at(inside: &str) -> Result<Tactic, String> {
         ));
     }
     Ok(tactic::fire_at(node, law, dir))
+}
+
+/// `on(#nk in0, tuple-cancel)`: wires named in order, and the law whose
+/// **bare-wires side** they stand for — the introduction no search can
+/// find, since a side with no boxes anchors nowhere. The wires are the
+/// pattern, so the law's window goes in *on* them: every reader of each
+/// wire, the goal boundary included, comes to read through it, and the
+/// order is the window's shape — `on(in1 in0, tuple-cancel)` builds the
+/// other tuple.
+///
+/// The direction is the law's own — `tuple-cancel`'s bare side is its
+/// right, so the equation reads backward — and writing it out is allowed
+/// and checked rather than obeyed. Stated on wires the pair already
+/// cancels, the step compounds: a second trip stacks on the first, a true
+/// thing said one layer deeper, and never an error.
+fn parse_on(inside: &str) -> Result<Tactic, String> {
+    let mut fields = inside.split(',').map(str::trim);
+    let wires = fields
+        .next()
+        .filter(|f| !f.is_empty())
+        .ok_or("`on` names no wires")?;
+    let inputs: Vec<SrcExpr> = wires
+        .split_whitespace()
+        .map(parse_wire)
+        .collect::<Result<_, _>>()?;
+    let law = fields.next().map(str::trim).unwrap_or("");
+    if law.is_empty() {
+        return Err("`on` names no law".to_string());
+    }
+    let law = match parse_laws(law)?[..] {
+        [law] => law,
+        _ => {
+            return Err(format!(
+                "`on` states one law, and `{}` is a list of them",
+                law
+            ));
+        }
+    };
+    let Some((rule, dir)) = rules::boxless(law, inputs.len()) else {
+        return Err(format!(
+            "`{}` has no bare-wires side to state — `on` introduces a law one \
+             side of which is wiring alone, the way `tuple-cancel`'s right side \
+             is `id(n)`",
+            law.name()
+        ));
+    };
+    let reads = match dir {
+        Direction::Forward => "forward",
+        Direction::Backward => "backward",
+    };
+    match fields.next().map(str::trim) {
+        None => {}
+        Some(word) if word == reads => {}
+        Some(other @ ("forward" | "backward")) => {
+            return Err(format!(
+                "`on`: `{}`'s bare-wires side reads {}, not {}",
+                law.name(),
+                reads,
+                other
+            ));
+        }
+        Some(other) => {
+            return Err(format!(
+                "`on`: a direction is `forward` or `backward`, not `{}`",
+                other
+            ));
+        }
+    }
+    if let Some(extra) = fields.next() {
+        return Err(format!(
+            "`on` takes wires, a law and a direction, and found: {}",
+            head_of(extra)
+        ));
+    }
+    Ok(Tactic::State {
+        at: Query::new(),
+        rule,
+        dir,
+        with: MatchSpec {
+            nodes: Vec::new(),
+            inputs,
+        },
+        pick: Pick::Unique,
+    })
+}
+
+/// One wire of an `on`: `in2` is boundary input 2, `#nk` is output 0 of
+/// the box that address names, and `#nk.1` a later port. The `#` is the
+/// listing's own spelling and is optional, as it is in `at` — and no
+/// address can begin `in`, the alphabet having no `i`.
+fn parse_wire(written: &str) -> Result<SrcExpr, String> {
+    if let Some(digits) = written.strip_prefix("in")
+        && !digits.is_empty()
+        && digits.chars().all(|c| c.is_ascii_digit())
+    {
+        let i = digits
+            .parse()
+            .map_err(|_| format!("`on`: `{}` is past any boundary", written))?;
+        return Ok(SrcExpr::Input(i));
+    }
+    let (name, port) = match written.split_once('.') {
+        Some((name, port)) => (
+            name,
+            port.parse::<usize>()
+                .map_err(|_| format!("`on`: `{}` names no port of `{}`", port, name))?,
+        ),
+        None => (written, 0),
+    };
+    let prefix = Prefix::parse(name).map_err(|why| format!("`on`: {}", why))?;
+    Ok(SrcExpr::Addressed(prefix, port))
 }
 
 /// One law and not a list — what an address to a single box may name.
@@ -1491,6 +1627,87 @@ mod tests {
             ),
             (
                 "proof p = lhs(at(#nkz, select-same, backward, 9)) diagram;",
+                "and found",
+            ),
+        ] {
+            let err = parse_hant(proof).unwrap_err();
+            assert!(err.contains(expected), "{}: {}", proof, err);
+        }
+    }
+
+    /// `on` states a law onto named wires — the introduction the matcher
+    /// cannot find — and compiles to the stated step it is.
+    #[test]
+    fn wires_can_be_named_and_a_law_stated_onto_them() {
+        let entries = parse_hant("proof p = lhs(on(#nk in0, tuple-cancel)) diagram;").unwrap();
+        let [Step::Rewrite { side, tactic }, Step::Diagram] = &entries[0].strategy[..] else {
+            panic!("{:?}", entries[0].strategy);
+        };
+        assert_eq!(*side, OnSide::Lhs);
+        assert_eq!(
+            tactic.as_ref(),
+            &Tactic::State {
+                at: Query::new(),
+                rule: rules::Rule::TupleCancel { n: 2 },
+                dir: Direction::Backward,
+                with: MatchSpec {
+                    nodes: Vec::new(),
+                    inputs: vec![SrcExpr::Addressed(spelled("nk"), 0), SrcExpr::Input(0)],
+                },
+                pick: Pick::Unique,
+            }
+        );
+
+        // A later port, and the direction written out — allowed while it
+        // is the law's own.
+        let entries =
+            parse_hant("proof p = rhs(on(#nk.1 in2, tuple-cancel, backward)) diagram;").unwrap();
+        let [Step::Rewrite { tactic, .. }, _] = &entries[0].strategy[..] else {
+            panic!()
+        };
+        let Tactic::State { with, .. } = tactic.as_ref() else {
+            panic!("{:?}", tactic)
+        };
+        assert_eq!(
+            with.inputs,
+            vec![SrcExpr::Addressed(spelled("nk"), 1), SrcExpr::Input(2)]
+        );
+    }
+
+    /// Every way of writing an `on` wrong, answered where it is written —
+    /// the direction included, which is the law's to say.
+    #[test]
+    fn a_stated_wire_is_written_one_way() {
+        for (proof, expected) in [
+            ("proof p = lhs(on) diagram;", "expects"),
+            ("proof p = lhs(on()) diagram;", "names no wires"),
+            ("proof p = lhs(on(#nk)) diagram;", "names no law"),
+            (
+                "proof p = lhs(on(#nk in0, fold)) diagram;",
+                "has no bare-wires side",
+            ),
+            (
+                "proof p = lhs(on(#nk in0, tuple-cancel, forward)) diagram;",
+                "reads backward, not forward",
+            ),
+            (
+                "proof p = lhs(on(#i7, tuple-cancel)) diagram;",
+                "is not one of the letters",
+            ),
+            (
+                "proof p = lhs(on(#nk.x in0, tuple-cancel)) diagram;",
+                "names no port",
+            ),
+            (
+                "proof p = lhs(on(#nk in0, branching)) diagram;",
+                "is a list of them",
+            ),
+            (
+                "proof p = lhs(on(#nk in0, tuple-cancel, sideways)) diagram;",
+                "forward",
+            ),
+            (
+                "proof p = lhs(on(#nk in0, tuple-cancel, backward, 9)) diagram;",
                 "and found",
             ),
         ] {

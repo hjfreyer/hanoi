@@ -1142,6 +1142,28 @@ mod tests {
         );
     }
 
+    /// The introduction, spent in a proof: a side that never packs meets
+    /// one that does. `on` states the cancelling pair onto the bare wires
+    /// — no search could find it, `id(2)` anchoring nowhere — and the two
+    /// sides are one graph.
+    #[test]
+    fn a_stated_pair_carries_a_side_to_the_packed_shape() {
+        let code = "identity probe { swap swap } = { tuple 2 untuple 2 };";
+        let (_ctx, outcome) =
+            prove_with(code, "probe", Some("lhs(on(in0 in1, tuple-cancel)) exact"));
+        let Outcome::Closed(_) = outcome else {
+            panic!("the stated pair meets the packed side: {:?}", outcome);
+        };
+
+        // The wire order is the window's shape: the other order states
+        // the other tuple, which is not the one the right side builds.
+        let (_ctx, outcome) =
+            prove_with(code, "probe", Some("lhs(on(in1 in0, tuple-cancel)) exact"));
+        let Outcome::Stuck(_) = outcome else {
+            panic!("the swapped statement is a different pair: {:?}", outcome);
+        };
+    }
+
     #[test]
     fn a_cut_splits_the_goal_and_closes_each_half() {
         // `is_bool ; is_bool` = `is_int ; is_bool`, cut at the normal form

@@ -134,9 +134,9 @@ pub enum RuleSpec {
     Hoist { anchor: Var },
 }
 
-/// A source, described rather than named — resolved against the bindings
-/// and the live graph at the moment the step fires.
-#[derive(Debug, Clone, Copy, PartialEq)]
+/// A source, described or named — resolved against the bindings and the
+/// live graph at the moment the step fires.
+#[derive(Debug, Clone, PartialEq)]
 pub enum SrcExpr {
     /// Output `port` of the bound node.
     PortOf(Var, usize),
@@ -144,6 +144,11 @@ pub enum SrcExpr {
     FeedOf(Var, usize),
     /// Boundary input `i` of the host.
     Input(usize),
+    /// Output `port` of the box the written address names — the wire
+    /// spelling of [`Tactic::At`]'s box name, under the same discipline:
+    /// looked up live at every firing, never held, failing by name the
+    /// moment nothing answers to it or two boxes do.
+    Addressed(Prefix, usize),
 }
 
 /// The recipe for a stated [`Match`] against one side of one
@@ -299,12 +304,12 @@ pub enum TacticError {
     /// [`rules::apply`] refused a step the tactic constructed — a tactic
     /// bug, carried with the refusal so it can be read.
     Refused(rules::Error),
-    /// [`Tactic::At`] wrote an address no live box of this side answers
-    /// to: a name read off a listing from before the step in front of it
-    /// changed what that box computes.
+    /// An address — [`Tactic::At`]'s box, or a stated wire's — that no
+    /// live box of this side answers to: a name read off a listing from
+    /// before the step in front of it changed what that box computes.
     NoSuchBox { at: Prefix },
-    /// [`Tactic::At`] wrote an address several boxes answer to, with the
-    /// ones it could have meant — lengthen it.
+    /// An address several boxes answer to, with the ones it could have
+    /// meant — lengthen it.
     ManyBoxes { at: Prefix, found: Vec<Address> },
     /// [`Tactic::At`] found the box, and no match of that law in that
     /// direction holds it.
@@ -317,6 +322,8 @@ pub enum TacticError {
     Unresolved { var: Var },
     /// A spec named a port a bound node does not have.
     OutOfRange { var: Var, port: usize },
+    /// A stated wire named a port its box does not have.
+    NoSuchPort { at: Prefix, port: usize },
     /// An iteration advanced past the fuel.
     OutOfFuel { after: usize },
 }
@@ -356,6 +363,9 @@ impl fmt::Display for TacticError {
             TacticError::Unresolved { var } => write!(f, "{} is not bound by the query", var),
             TacticError::OutOfRange { var, port } => {
                 write!(f, "{} has no port {}", var, port)
+            }
+            TacticError::NoSuchPort { at, port } => {
+                write!(f, "{} has no output port {}", at, port)
             }
             TacticError::OutOfFuel { after } => {
                 write!(f, "still advancing after {} iterations", after)
@@ -1056,19 +1066,43 @@ fn resolve(graph: &Graph, b: &Bindings, spec: &MatchSpec) -> Result<Match, Tacti
 
     let mut inputs = Vec::with_capacity(spec.inputs.len());
     for src in &spec.inputs {
-        inputs.push(match *src {
+        inputs.push(match src {
             SrcExpr::PortOf(v, port) => Source::Port {
-                node: node_of(v)?,
-                port,
+                node: node_of(*v)?,
+                port: *port,
             },
             SrcExpr::FeedOf(v, port) => {
-                let node = node_of(v)?;
+                let node = node_of(*v)?;
                 *graph
                     .sources(node)
-                    .get(port)
-                    .ok_or(TacticError::OutOfRange { var: v, port })?
+                    .get(*port)
+                    .ok_or(TacticError::OutOfRange {
+                        var: *v,
+                        port: *port,
+                    })?
             }
-            SrcExpr::Input(i) => Source::Input(i),
+            SrcExpr::Input(i) => Source::Input(*i),
+            SrcExpr::Addressed(prefix, port) => {
+                let node = match graph.lookup(prefix) {
+                    Named::One(node) => node,
+                    Named::Nothing => {
+                        return Err(TacticError::NoSuchBox { at: prefix.clone() });
+                    }
+                    Named::Many(found) => {
+                        return Err(TacticError::ManyBoxes {
+                            at: prefix.clone(),
+                            found,
+                        });
+                    }
+                };
+                if *port >= graph.kind(node).arity().outputs {
+                    return Err(TacticError::NoSuchPort {
+                        at: prefix.clone(),
+                        port: *port,
+                    });
+                }
+                Source::Port { node, port: *port }
+            }
         });
     }
 
@@ -1997,5 +2031,109 @@ mod tests {
             "nothing ran:\n{}",
             g
         );
+    }
+
+    /// The stated introduction: `tuple-cancel` read backward is bare
+    /// wires, which no search anchors, so the wires are named — one by
+    /// the address a listing would print, one by boundary — and the pair
+    /// goes in on them, every reader re-pointed through it.
+    #[test]
+    fn a_stated_introduction_puts_the_pair_on_the_named_wires() {
+        let mut graph = built("not");
+        let (not, _) = graph.live().next().expect("one box");
+        let mut deriv = Derivation::default();
+        let stated = Tactic::State {
+            at: Query::new(),
+            rule: Rule::TupleCancel { n: 2 },
+            dir: Direction::Backward,
+            with: MatchSpec {
+                nodes: Vec::new(),
+                inputs: vec![SrcExpr::Addressed(named(&graph, not), 0), SrcExpr::Input(0)],
+            },
+            pick: Pick::Unique,
+        };
+        assert_eq!(
+            run(&mut graph, &mut deriv, &stated),
+            Ok(Progress::Advanced(1))
+        );
+        graph.check().unwrap();
+
+        // The pair stands on the named wires, in the named order, and the
+        // boundary reads through it.
+        let only = |kind: &NodeKind| {
+            graph
+                .live()
+                .find(|(_, k)| *k == kind)
+                .unwrap_or_else(|| panic!("no {} in\n{}", kind, graph))
+                .0
+        };
+        let tuple = only(&NodeKind::Op(Prim::Tuple(2)));
+        let apart = only(&NodeKind::Op(Prim::Untuple(2)));
+        assert_eq!(
+            graph.sources(tuple),
+            [Source::Port { node: not, port: 0 }, Source::Input(0)],
+            "\n{}",
+            graph
+        );
+        assert_eq!(
+            graph.outputs(),
+            [Source::Port {
+                node: apart,
+                port: 0
+            }],
+            "\n{}",
+            graph
+        );
+
+        // And the run is a derivation like any other: it replays.
+        let record: Vec<_> = deriv.steps().cloned().collect();
+        let mut again = built("not");
+        replay(&mut again, &record).unwrap();
+        assert_eq!(again, graph, "\n{}\n{}", again, graph);
+    }
+
+    /// A stated wire fails by name, the discipline `at` keeps: a box
+    /// nothing answers to, a port the box lacks, and one wire stated as
+    /// two of the pattern's — which is one question answered two ways,
+    /// refused where every wrong claim is.
+    #[test]
+    fn a_stated_wire_fails_by_name() {
+        let graph = built("not");
+        let (not, _) = graph.live().next().expect("one box");
+        let stated = |inputs: Vec<SrcExpr>| Tactic::State {
+            at: Query::new(),
+            rule: Rule::TupleCancel { n: 2 },
+            dir: Direction::Backward,
+            with: MatchSpec {
+                nodes: Vec::new(),
+                inputs,
+            },
+            pick: Pick::Unique,
+        };
+        let try_on = |inputs: Vec<SrcExpr>| {
+            run(
+                &mut graph.clone(),
+                &mut Derivation::default(),
+                &stated(inputs),
+            )
+        };
+
+        let ghost = Prefix::parse("zzzzzzzzzzzz").expect("an address of nought");
+        assert_eq!(
+            try_on(vec![
+                SrcExpr::Addressed(ghost.clone(), 0),
+                SrcExpr::Input(0)
+            ]),
+            Err(TacticError::NoSuchBox { at: ghost })
+        );
+        let name = named(&graph, not);
+        assert_eq!(
+            try_on(vec![SrcExpr::Addressed(name.clone(), 1), SrcExpr::Input(0)]),
+            Err(TacticError::NoSuchPort { at: name, port: 1 })
+        );
+        assert!(matches!(
+            try_on(vec![SrcExpr::Input(0), SrcExpr::Input(0)]),
+            Err(TacticError::Refused(_))
+        ));
     }
 }
