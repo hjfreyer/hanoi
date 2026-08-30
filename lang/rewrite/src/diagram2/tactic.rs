@@ -31,10 +31,9 @@
 //! - [`Tactic::State`] — **stated**, either direction but above all
 //!   backward: the matcher rightly declines every pattern that does not
 //!   pin its own match, so those steps are *statements*, and a
-//!   [`MatchSpec`] is the statement — every piece of it either a reading
-//!   of the current graph or a genuine choice, the reader-split of
-//!   [`Match::outputs`] said outright in
-//!   [`SinkSel`] and never inferred.
+//!   [`MatchSpec`] is the statement — which boxes stand in the pattern's
+//!   image, and which wires its boundary inputs mean, every piece a
+//!   reading of the current graph.
 //!
 //! ## Addresses are queries, choices are stated
 //!
@@ -147,24 +146,6 @@ pub enum SrcExpr {
     Input(usize),
 }
 
-/// One boundary output's readers, described. This is where the
-/// reader-split — the one field of a [`Match`] that is a
-/// choice rather than a reading — gets **stated**.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum SinkSel {
-    /// Every reader of the output's source that is an input port of the
-    /// bound node.
-    ReadersAt(Var),
-    /// Input `port` of the bound node.
-    PortOf(Var, usize),
-    /// Boundary output `i` of the host.
-    Output(usize),
-    /// Every reader of the output's source not claimed by an earlier
-    /// selector of this spec. At most one per spec, and stating it *is*
-    /// the choice — nothing here is inferred.
-    Rest,
-}
-
 /// The recipe for a stated [`Match`] against one side of one
 /// rule. Resolution is pure reading; the result goes through
 /// [`rules::apply`], so a wrong recipe is a refused step.
@@ -172,16 +153,15 @@ pub enum SinkSel {
 /// Deliberately weaker than the matcher: only *bound* nodes can stand in
 /// the pattern's image, so a stated step whose pattern has boxes needs the
 /// query to have bound them. What the matcher cannot read, the derivation
-/// must literally say. An empty selector list says a boundary output
-/// serves nobody.
+/// must literally say. Nothing about outputs is said or sayable: a
+/// substitution re-points every reader of the value it replaces, so a
+/// match has no reader-split left to state.
 #[derive(Debug, Clone, PartialEq)]
 pub struct MatchSpec {
     /// Image of the pattern's boxes. Empty for every box-less side.
     pub nodes: Vec<Var>,
     /// One per pattern boundary input.
     pub inputs: Vec<SrcExpr>,
-    /// One selector list per pattern boundary output.
-    pub outputs: Vec<Vec<SinkSel>>,
 }
 
 /// What a focused tactic scopes its queries to.
@@ -337,8 +317,6 @@ pub enum TacticError {
     Unresolved { var: Var },
     /// A spec named a port a bound node does not have.
     OutOfRange { var: Var, port: usize },
-    /// More than one [`SinkSel::Rest`] in one spec.
-    ManyRests,
     /// An iteration advanced past the fuel.
     OutOfFuel { after: usize },
 }
@@ -379,7 +357,6 @@ impl fmt::Display for TacticError {
             TacticError::OutOfRange { var, port } => {
                 write!(f, "{} has no port {}", var, port)
             }
-            TacticError::ManyRests => write!(f, "a spec says Rest twice"),
             TacticError::OutOfFuel { after } => {
                 write!(f, "still advancing after {} iterations", after)
             }
@@ -682,8 +659,8 @@ impl Runner<'_> {
         }
     }
 
-    /// One binding's stated step: build the pattern side, resolve the
-    /// spec against it.
+    /// One binding's stated step: hold the payload to stating an equation,
+    /// then resolve the spec.
     fn stated(
         &self,
         rule: &Rule,
@@ -691,8 +668,7 @@ impl Runner<'_> {
         spec: &MatchSpec,
         b: &Bindings,
     ) -> Result<Step, TacticError> {
-        let pair = rules::sides(rule).map_err(TacticError::Refused)?;
-        let _ = &pair;
+        rules::sides(rule).map_err(TacticError::Refused)?;
         let at = resolve(self.graph, b, spec)?;
         Ok(Step {
             rule: rule.clone(),
@@ -1071,16 +1047,6 @@ fn hoistable(graph: &Graph, select: NodeId) -> Option<Lifted> {
 /// [`Match`](rules::Match). Pure reading, and untrusted: the answer is
 /// judged whole by [`rules::apply`], so a wrong resolution costs a refusal.
 fn resolve(graph: &Graph, b: &Bindings, spec: &MatchSpec) -> Result<Match, TacticError> {
-    if spec
-        .outputs
-        .iter()
-        .flatten()
-        .filter(|sel| matches!(sel, SinkSel::Rest))
-        .count()
-        > 1
-    {
-        return Err(TacticError::ManyRests);
-    }
     let node_of = |v: Var| b.get(v).ok_or(TacticError::Unresolved { var: v });
 
     let mut nodes = Vec::with_capacity(spec.nodes.len());
