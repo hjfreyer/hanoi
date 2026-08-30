@@ -229,7 +229,10 @@ pub enum SrcExpr {
     Input(usize),         // boundary input of the host
 }
 
-/// The recipe for a stated Match against one side of one rule.
+/// The recipe for a stated Match against one side of one rule. Nothing
+/// about outputs is said or sayable: a substitution re-points every
+/// reader of the value it replaces, so there is no reader-split left to
+/// state.
 pub struct MatchSpec {
     pub nodes: Vec<Var>,             // image of the pattern's boxes
     pub inputs: Vec<SrcExpr>,        // one per pattern boundary input
