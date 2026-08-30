@@ -650,6 +650,39 @@ identity what_follows_a_branch_runs_inside_it
     { branch { not } { as_bool } negate }
   = { branch { not negate } { as_bool negate } };
 
+// The same conversion spent everywhere it will go, which is what a decision
+// tree is. Two branches with work between them and work after them: the
+// `negate` decides the second branch, and the `is_int` reads what the second
+// branch answers. `tree` hoists each branch past everything but another
+// branch, so both moves land and what is left reads nothing a branch answers
+// unless it is a branch — every `not`, `negate` and `is_int` above both
+// selects, and the selects at the boundary. The right side is that shape
+// written out.
+#[arity(2,1)] sentence branches_where_they_stood {
+    pick 1 branch { not } { as_bool } negate branch { negate } { not } is_int
+}
+#[arity(2,1)] sentence branches_at_the_output {
+    pick 1 branch { not negate } { as_bool negate } branch { negate is_int } { not is_int }
+}
+
+test sentence the_branches_agree_wherever_they_stand {
+    push 7  push true  jump branches_where_they_stood
+    push 7  push true  jump branches_at_the_output
+    jump crate::prelude::check_equals ? drop 0
+
+    push 7  push false jump branches_where_they_stood
+    push 7  push false jump branches_at_the_output
+    jump crate::prelude::check_equals ? drop 0
+
+    push "hi" push (2, 1) jump branches_where_they_stood
+    push "hi" push (2, 1) jump branches_at_the_output
+    jump crate::prelude::check_equals
+}
+
+identity the_branches_end_up_at_the_output
+    { pick 1 branch { not } { as_bool } negate branch { negate } { not } is_int }
+  = { pick 1 branch { not negate } { as_bool negate } branch { negate is_int } { not is_int } };
+
 // A lemma, and the claim that spends it.
 // ---------------------------------------------------------------------------
 //

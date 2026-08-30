@@ -36,6 +36,14 @@ proof identities::a_branch_whose_blocks_agree =
 proof identities::what_follows_a_branch_runs_inside_it =
     lhs(fire(select-hoist)) diagram;
 
+// And the drive that spends the same row to a fixpoint. `tree` hoists every
+// branch past everything but another branch, one firing at a time, until no
+// box that is not a select reads what a select answers — the decision tree,
+// which is the shape the right side is written in. Two firings here, and the
+// order is the drive's own: the second branch reads what the first one
+// answers, so the second moves first and the first follows it.
+proof identities::the_branches_end_up_at_the_output = lhs(tree) diagram;
+
 // The lemma. Left-only on purpose: two rows drive `not ; not` onto the branch
 // it makes, and the right side is left exactly as written, so what the proof
 // records is a run from one side to the other rather than two runs meeting in

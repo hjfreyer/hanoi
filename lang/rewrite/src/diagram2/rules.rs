@@ -214,7 +214,7 @@ use std::fmt;
 
 use crate::graph::{
     Direction, Embedding, Graph, Match, Mismatch, NodeId, NodeKind, Pair, Sink, Source, Unpaired,
-    check_match, find_at,
+    check_match, find_at, lift,
 };
 use bytecode::{Instruction, Library, Value};
 
@@ -2066,73 +2066,17 @@ fn downstream_of(graph: &Graph, answers: &[Source], spare: bool) -> Option<Graph
     if region.is_empty() {
         return None;
     }
-    region.sort_unstable();
     let mine: HashSet<NodeId> = region.iter().copied().collect();
-
-    // An order the body can be rebuilt in — by its own edges, since a
-    // rewrite can leave a low id reading a high one.
-    let mut order: Vec<NodeId> = Vec::with_capacity(region.len());
-    while order.len() < region.len() {
-        let stuck = order.len();
-        for &node in &region {
-            if order.contains(&node) {
-                continue;
-            }
-            let ready = graph.sources(node).iter().all(|src| match src {
-                Source::Port { node: made, .. } => !mine.contains(made) || order.contains(made),
-                Source::Input(_) => true,
-            });
-            if ready {
-                order.push(node);
-            }
-        }
-        if order.len() == stuck {
-            return None;
-        }
-    }
-    let region = order;
-
-    // What it reads that it does not own, the answers aside.
-    let held = |src: Source| matches!(src, Source::Port { node, .. } if mine.contains(&node));
-    let mut extra: Vec<Source> = Vec::new();
-    for src in region
+    let held = |src: &Source| matches!(src, Source::Port { node, .. } if mine.contains(node));
+    // The region is downstream-closed, so what the host boundary reads of
+    // it is the whole of what anything outside reads of it.
+    let leaves: Vec<Source> = graph
+        .outputs()
         .iter()
-        .flat_map(|&node| graph.sources(node).iter().copied())
-    {
-        if !answers.contains(&src) && !held(src) && !extra.contains(&src) {
-            extra.push(src);
-        }
-    }
-
-    let place: HashMap<NodeId, usize> = region.iter().enumerate().map(|(i, &n)| (n, i)).collect();
-    let inside = |src: Source| match src {
-        Source::Port { node, port } if mine.contains(&node) => Source::Port {
-            node: NodeId::at(place[&node]),
-            port,
-        },
-        other => match answers.iter().position(|&a| a == other) {
-            Some(i) => Source::Input(i),
-            None => Source::Input(
-                answers.len() + extra.iter().position(|&e| e == other).expect("noted"),
-            ),
-        },
-    };
-
-    let mut lifted = Graph::empty(answers.len() + extra.len());
-    for &node in &region {
-        let takes = graph.sources(node).iter().map(|&s| inside(s)).collect();
-        lifted.add(graph.kind(node).clone(), takes);
-    }
-    lifted.close(
-        graph
-            .outputs()
-            .iter()
-            .filter(|src| held(**src) || (spare && answers.contains(src)))
-            .map(|&s| inside(s))
-            .collect(),
-    );
-    lifted.check().ok()?;
-    Some(lifted)
+        .filter(|src| held(src) || (spare && answers.contains(src)))
+        .copied()
+        .collect();
+    lift(graph, &region, answers, &leaves).map(|lifted| lifted.graph)
 }
 
 /// The payloads one law could be anchored at one box with, each paired with

@@ -166,9 +166,10 @@ law has nothing to say about: the step refuses it rather than guessing.
 Inside `lhs(…)`, `rhs(…)` and `both(…)` is the rewrite language of
 [docs/tactics.md](tactics.md), juxtaposed like steps are: `saturate(law,
 …)` (those laws to fixpoint), `branches` (the branch layer), `decide`
-(the whole table — what `diagram` drives), `fire(law, …)` (one directed
-firing), `at(#box, law)` (one firing at a **named box**), `repeat(…)` and
-`try(…)`. Laws are named as [docs/rules.md](rules.md) names them —
+(the whole table — what `diagram` drives), `tree` (`select-hoist` past
+everything but another branch, until the selects are all at the output),
+`fire(law, …)` (one directed firing), `at(#box, law)` (one firing at a
+**named box**), `repeat(…)` and `try(…)`. Laws are named as [docs/rules.md](rules.md) names them —
 `fold`, `select-same`, `not-not` — and `branching` names the list.
 
 `at` is the step that answers a report in the report's own words. `fire`
