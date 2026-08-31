@@ -148,6 +148,20 @@
 //! So it holds of **any** branch, whatever computed the condition, and
 //! it holds of conditions no case split can reach.
 //!
+//! [`Law::CondHoist`] is the same conversion at the one port that row
+//! cannot reach without carrying the branch it moves — the
+//! **condition**: `select(select(C, T1, E1), T2, E2)` is
+//! `select(C, select(T1, T2, E2), select(E1, T2, E2))`. It is a row
+//! rather than a payload of its sibling because the window is narrower.
+//! `select-hoist` carries a region, and the region [`propose`] reads is
+//! the whole cone below a select, so growing a branch past another that
+//! way copies everything after it too; here the payload is three widths
+//! and what the far side copies is one select. It grows a graph all the
+//! same — two boxes into three — so no list drives it either, and the
+//! `tree` tactic spends the two in order: every branch past everything
+//! but another branch, and then out of every condition a branch
+//! answered.
+//!
 //! ## The branch layer, and where it reaches
 //!
 //! [`branching`] is the branch layer: [`Law::SelectSame`],
@@ -242,6 +256,7 @@ pub enum Law {
     SpecializeChoice,
     Shannon,
     SelectHoist,
+    CondHoist,
     // The value layer: what an operation computes, measured on the machine.
     PromisedBool,
     Fold,
@@ -283,6 +298,7 @@ impl Law {
             Law::SpecializeChoice => "specialize-choice",
             Law::Shannon => "shannon",
             Law::SelectHoist => "select-hoist",
+            Law::CondHoist => "cond-hoist",
             Law::PromisedBool => "promised-bool",
             Law::Fold => "fold",
             Law::TestedBool => "tested-bool",
@@ -318,6 +334,7 @@ impl Law {
             Law::SpecializeChoice,
             Law::Shannon,
             Law::SelectHoist,
+            Law::CondHoist,
             Law::PromisedBool,
             Law::Fold,
             Law::TestedBool,
@@ -582,6 +599,46 @@ pub enum Rule {
     /// Like [`Rule::Shannon`] and the two unpackings, it **grows** a
     /// graph, so no list drives it and a proof names where to spend it.
     SelectHoist { arity: usize, body: Graph },
+    /// The same conversion at the one port [`Rule::SelectHoist`] cannot
+    /// reach without carrying the branch it moves: the **condition**.
+    ///
+    /// ```text
+    /// select(select(C, T1, E1), T2, E2)
+    ///   =  select(C, select(T1, T2, E2), select(E1, T2, E2))
+    /// ```
+    ///
+    /// A branch whose condition is what another branch answered runs
+    /// under that branch instead, once per block it chooses between —
+    /// and each copy turns on the block itself, which is the value the
+    /// inner select was going to hand over anyway. Sound for the reason
+    /// every row of this layer is: a select keeps the block `truthy`
+    /// picks, so on a truthy `C` both sides are `select(T1, T2, E2)` and
+    /// on a falsy one both are `select(E1, T2, E2)`. Nothing is pinned
+    /// and nothing is promised about any wire — `C`, `T1` and `E1` reach
+    /// the selects that read them untouched — so this holds of **any**
+    /// two branches.
+    ///
+    /// `inner` is the width of the branch that made the condition and
+    /// `port` which of its answers that is; the other answers are not in
+    /// the window's business, and the box goes on standing for whatever
+    /// reads them. `outer` is the width of the branch that moves — the
+    /// arity of the equation's answers, and of all three selects on the
+    /// far side.
+    ///
+    /// The sibling of [`Rule::SelectHoist`] and a narrower window than
+    /// one, which is the whole of why it is a row. `select-hoist` carries
+    /// a *region* as payload, and [`propose`] reads that region as the
+    /// select's whole downstream cone: hoisting past a branch that way
+    /// duplicates everything after it as well. Here the payload is three
+    /// widths, the window is two boxes, and what the far side copies is
+    /// one select and nothing else. Like its sibling it **grows** a graph
+    /// — two boxes become three — so no list drives it and a proof names
+    /// where to spend it.
+    CondHoist {
+        inner: usize,
+        port: usize,
+        outer: usize,
+    },
 
     // ---- the value layer ----
     /// An operation on literal operands is the answer the machine gives:
@@ -798,6 +855,7 @@ impl Rule {
             Rule::SpecializeChoice { .. } => Law::SpecializeChoice,
             Rule::Shannon { .. } => Law::Shannon,
             Rule::SelectHoist { .. } => Law::SelectHoist,
+            Rule::CondHoist { .. } => Law::CondHoist,
             Rule::Fold { .. } => Law::Fold,
             Rule::PromisedBool { .. } => Law::PromisedBool,
             Rule::TestedBool { .. } => Law::TestedBool,
@@ -826,11 +884,13 @@ impl Rule {
 /// rewriter that dissolves every branch it can is a strategy, which this
 /// module does not decide.
 ///
-/// [`Law::SelectHoist`] is a branch law and is **not** here, for the reason
-/// the unpackings are not in [`folding`]: it grows a graph. A driver run to
-/// fixpoint over it would push every branch past everything downstream of
-/// it, duplicating the lot — which is sometimes exactly what a proof wants
-/// and never what a cleanup pass does. A strategy names it.
+/// [`Law::SelectHoist`] and [`Law::CondHoist`] are branch laws and are
+/// **not** here, for the reason the unpackings are not in [`folding`]: they
+/// grow a graph. A driver run to fixpoint over the first would push every
+/// branch past everything downstream of it, duplicating the lot, and over
+/// the second would split every branch a condition holds — which is
+/// sometimes exactly what a proof wants and never what a cleanup pass does.
+/// A strategy names them, and `tree` is the strategy that names both.
 pub fn branching() -> Vec<Law> {
     vec![
         Law::SelectLiteral,
@@ -904,6 +964,7 @@ pub fn is_wiring(law: Law) -> bool {
             | Law::SpecializeChoice
             | Law::Shannon
             | Law::SelectHoist
+            | Law::CondHoist
             | Law::Fold
             | Law::TestedBool
             | Law::Retuple
@@ -1469,6 +1530,48 @@ pub fn sides(rule: &Rule) -> Result<Pair, Error> {
             hoisted.close(out);
 
             (chosen, hoisted)
+        }
+        Rule::CondHoist { inner, port, outer } => {
+            let (i, p, m) = (*inner, *port, *outer);
+            if i == 0 || m == 0 || p >= i {
+                return Err(ill(Ill::Refused));
+            }
+            // Boundary input 0 is the condition the *inner* branch turns
+            // on, then that branch's `2i` blocks, then the `2m` blocks of
+            // the branch that moves. The inner branch's other answers are
+            // no part of the equation: its blocks are all in the window
+            // because a select reads them all, and only the one at `port`
+            // is read on either side.
+            let block = |k: usize| Source::Input(1 + k);
+            let after: Vec<Source> = (0..2 * m).map(|b| Source::Input(1 + 2 * i + b)).collect();
+            let width = 1 + 2 * i + 2 * m;
+            let turning = |g: &mut Graph, on: Source| {
+                let mut takes = vec![on];
+                takes.extend(after.iter().copied());
+                g.add(NodeKind::Select { arity: m }, takes)
+            };
+
+            let mut nested = Graph::empty(width);
+            let mut takes = vec![Source::Input(0)];
+            takes.extend((0..2 * i).map(block));
+            let condition = nested.add(NodeKind::Select { arity: i }, takes);
+            let answers = turning(&mut nested, condition[p]);
+            nested.close(answers);
+
+            // Both copies run and the outermost select keeps one, which is
+            // the licence every branch spends. Each turns on a block of the
+            // inner branch straight, since the block on the side `C` picks
+            // is the very answer the inner select was going to hand over.
+            let mut split = Graph::empty(width);
+            let sure = turning(&mut split, block(p));
+            let doubted = turning(&mut split, block(i + p));
+            let mut chooses = vec![Source::Input(0)];
+            chooses.extend(sure);
+            chooses.extend(doubted);
+            let answers = split.add(NodeKind::Select { arity: m }, chooses);
+            split.close(answers);
+
+            (nested, split)
         }
 
         // ---- the value layer ----
@@ -2385,6 +2488,27 @@ fn read_off(graph: &Graph, law: Law, id: NodeId) -> Vec<(Rule, NodeId)> {
             }
         }
 
+        // A branch turning on what another branch answered: the outer one
+        // splits, one copy under each block the inner one chooses between.
+        // Read off the select that moves and seeded at the select that
+        // made its condition, which is the pattern's first box.
+        (Law::CondHoist, NodeKind::Select { arity: m }) => {
+            let Source::Port { node, port } = takes[0] else {
+                return Vec::new();
+            };
+            let NodeKind::Select { arity: i } = *graph.kind(node) else {
+                return Vec::new();
+            };
+            vec![(
+                Rule::CondHoist {
+                    inner: i,
+                    port,
+                    outer: *m,
+                },
+                node,
+            )]
+        }
+
         // An operation whose every operand is a literal — the fold, and
         // the machine is what answers it.
         (Law::Fold, NodeKind::Op(prim)) => {
@@ -3064,6 +3188,169 @@ mod tests {
             graph.sources(moved)[0],
             Source::Input(0),
             "the condition is the one the branch always turned on:\n{}",
+            graph
+        );
+
+        // The same program, on the machine, at every assignment.
+        for values in samples(5) {
+            assert_eq!(
+                eval_on(&before, &values),
+                eval_on(&graph, &values),
+                "the branch moved and the program changed, on {:?}",
+                values
+            );
+        }
+
+        // And the way back is the same embedding over the other side.
+        apply(&mut graph, &back).unwrap();
+        graph.check().unwrap();
+        assert!(
+            isomorphic(&before, &graph),
+            "undoing the move did not land where it started:\n{}",
+            graph
+        );
+    }
+
+    /// The same conversion at the condition port: a branch whose
+    /// condition is what another branch answered runs under that branch,
+    /// once per block it chooses between.
+    ///
+    /// Nothing is pinned here either — the blocks reach the copies that
+    /// turn on them untouched — so what is asked of any wire is the
+    /// truthiness a select was reading anyway, and the machine is the
+    /// judge for the reason it is `select-hoist`'s.
+    #[test]
+    fn a_branch_grows_over_the_branch_it_conditions() {
+        the_machine_agrees(
+            Law::CondHoist,
+            Rule::CondHoist {
+                inner: 1,
+                port: 0,
+                outer: 1,
+            },
+        );
+        // A branch answering more than the condition: the other answers
+        // are somebody else's, and the equation reads only the one the
+        // outer branch turns on.
+        //
+        // Seven wires, so the whole cross product is 6^7 assignments and
+        // buys nothing — what the extra width is for is `port`, and every
+        // assignment reads that the same way. The sweep is over the three
+        // wires the equation reads, with the answers the branch chooses
+        // between held apart and the rest at junk.
+        let wide = Rule::CondHoist {
+            inner: 2,
+            port: 1,
+            outer: 1,
+        };
+        let pair = sides(&wide).unwrap();
+        assert_eq!(pair.lhs().arity(), pair.rhs().arity());
+        for values in samples(3) {
+            // Input 0 is the condition, `1..=4` the inner branch's blocks
+            // — `port` 1 is the second of each pair — and the last two are
+            // what the branch that moves chooses between.
+            let assignment = vec![
+                values[0].clone(),
+                Value::unit(),
+                values[1].clone(),
+                Value::unit(),
+                values[2].clone(),
+                Value::Int(1),
+                Value::Int(2),
+            ];
+            assert_eq!(
+                eval_on(pair.lhs(), &assignment),
+                eval_on(pair.rhs(), &assignment),
+                "cond-hoist relates two different programs on {:?}",
+                assignment
+            );
+        }
+        // A select of no width states no equation at either end, and
+        // neither does an answer the inner branch does not have.
+        for refused in [
+            Rule::CondHoist {
+                inner: 0,
+                port: 0,
+                outer: 1,
+            },
+            Rule::CondHoist {
+                inner: 1,
+                port: 0,
+                outer: 0,
+            },
+            Rule::CondHoist {
+                inner: 1,
+                port: 1,
+                outer: 1,
+            },
+        ] {
+            assert!(matches!(
+                sides(&refused),
+                Err(Error::Ill {
+                    why: Ill::Refused,
+                    ..
+                })
+            ));
+        }
+    }
+
+    /// The row read off a graph, applied, and held to the machine — and
+    /// what it copies is one select.
+    ///
+    /// This is the whole of why it is a row beside `select-hoist`: the
+    /// cone `propose` reads for that one holds the branch below and
+    /// everything after it, so hoisting past a branch that way duplicates
+    /// the lot. Here two boxes become three, whatever stands downstream.
+    #[test]
+    fn only_the_branch_itself_is_copied() {
+        // Five wires: a `select(1)` whose answer is the condition of a
+        // second, and a `negate` reading what the second answers — work
+        // after the branch, which stays exactly where it is.
+        let mut graph = Graph::empty(5);
+        let condition = graph.add(
+            NodeKind::Select { arity: 1 },
+            vec![Source::Input(0), Source::Input(1), Source::Input(2)],
+        );
+        let answers = graph.add(
+            NodeKind::Select { arity: 1 },
+            vec![condition[0], Source::Input(3), Source::Input(4)],
+        );
+        let after = graph.add(NodeKind::Op(Prim::Negate), answers.clone());
+        graph.close(after);
+        graph.check().unwrap();
+        let before = graph.clone();
+        let node = |src: Source| match src {
+            Source::Port { node, .. } => node,
+            other => panic!("not a box: {:?}", other),
+        };
+        let (inner, outer) = (node(condition[0]), node(answers[0]));
+
+        let steps = propose(&graph, &[Law::CondHoist], outer);
+        let [step] = &steps[..] else {
+            panic!("one branch to move under, and {} proposals", steps.len());
+        };
+        let back = apply(&mut graph, step).unwrap();
+        graph.check().unwrap();
+
+        // Three selects and one `negate`: the branch that moved is the
+        // copied box, and the region after it is untouched.
+        let selects = graph
+            .live()
+            .filter(|(_, k)| matches!(k, NodeKind::Select { .. }))
+            .count();
+        assert_eq!(selects, 3, "the branch did not split in two:\n{}", graph);
+        assert_eq!(
+            graph
+                .live()
+                .filter(|(_, k)| matches!(k, NodeKind::Op(Prim::Negate)))
+                .count(),
+            1,
+            "the work after the branch was copied with it:\n{}",
+            graph
+        );
+        assert!(
+            !graph.live().any(|(id, _)| id == inner),
+            "the branch that made the condition is still in the program:\n{}",
             graph
         );
 
@@ -3827,6 +4114,11 @@ mod tests {
                 arity: 1,
                 body: one_step(NodeKind::Op(Prim::Not)),
             },
+            Rule::CondHoist {
+                inner: 1,
+                port: 0,
+                outer: 1,
+            },
             Rule::Fold {
                 prim: Prim::Add,
                 operands: vec![Value::Int(1), Value::Int(2)],
@@ -4037,7 +4329,7 @@ mod tests {
         let all = Law::every();
         assert_eq!(
             all.len(),
-            24,
+            25,
             "a law joined the table: name it, and list it in `Law::every`"
         );
         let mut names: Vec<&str> = all.iter().map(|law| law.name()).collect();

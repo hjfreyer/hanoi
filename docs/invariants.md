@@ -113,7 +113,7 @@ the check that the shorthand was honest.
 
 No driver opens a call or invents a case analysis: `inline` and `cases`
 are a proof's decisions, stated in the `.hant`. Rows that grow a graph —
-`shannon`, `select-hoist`, the two unpackings — are on no driven list;
+`shannon`, the two hoists, the two unpackings — are on no driven list;
 a strategy names them, and a driver run to fixpoint spends only rows
 that shrink.
 

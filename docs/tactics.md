@@ -21,7 +21,7 @@ steps are:
 | `saturate(law, …)` | those laws to fixpoint |
 | `branches` | the branch layer to fixpoint |
 | `decide` | the whole table to fixpoint — what the `diagram` closer drives |
-| `tree` | `select-hoist` to fixpoint, past everything but another branch — the decision tree |
+| `tree` | `select-hoist` past everything but another branch, then `cond-hoist` out of every condition, to fixpoint — the decision tree |
 | `fire(law, …)` | the first proposal of those laws, once — fails finding none |
 | `at(#box, law)` | that law, once, in a match that holds **that box** — the address the residual printed |
 | `at(#box, law, backward)` | the same, reading the law's equation right to left |
@@ -121,7 +121,8 @@ ordering an engine hardcodes.
   normalizer, and still a strategy: those laws, in that order, replaceable
   by any proof that chooses differently.
 - `tree` — `select-hoist` spent everywhere it will go, with one stop
-  written into the body it carries. See below.
+  written into the body it carries, and then `cond-hoist` out of every
+  condition a branch answered. See below.
 
 ### `tree`, and the body it carries
 
@@ -139,9 +140,36 @@ by one thing:
 
 Spent to fixpoint, the second sorts a graph into two halves — the work,
 which reads nothing a branch answers, and the branches, which read the
-work and each other. That is a decision tree said in a graph, and the
-fixpoint is exactly the sentence *no box but a select reads what a select
-answers*: the selects end up bunched at the output.
+work and each other. The selects end up bunched at the output, and no
+box but a select reads what a select answers.
+
+### The other end of the same sorting
+
+That leaves one port. A branch may still turn on what a branch
+*answered* — a select in a **condition**, which is where `select-hoist`
+cannot go without carrying the branch below as part of its region.
+`cond-hoist` is the row for it ([docs/rules.md](rules.md)), and `tree`
+spends it as its second alternative: a round tries a hoist first and
+takes a `cond-hoist` only when no branch has anything left to grow over.
+
+Two things follow from that order. What a `cond-hoist` copies is a
+**branch** and never work, because by the time one fires every reader of
+an answer is already a select. And it hands the first alternative
+nothing back — the copies are read by the select it puts down, that
+select is read by whoever read the branch that moved, and no box that is
+not a select gains an answer to read — so the drive is one phase and
+then the other, however the rounds interleave.
+
+The fixpoint is two sentences: *no box but a select reads what a select
+answers*, and *no select turns on what a select answered*. Between them
+every condition in the graph is select-free — a test of the work,
+decided before any branch runs — and the branches below are a tree. That
+is a decision tree said in a graph.
+
+Both phases terminate, and the arguments are in `tactic::tree`: a
+multiset over what the copies read for the hoisting phase, and for the
+condition phase the unfolded term weighted so that a condition costs
+what it decides.
 
 The order is the drive's own, and it has to find one: a branch whose body
 reads what a branch **below** it answers cannot go first, since the step
@@ -298,9 +326,11 @@ pub enum RuleSpec {
     ReadOff { laws: Vec<Law>, anchor: Var },
     /// `select-hoist` with the body read here rather than by `propose`:
     /// the cone below the bound select, every other select left
-    /// standing. What `tree` spends, and a **stated** step — the body
-    /// was lifted off those very boxes, so the match is said rather
-    /// than searched for.
+    /// standing. What `tree` spends first, and a **stated** step — the
+    /// body was lifted off those very boxes, so the match is said
+    /// rather than searched for. (`cond-hoist`, which `tree` spends
+    /// second, needs none of this: its payload is three widths, so it
+    /// is an ordinary `ReadOff`.)
     Hoist { anchor: Var },
 }
 
