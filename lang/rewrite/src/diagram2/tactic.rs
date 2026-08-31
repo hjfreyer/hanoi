@@ -25,7 +25,11 @@
 //!   address is a [`Prefix`] of one copied off a residual listing, and the
 //!   search is [`rules::instances`] × [`find_over`]
 //!   over every pattern box, so a match counts when it holds that box
-//!   anywhere. The
+//!   anywhere — except for the two laws whose payload is a *region*
+//!   ([`Law::carries_a_region`]), where a match holding the box in the
+//!   region it carries is another branch's equation rather than this
+//!   one's, so the named box is where the law anchors and nowhere else.
+//!   The
 //!   one address that is a name rather than a description, and the one a
 //!   person writes by pointing at a report.
 //! - [`Tactic::State`] — **stated**, either direction but above all
@@ -599,6 +603,10 @@ impl Runner<'_> {
     /// match answers nothing, for every pin — which is how the backward
     /// direction declines the rows it cannot search for.
     ///
+    /// Except for the two laws that carry a **region**
+    /// ([`Law::carries_a_region`]), which are anchored instead: see
+    /// below.
+    ///
     /// Deduplicated and left in the order the sweeps found it: instances
     /// in live-box order, pins in pattern order, matches in the matcher's
     /// own. Untrusted like every other search here — [`rules::apply`]
@@ -608,6 +616,44 @@ impl Runner<'_> {
         // region is not this tactic's to name.
         if self.region.as_ref().is_some_and(|r| !r.contains(&node)) {
             return Vec::new();
+        }
+        // A region-carrying law is anchored, and this is where that is
+        // spent: [`rules::propose`] reads the payload off the box named
+        // and pins the pattern where the law itself anchors, which for
+        // `select-hoist` is the branch that moves.
+        //
+        // The sweep below would answer with more than that, and the more
+        // is not other readings of the same equation — it is one equation
+        // per *other* branch whose cone happens to hold this box, matched
+        // on a payload box rather than on anything the law is about.
+        // `at(#a-late-branch, select-hoist)` would then hoist the
+        // earliest branch above it, which is not the branch anybody wrote
+        // that address for.
+        //
+        // The one other thing it drops is a body some *other* branch's
+        // cone spelled that is a piece of this one — a partial hoist,
+        // reachable only by the accident of another branch in the same
+        // graph having exactly that sub-cone. How much of a region a
+        // branch should swallow is a strategy's decision (see
+        // [`RuleSpec::Hoist`]), and the two readings a strategy can ask
+        // for are the whole cone, which is this, and the cone without
+        // its branches, which is `hoistable`. Neither is a leftover of
+        // somebody else's window.
+        //
+        // It would also pay for them. A cone-sized pattern is pinned once
+        // per box, every pin whose kind is the named box's re-sweeping
+        // the live graph for the branch the pattern begins with, and the
+        // whole of it once per branch in the program: measured at 329ms
+        // against `propose`'s 55µs on a 208-box decision tree, and
+        // growing about cubically where `propose` is flat.
+        //
+        // Backward is left to the sweep. `instances` reads a region off a
+        // box's cone and never off the answer side, so no payload for a
+        // backward step is found this way in the first place, and
+        // narrowing a search that answers nothing would only be claiming
+        // something about it that has not been established.
+        if law.carries_a_region() && dir == Direction::Forward {
+            return rules::propose(self.graph, &[law], node);
         }
         let mut out: Vec<Step> = Vec::new();
         for rule in rules::instances(self.graph, law) {
@@ -1983,6 +2029,46 @@ mod tests {
             !graph.is_live(first) && !graph.is_live(second),
             "both nots went, the pair being what the law spends:\n{}",
             graph
+        );
+    }
+
+    /// And the exception that keeps *that* honest. `select-hoist` carries
+    /// the whole cone below the branch it moves, so a box in that cone is
+    /// in the window of every branch above it too — and a match holding
+    /// the named box "anywhere" would be an equation about one of those
+    /// other branches, picked because a payload box matched. The named
+    /// box is the branch that moves.
+    #[test]
+    fn a_region_carrying_law_anchors_at_the_box_named() {
+        let graph = built("branch { not } { as_bool } branch { not } { as_bool } negate");
+        let selects: Vec<NodeId> = graph
+            .live()
+            .filter(|(_, kind)| matches!(kind, NodeKind::Select { .. }))
+            .map(|(id, _)| id)
+            .collect();
+        let [above, moving] = selects[..] else {
+            panic!(
+                "two branches, one reading what the other answers:\n{}",
+                graph
+            )
+        };
+
+        let mut g = graph.clone();
+        let mut deriv = Derivation::default();
+        run(
+            &mut g,
+            &mut deriv,
+            &fire_at(named(&graph, moving), Law::SelectHoist, Direction::Forward),
+        )
+        .unwrap();
+        assert_eq!(deriv.len(), 1);
+        // The branch named is the one that spent itself; the one above it
+        // is untouched, its cone having held the named box only as
+        // payload.
+        assert!(
+            !g.is_live(moving) && g.is_live(above),
+            "the branch named moved and the one above it stood:\n{}",
+            g
         );
     }
 

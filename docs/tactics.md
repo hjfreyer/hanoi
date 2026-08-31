@@ -48,6 +48,19 @@ second `not` is the small case; a whole-branch law named at a box inside
 an arm is the one that matters). A goal offering nine `fold`s and
 needing the seventh has no other proof to write.
 
+Two laws are the exception, and for the reason that makes them special
+everywhere else: `shannon` and `select-hoist` carry a **region** — the
+whole cone below the box they fire at — as their payload. The boxes of
+that cone are not the law's own window, they are what it moves, and every
+branch above one of them carries it too. So "a match that holds that box"
+would name as many equations as there are branches upstream, all but one
+of them about a different branch, and `at` would spend the earliest of
+them rather than the one written down. These two anchor instead: the box
+named is the branch that moves, or the promised bool that splits, and
+nothing else. (It is also the difference between microseconds and a
+third of a second on a decision tree of a few hundred boxes, the sweep
+having pinned a cone-sized pattern once per box in it.)
+
 The direction field makes `at` a **found** backward step:
 `at(#nkz, not-not, backward)` looks for the law's right-hand side. A
 right-hand side is a graph like any other, so backward is a direction
