@@ -2227,6 +2227,96 @@ mod tests {
         assert_eq!(again, graph, "\n{}\n{}", again, graph);
     }
 
+    /// The other stated introduction, and the one a branch layer wants:
+    /// `specialize-equal` read backward puts a **branch** on a wire —
+    /// the test of it against a second wire, answering with that second
+    /// where the test held and with the wire itself where it did not.
+    ///
+    /// Bare on that side for the same reason `tuple-cancel` is: the
+    /// answer is the wire, there is no box to anchor a search on, and the
+    /// operand it is tested against is named rather than found.
+    #[test]
+    fn a_stated_introduction_puts_a_branch_on_a_named_wire() {
+        let mut graph = built("not");
+        let (not, _) = graph.live().next().expect("one box");
+        let mut deriv = Derivation::default();
+        let (rule, dir) = rules::boxless(Law::SpecializeEqual, 2).expect("a bare-wires side");
+        let stated = Tactic::State {
+            at: Query::new(),
+            rule,
+            dir,
+            with: MatchSpec {
+                nodes: Vec::new(),
+                inputs: vec![SrcExpr::Addressed(named(&graph, not), 0), SrcExpr::Input(0)],
+            },
+            pick: Pick::Unique,
+        };
+        assert_eq!(
+            run(&mut graph, &mut deriv, &stated),
+            Ok(Progress::Advanced(1))
+        );
+        graph.check().unwrap();
+
+        // The test reads the wires in the order they were named, the
+        // branch turns on it, and the boundary reads through the branch:
+        // then block the second wire, else block the first.
+        let only = |kind: &NodeKind| {
+            graph
+                .live()
+                .find(|(_, k)| *k == kind)
+                .unwrap_or_else(|| panic!("no {} in\n{}", kind, graph))
+                .0
+        };
+        let negated = Source::Port { node: not, port: 0 };
+        let test = only(&NodeKind::Op(Prim::Equal));
+        assert_eq!(
+            graph.sources(test),
+            [negated, Source::Input(0)],
+            "\n{}",
+            graph
+        );
+        let branch = only(&NodeKind::Select { arity: 1 });
+        assert_eq!(
+            graph.sources(branch),
+            [
+                Source::Port {
+                    node: test,
+                    port: 0
+                },
+                Source::Input(0),
+                negated
+            ],
+            "\n{}",
+            graph
+        );
+        assert_eq!(
+            graph.outputs(),
+            [Source::Port {
+                node: branch,
+                port: 0
+            }],
+            "\n{}",
+            graph
+        );
+
+        // And the branch layer takes it straight back out, which is the
+        // row read the way a driver reads it.
+        let mut back = Derivation::default();
+        run(&mut graph, &mut back, &branch_pass()).unwrap();
+        graph.check().unwrap();
+        assert_eq!(graph, built("not"), "\n{}", graph);
+
+        // The run is a derivation like any other: it replays.
+        let mut again = built("not");
+        let record: Vec<_> = deriv.steps().cloned().collect();
+        replay(&mut again, &record).unwrap();
+        assert!(
+            again
+                .live()
+                .any(|(_, k)| matches!(k, NodeKind::Select { .. }))
+        );
+    }
+
     /// A stated wire fails by name, the discipline `at` keeps: a box
     /// nothing answers to, a port the box lacks, and one wire stated as
     /// two of the pattern's — which is one question answered two ways,

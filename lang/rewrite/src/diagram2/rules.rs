@@ -182,15 +182,16 @@
 //!
 //! A block is a wire like any other, and nothing stands between an arm and
 //! what it reads. So a block that is the very value the condition tested
-//! *is* that value, and [`Law::SpecializeEqual`] says so by naming one
-//! source twice in its pattern — which is why these rules are as short as
-//! they are.
+//! *is* that value, and [`Law::SpecializeEqual`] says so by naming its
+//! sources twice in its pattern — the operands of the `equal` are the two
+//! blocks — which is why these rules are as short as they are.
 //!
 //! What licenses them is the **discard** — the fact that the select throws
 //! the untaken block away — and the discard is at the select, which is
 //! where they are stated. So what they reach is a block, and not the inside
-//! of an arm: `x` tested `equal` to `7` becomes `7` where the select reads
-//! it, while the boxes of the then arm go on reading `x`. A rule that
+//! of an arm: the bool a branch turned on becomes `true` where the select
+//! reads it, while the boxes of the then arm go on reading the value
+//! itself. A rule that
 //! reached inside would have to say which boxes are the arm's own, and
 //! nothing in the graph records that — a branch's arms are the boxes only
 //! that side's blocks read, which is a fact about the whole graph rather
@@ -473,20 +474,37 @@ pub enum Rule {
     /// `arity` is the select's width: every block moves, since the branch
     /// decided every one of them the other way.
     NotBranch { arity: usize },
-    /// A value that tested `equal` to a literal **is** that literal, in the
-    /// block the test chose. `equal` answers `Bool(a == b)`, so a truthy
-    /// answer is `a == b` and nothing weaker.
+    /// A branch that answers with one operand of its own `equal` where the
+    /// test held and the other where it did not is answering with the
+    /// second, whatever the test said:
+    ///
+    /// ```text
+    /// select(equal(x, y), y, x)  =  x
+    /// ```
+    ///
+    /// `equal` answers `Bool(a == b)` and is structural identity on every
+    /// value the machine has, so a truthy condition is `x == y` and
+    /// nothing weaker — the then block *is* the else block wherever the
+    /// then block is reached. The two are one value there, and the branch
+    /// is choosing between a value and itself.
     ///
     /// Stated at the select, and it has to be: one end of a branch cannot
     /// see the **discard** — the fact that the select throws the untaken
     /// block away — and reasoning from "the condition holds" is exactly
     /// what the discard licenses. What it reaches is a block, not the
     /// inside of an arm.
+    ///
+    /// One answer at a time, like [`Rule::SelectSame`]: the select keeps
+    /// its other blocks and narrows by one, and at width 1 it goes
+    /// altogether. `answered` says which operand of the `equal` the else
+    /// block is — the one the equation comes to — and the then block is
+    /// the other. Both readings are the same row, because `equal` reads
+    /// its operands the same way round: the mirror shape
+    /// `select(equal(x, y), x, y)` is `y`.
     SpecializeEqual {
         arity: usize,
         at: usize,
-        value: Value,
-        literal: Side,
+        answered: Side,
     },
     /// The very value a branch tested, when it is a **bool**, is what the
     /// branch decided: `true` in the then block, `false` in the else block.
@@ -1321,42 +1339,79 @@ pub fn sides(rule: &Rule) -> Result<Pair, Error> {
         Rule::SpecializeEqual {
             arity,
             at,
-            value,
-            literal,
+            answered,
         } => {
             let (n, j) = (*arity, *at);
             if j >= n {
                 return Err(ill(Ill::Refused));
             }
-            // Input 0 is the value under test, and it is *also* the then block
-            // at `j` — said once in the pattern, for the reason `select-same`
-            // says its shared block once.
-            let x = Source::Input(0);
+            // `2n` boundary inputs, and the first two are the operands of
+            // the test: input 0 the one the else block at `j` is, input 1
+            // the one the then block at `j` is. Each is said **once** in
+            // the pattern, for the reason `select-same` says its shared
+            // block once — that a block is the very wire the test read is
+            // what the row is about, and a match merely pointing two
+            // inputs at one host wire would be matching a graph that does
+            // not state it.
+            let answer = Source::Input(0);
+            let other = Source::Input(1);
             let then = |i: usize| {
                 if i == j {
-                    x
+                    other
                 } else {
-                    Source::Input(1 + if i < j { i } else { i - 1 })
+                    Source::Input(2 + if i < j { i } else { i - 1 })
                 }
             };
-            let els = |i: usize| Source::Input(n + i);
-            let operands = |lit: Source| match literal {
-                Side::Deep => vec![lit, x],
-                Side::Top => vec![x, lit],
+            let els = |i: usize| {
+                if i == j {
+                    answer
+                } else {
+                    Source::Input(1 + n + if i < j { i } else { i - 1 })
+                }
+            };
+            // Which way round the test reads them is the payload's, and
+            // nothing else about the operands is: `equal` is commutative,
+            // but *which operand is which* is what the graph records.
+            let operands = match answered {
+                Side::Deep => vec![answer, other],
+                Side::Top => vec![other, answer],
             };
 
-            let build = |folded: bool| {
-                let mut g = Graph::empty(2 * n);
-                let lit = g.add(NodeKind::Op(Prim::Push(value.clone())), Vec::new());
-                let test = g.add(NodeKind::Op(Prim::Equal), operands(lit[0]));
+            let mut tested = Graph::empty(2 * n);
+            let test = tested.add(NodeKind::Op(Prim::Equal), operands.clone());
+            let mut takes = vec![test[0]];
+            takes.extend((0..n).map(then));
+            takes.extend((0..n).map(els));
+            let answers = tested.add(NodeKind::Select { arity: n }, takes);
+            tested.close(answers);
+
+            let mut decided = Graph::empty(2 * n);
+            // A branch that answers nothing is not a branch, and neither
+            // is a test nothing turns on: at width 1 the answer side is
+            // the operand itself and holds no box at all. The `equal` in
+            // a host goes on standing for whatever else reads it.
+            let kept = if n == 1 {
+                Vec::new()
+            } else {
+                let test = decided.add(NodeKind::Op(Prim::Equal), operands);
                 let mut takes = vec![test[0]];
-                takes.extend((0..n).map(|i| if folded && i == j { lit[0] } else { then(i) }));
-                takes.extend((0..n).map(els));
-                let answers = g.add(NodeKind::Select { arity: n }, takes);
-                g.close(answers);
-                g
+                takes.extend((0..n).filter(|&i| i != j).map(then));
+                takes.extend((0..n).filter(|&i| i != j).map(els));
+                decided.add(NodeKind::Select { arity: n - 1 }, takes)
             };
-            (build(false), build(true))
+            let mut answers = Vec::with_capacity(n);
+            let mut next = 0;
+            for i in 0..n {
+                if i == j {
+                    answers.push(answer);
+                } else {
+                    answers.push(kept[next]);
+                    next += 1;
+                }
+            }
+            decided.close(answers);
+
+            (tested, decided)
         }
         Rule::SpecializeBool { arity, at } => {
             let (n, b) = (*arity, *at);
@@ -2136,13 +2191,33 @@ pub fn instances(graph: &Graph, law: Law) -> Vec<Rule> {
 /// anchors nowhere ([`pins_itself`](crate::graph::pins_itself) says why),
 /// so no search ever proposes these steps: they are *stated*, the wires
 /// named outright, and this is where a statement's width becomes a
-/// payload. `tuple-cancel` is the row today — its right side is `id(n)`,
-/// so the pair is introduced backward, on any `n` wires. `None` for a law
-/// both of whose sides hold boxes, and for one whose bare side would take
-/// more payload than a width: nothing here is guessed.
+/// payload. Two rows are here. `tuple-cancel`'s right side is `id(n)`, so
+/// the pair is introduced backward, on any `n` wires. `specialize-equal`
+/// at width 1 answers with one of the operands it compared and holds no
+/// box on that side either, so it is introduced backward on **two**
+/// wires: the one the branch comes to answer with, and the one it is
+/// tested against. `None` for a law both of whose sides hold boxes, for a
+/// width whose statement would need a payload the wires do not say, and
+/// for one whose bare side would take more payload than a width: nothing
+/// here is guessed.
 pub fn boxless(law: Law, wires: usize) -> Option<(Rule, Direction)> {
-    match law {
-        Law::TupleCancel => Some((Rule::TupleCancel { n: wires }, Direction::Backward)),
+    match (law, wires) {
+        (Law::TupleCancel, n) => Some((Rule::TupleCancel { n }, Direction::Backward)),
+        // `select(equal(x, y), y, x) = x` at width 1: the answer side is
+        // the wire `x` and no box at all, so this is the other row a
+        // proof can only state. Two wires — the one the branch answers
+        // with, then the one it is tested against — and the order is the
+        // window's shape, `equal(x, y)` in the order they are named, the
+        // way `on(in1 in0, tuple-cancel)` builds the other tuple. `comm`
+        // is the row that reads the test the other way round afterwards.
+        (Law::SpecializeEqual, 2) => Some((
+            Rule::SpecializeEqual {
+                arity: 1,
+                at: 0,
+                answered: Side::Deep,
+            },
+            Direction::Backward,
+        )),
         _ => None,
     }
 }
@@ -2334,33 +2409,41 @@ fn read_off(graph: &Graph, law: Law, id: NodeId) -> Vec<(Rule, NodeId)> {
             _ => Vec::new(),
         },
 
-        // A condition that is a test against a literal, and a block that
-        // answers with the very value tested.
+        // A branch turning on an `equal` and answering with the test's own
+        // operands — the other one where it held, this one where it did
+        // not. Seeded at the `equal`, which is the pattern's first box.
         (Law::SpecializeEqual, NodeKind::Select { arity: n }) => {
+            let n = *n;
             let Some((test, NodeKind::Op(Prim::Equal))) = made_by(takes[0]) else {
                 return Vec::new();
             };
             let operands = graph.sources(test);
-            let (lit, side, x) = match (made_by(operands[0]), made_by(operands[1])) {
-                (Some((lit, NodeKind::Op(Prim::Push(_)))), _) => (lit, Side::Deep, operands[1]),
-                (_, Some((lit, NodeKind::Op(Prim::Push(_))))) => (lit, Side::Top, operands[0]),
-                _ => return Vec::new(),
-            };
-            let NodeKind::Op(Prim::Push(value)) = graph.kind(lit) else {
+            let (deep, top) = (operands[0], operands[1]);
+            // A test of one wire against itself is `equal-refl`'s, and the
+            // branch it decides is `select-same`'s: there is no operand
+            // here for the other to be, and the pattern says two.
+            if deep == top {
                 return Vec::new();
-            };
-            (0..*n)
-                .filter(|j| takes[1 + j] == x)
-                .map(|j| {
-                    (
+            }
+            (0..n)
+                .filter_map(|j| {
+                    let (chose, spurned) = (takes[1 + j], takes[1 + n + j]);
+                    // `answered` is the operand the else block is, and the
+                    // then block has to be the other one: the two are the
+                    // same value exactly where the then block is reached.
+                    let answered = match (spurned == deep, spurned == top) {
+                        (true, _) if chose == top => Side::Deep,
+                        (_, true) if chose == deep => Side::Top,
+                        _ => return None,
+                    };
+                    Some((
                         Rule::SpecializeEqual {
-                            arity: *n,
+                            arity: n,
                             at: j,
-                            value: value.clone(),
-                            literal: side,
+                            answered,
                         },
-                        lit,
-                    )
+                        test,
+                    ))
                 })
                 .collect()
         }
@@ -4047,25 +4130,39 @@ mod tests {
         ));
     }
 
-    /// A value that tested `equal` to a literal **is** that literal, in the
-    /// block the test chose. `equal` answers `Bool(a == b)`, so a truthy
-    /// answer is `a == b` and nothing weaker — which is what makes the
-    /// substitution exact rather than merely plausible.
+    /// A branch choosing between an `equal`'s two operands answers with
+    /// the one it takes when the test **fails**, whatever the test said:
+    /// `equal` is structural identity, so where the other block is reached
+    /// the two operands are one value.
+    ///
+    /// Both readings and two widths — at width 1 the branch goes
+    /// altogether, and above it the select narrows by one answer.
     #[test]
-    fn a_value_that_tested_equal_is_the_literal() {
-        for literal in [Side::Deep, Side::Top] {
-            for value in [Value::Int(7), Value::Bool(false), Value::unit()] {
+    fn a_branch_between_what_it_compared_is_one_of_them() {
+        for answered in [Side::Deep, Side::Top] {
+            for (arity, at) in [(1, 0), (2, 0), (2, 1)] {
                 the_machine_agrees(
                     Law::SpecializeEqual,
                     Rule::SpecializeEqual {
-                        arity: 1,
-                        at: 0,
-                        value,
-                        literal,
+                        arity,
+                        at,
+                        answered,
                     },
                 );
             }
         }
+        // A block the select does not have states no equation.
+        assert!(matches!(
+            sides(&Rule::SpecializeEqual {
+                arity: 1,
+                at: 1,
+                answered: Side::Deep,
+            }),
+            Err(Error::Ill {
+                why: Ill::Refused,
+                ..
+            })
+        ));
     }
 
     /// `as_bool` of the very value a branch tested is what the branch
@@ -4132,8 +4229,7 @@ mod tests {
             Rule::SpecializeEqual {
                 arity: 1,
                 at: 0,
-                value: Value::Int(7),
-                literal: Side::Top,
+                answered: Side::Top,
             },
             Rule::SpecializeBool { arity: 1, at: 0 },
             Rule::SpecializeChoice {
