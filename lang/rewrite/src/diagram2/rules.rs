@@ -155,8 +155,9 @@
 //! rather than a payload of its sibling because the window is narrower.
 //! `select-hoist` carries a region, and the region [`propose`] reads is
 //! the whole cone below a select, so growing a branch past another that
-//! way copies everything after it too; here the payload is three widths
-//! and what the far side copies is one select. It grows a graph all the
+//! way copies everything after it too; here there is no payload at all —
+//! both selects are one answer wide — and what the far side copies is one
+//! select. It grows a graph all the
 //! same — two boxes into three — so no list drives it either, and the
 //! `tree` tactic spends the two in order: every branch past everything
 //! but another branch, and then out of every condition a branch
@@ -456,8 +457,9 @@ pub enum Rule {
 
     // ---- the branch layer ----
     /// A block a `select` answers with either way is what it answers: `if c
-    /// then x else x = x`. The select keeps its other blocks and narrows by
-    /// one.
+    /// then x else x = x`. A branch answering one thing either way is not
+    /// a branch, so the select goes with the block, and the condition
+    /// drops out of the program with it.
     ///
     /// The row that `branch { A } { A } = drop-top ; A` comes to: the two
     /// arms' boxes are one by interning, and a condition nothing else
@@ -471,10 +473,10 @@ pub enum Rule {
     /// reader when the select goes, and a box the boundary no longer
     /// reaches is not part of the program.
     ///
-    /// `lit_blocks` names the block positions (over `2n`) that read the
-    /// **literal itself** — the shape a `dedup` makes when the condition
-    /// and an answer are one pushed value — because a boundary input may
-    /// not stand for a port inside the window.
+    /// `lit_blocks` names which of the two blocks — 0 the then, 1 the else
+    /// — read the **literal itself**, the shape a `dedup` makes when the
+    /// condition and an answer are one pushed value, because a boundary
+    /// input may not stand for a port inside the window.
     SelectLiteral {
         value: Value,
         lit_blocks: Vec<usize>,
@@ -493,8 +495,8 @@ pub enum Rule {
     /// only the blocks this select chose between, and a negation
     /// something else reads goes on standing for that reader.
     ///
-    /// `arity` is the select's width: every block moves, since the branch
-    /// decided every one of them the other way.
+    /// No payload: a select has two blocks and both move, since the branch
+    /// decided them the other way round.
     NotBranch,
     /// A branch that answers with one operand of its own `equal` where the
     /// test held and the other where it did not is answering with the
@@ -516,13 +518,12 @@ pub enum Rule {
     /// what the discard licenses. What it reaches is a block, not the
     /// inside of an arm.
     ///
-    /// One answer at a time, like [`Rule::SelectSame`]: the select keeps
-    /// its other blocks and narrows by one, and at width 1 it goes
-    /// altogether. `answered` says which operand of the `equal` the else
-    /// block is — the one the equation comes to — and the then block is
-    /// the other. Both readings are the same row, because `equal` reads
-    /// its operands the same way round: the mirror shape
-    /// `select(equal(x, y), x, y)` is `y`.
+    /// The select goes, like [`Rule::SelectSame`]'s, and the `equal` in a
+    /// host goes on standing for whatever else reads it. `answered` says
+    /// which operand of the `equal` the else block is — the one the
+    /// equation comes to — and the then block is the other. Both readings
+    /// are the same row, because `equal` reads its operands the same way
+    /// round: the mirror shape `select(equal(x, y), x, y)` is `y`.
     SpecializeEqual { answered: Side },
     /// The very value a branch tested, when it is a **bool**, is what the
     /// branch decided: `true` in the then block, `false` in the else block.
@@ -537,8 +538,8 @@ pub enum Rule {
     /// which is the whole use of writing an instruction set's promise down
     /// as a box.
     ///
-    /// `at` is the select's block, counted over the whole `2n`; `at <
-    /// arity` is the then side, and so decides which literal this folds to.
+    /// `then` says which block is the coercion's answer, and so which
+    /// literal this folds to: `true` on the then side, `false` on the else.
     SpecializeBool { then: bool },
     /// A branch **inside an arm** whose condition is the very value the
     /// outer branch tested is already decided: its then blocks in the outer
@@ -552,10 +553,11 @@ pub enum Rule {
     /// blocks that read its answers come to read the blocks it would
     /// choose.
     ///
-    /// `inner` is the inner select's arity; `side` says which arm of the
-    /// outer branch this is about; `moves` pairs an inner output with the
-    /// outer block that reads it (over `m` and `2n`), every pair on the
-    /// side `side` says.
+    /// `side` says which block of the outer branch this is about, and that
+    /// is the whole payload: both selects are one answer wide, so which
+    /// block of the inner one the move comes to is what `side` already
+    /// said. Reasoning from "the condition held" does not reach the other
+    /// block, which is why the row is about one side at a time.
     SpecializeChoice { side: bool },
     /// Case analysis, as an equation: a wire the instruction set promises
     /// is a bool is `true` or it is `false` — there is no third case — so
@@ -600,8 +602,8 @@ pub enum Rule {
     /// select was beyond the reach of the whole branch layer, and a select
     /// could only ever be got rid of, never moved. This is that row.
     ///
-    /// `arity` is the select's width `n` and `body` is `A` — the region
-    /// downstream of the answers, carried as payload the way
+    /// `body` is `A` — the region downstream of the answer, carried as
+    /// payload the way
     /// [`Rule::Shannon`] carries its own. Its inputs `0..n` are the
     /// answers, its inputs `n..n+k` are the `id(k)` alongside them, and
     /// its outputs are what the region leaves.
@@ -649,12 +651,10 @@ pub enum Rule {
     /// the selects that read them untouched — so this holds of **any**
     /// two branches.
     ///
-    /// `inner` is the width of the branch that made the condition and
-    /// `port` which of its answers that is; the other answers are not in
-    /// the window's business, and the box goes on standing for whatever
-    /// reads them. `outer` is the width of the branch that moves — the
-    /// arity of the equation's answers, and of all three selects on the
-    /// far side.
+    /// No payload: both branches are one answer wide, so there is nothing
+    /// left to say — not which answer the condition is, and not how wide
+    /// either select is. Whatever else reads the inner branch is no part
+    /// of the window, and the box goes on standing for those readers.
     ///
     /// The sibling of [`Rule::SelectHoist`] and a narrower window than
     /// one, which is the whole of why it is a row. `select-hoist` carries
@@ -1347,7 +1347,11 @@ pub fn sides(rule: &Rule) -> Result<Pair, Error> {
                     coerced
                 };
                 let other = Source::Input(1);
-                let (t, e) = if *then { (known, other) } else { (other, known) };
+                let (t, e) = if *then {
+                    (known, other)
+                } else {
+                    (other, known)
+                };
                 let answer = g.add(NodeKind::Select, vec![coerced, t, e]);
                 g.close(answer);
                 g
@@ -1466,7 +1470,10 @@ pub fn sides(rule: &Rule) -> Result<Pair, Error> {
             let doubted = hoisted.implant(body, &feeds(Source::Input(2)));
             let out: Vec<Source> = (0..m)
                 .map(|j| {
-                    hoisted.add(NodeKind::Select, vec![Source::Input(0), sure[j], doubted[j]])[0]
+                    hoisted.add(
+                        NodeKind::Select,
+                        vec![Source::Input(0), sure[j], doubted[j]],
+                    )[0]
                 })
                 .collect();
             hoisted.close(out);
@@ -2057,7 +2064,7 @@ pub fn instances(graph: &Graph, law: Law) -> Vec<Rule> {
 /// named outright, and this is where a statement's width becomes a
 /// payload. Two rows are here. `tuple-cancel`'s right side is `id(n)`, so
 /// the pair is introduced backward, on any `n` wires. `specialize-equal`
-/// at width 1 answers with one of the operands it compared and holds no
+/// answers with one of the operands it compared and holds no
 /// box on that side either, so it is introduced backward on **two**
 /// wires: the one the branch comes to answer with, and the one it is
 /// tested against. `None` for a law both of whose sides hold boxes, for a
@@ -2067,7 +2074,7 @@ pub fn instances(graph: &Graph, law: Law) -> Vec<Rule> {
 pub fn boxless(law: Law, wires: usize) -> Option<(Rule, Direction)> {
     match (law, wires) {
         (Law::TupleCancel, n) => Some((Rule::TupleCancel { n }, Direction::Backward)),
-        // `select(equal(x, y), y, x) = x` at width 1: the answer side is
+        // `select(equal(x, y), y, x) = x`: the answer side is
         // the wire `x` and no box at all, so this is the other row a
         // proof can only state. Two wires — the one the branch answers
         // with, then the one it is tested against — and the order is the
@@ -2326,7 +2333,6 @@ fn read_off(graph: &Graph, law: Law, id: NodeId) -> Vec<(Rule, NodeId)> {
                     .then_some((Rule::SpecializeChoice { side: b == 0 }, within))
             })
             .collect(),
-
 
         // The instruction set's promise, written down as a box. Proposed
         // only where one is not already standing: the equation holds
@@ -3130,7 +3136,7 @@ pub(in crate::diagram2) mod tests {
         // copied box, and the region after it is untouched.
         let selects = graph
             .live()
-            .filter(|(_, k)| matches!(k, NodeKind::Select { .. }))
+            .filter(|(_, k)| matches!(k, NodeKind::Select))
             .count();
         assert_eq!(selects, 3, "the branch did not split in two:\n{}", graph);
         assert_eq!(
@@ -3831,8 +3837,8 @@ pub(in crate::diagram2) mod tests {
     /// `equal` is structural identity, so where the other block is reached
     /// the two operands are one value.
     ///
-    /// Both readings and two widths — at width 1 the branch goes
-    /// altogether, and above it the select narrows by one answer.
+    /// Both readings, and the branch goes altogether either way: a select
+    /// carries one answer, so answering it is the whole of the box.
     #[test]
     fn a_branch_between_what_it_compared_is_one_of_them() {
         for answered in [Side::Deep, Side::Top] {
@@ -4272,9 +4278,7 @@ pub(in crate::diagram2) mod tests {
         apply(&mut alone, &second).unwrap();
         alone.check().unwrap();
         assert!(
-            alone
-                .live()
-                .any(|(_, k)| matches!(k, NodeKind::Select { .. })),
+            alone.live().any(|(_, k)| matches!(k, NodeKind::Select)),
             "the run ends in the branch `as_bool` is:\n{}",
             alone
         );

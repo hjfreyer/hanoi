@@ -696,6 +696,23 @@ identity what_follows_a_branch_runs_inside_it
     { branch { not } { as_bool } negate }
   = { branch { not negate } { as_bool negate } };
 
+// Two branches on one condition, neither downstream of the other, against the
+// one branch answering both — and there is nothing to prove, which is the
+// point. A `select` carries **one answer**, so a `branch` leaving two values
+// builds two of them reading one condition, and the two sides here are the
+// same graph before any step runs.
+//
+// It was not always. While a select carried every answer of its branch, the
+// wide spelling and the pair of peers were two graphs, both true, and no law
+// related them: the row that would have merged peers was not in the table, and
+// no proof could reach it either, since every route to a `select-hoist` body
+// reads that body off the graph's own downstream cone and none of them would
+// ever carry a peer. The width was slack the meaning never had — a branch
+// means a choice per output — so it went, and this claim went with it.
+identity two_branches_on_one_condition_are_one_branch
+    { pick 0 branch { push 1 } { push 2 } roll 1 branch { push 3 } { push 4 } }
+  = { branch { push 1 push 3 } { push 2 push 4 } };
+
 // The same conversion at the one port the row above cannot reach without
 // carrying the branch it moves: the **condition**. A branch whose condition is
 // what another branch answered runs under that branch instead, once per block

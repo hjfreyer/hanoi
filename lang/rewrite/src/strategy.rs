@@ -668,7 +668,7 @@ impl<'l> Prover<'l> {
                         .iter()
                         .rev()
                         .copied()
-                        .find(|&n| matches!(side.kind(n), NodeKind::Select { .. }))
+                        .find(|&n| matches!(side.kind(n), NodeKind::Select))
                 })
                 .map(|select| side.sources(select)[0]);
             counts.splits += 1;
@@ -1447,6 +1447,7 @@ mod tests {
                 "identities::a_coerced_tuple_survives_the_round_trip",
                 "identities::a_built_tuple_is_the_width_it_was_built",
                 "identities::a_built_tuple_is_no_other_width",
+                "identities::two_branches_on_one_condition_are_one_branch",
                 // The rows that were `not yet written`, each decided by
                 // `decide` alone now that it has them — every one of these
                 // failed honestly before. `comm` is the one of the new rows

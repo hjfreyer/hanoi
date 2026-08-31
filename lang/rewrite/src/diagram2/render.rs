@@ -55,9 +55,41 @@
 //! is the [`Select`](super::NodeKind::Select), so it keeps its name and
 //! its links: the right-hand columns still say what the box reads and who
 //! reads it, which is what a next proof step names. The `if` and the
-//! `else` are lines the listing draws rather than boxes — a branch is one
-//! box and that box is its end — and their **empty name column** is how a
-//! reader tells the two apart.
+//! `else` are lines the listing draws rather than boxes, and their
+//! **empty name column** is how a reader tells the two apart.
+//!
+//! ## A branch is several boxes, and one bracket
+//!
+//! A [`Select`](super::NodeKind::Select) carries one answer, so a source
+//! `branch` leaving `n` values is `n` of them reading one condition. A
+//! reader wants the one bracket back, and [`grouping`] is where it comes
+//! from: peers on one condition are one branch, and one `if` is closed by
+//! a **run** of `endif`s, one per answer, each keeping its own address and
+//! its own links.
+//!
+//! ```text
+//!                   if in0
+//!   #nyoqvutuxsru   | push 1                            → #k
+//!   #vknouovwoons   | push 3                            → #z
+//!                   else in0
+//!   #rrnxuzuvsypt   | push 2                            → #k
+//!   #mlrnzlorovlz   | push 4                            → #z
+//!   #kqstmypnlprv   endif in0  then #n.0  else #r.0     → out0
+//!   #znuqoyxmrslm   endif in0  then #v.0  else #m.0     → out1
+//! ```
+//!
+//! Only peers at one **depth** group. The regions have to stay laminar for
+//! [`schedule`] to nest them, and a peer inside some other branch that its
+//! fellow is outside of would make a bracket that straddles rather than
+//! nests — so the grouping key is the condition and where the select sits,
+//! and two selects on one wire at different depths are two brackets, which
+//! is what a nested retest should look like anyway.
+//!
+//! The grouping is not only about brackets. [`arms_of`] asked per select
+//! would find work an arm does for two of its answers shared between two
+//! regions and give it to neither, which would lift it out of the arm; it
+//! is asked of the whole branch, so the arms are what they were when a
+//! branch was one box.
 //!
 //! ## What makes 351 boxes legible
 //!
@@ -296,10 +328,8 @@ fn grouping(graph: &Graph) -> HashMap<NodeId, u32> {
         .collect();
     // Every select its own branch, which is what the listing drew before
     // an answer was a box of its own.
-    let mut named: HashMap<NodeId, u32> = selects
-        .iter()
-        .map(|&id| (id, id.index() as u32))
-        .collect();
+    let mut named: HashMap<NodeId, u32> =
+        selects.iter().map(|&id| (id, id.index() as u32)).collect();
     for _ in 0..selects.len() {
         let inside = nesting(graph, &named);
         let mut peers: BTreeMap<(Source, BTreeSet<u32>), Vec<NodeId>> = BTreeMap::new();
@@ -1093,7 +1123,7 @@ fn operands_at_each_use(
 fn census_name(kind: &NodeKind) -> String {
     match kind {
         NodeKind::Call { .. } => "call".to_string(),
-        NodeKind::Select { .. } => "branch".to_string(),
+        NodeKind::Select => "branch".to_string(),
         NodeKind::Op(prim) => {
             let spelled = prim.to_string();
             spelled
@@ -1137,7 +1167,7 @@ impl fmt::Display for Listing<'_> {
         let condition: HashMap<u32, String> = graph
             .live()
             .filter_map(|(id, kind)| match kind {
-                NodeKind::Select { .. } => {
+                NodeKind::Select => {
                     let source = *graph.sources(id).first()?;
                     Some((named[&id], names.source(graph, source)))
                 }
@@ -1160,7 +1190,7 @@ impl fmt::Display for Listing<'_> {
 
         let mut census: BTreeMap<String, usize> = BTreeMap::new();
         for (id, kind) in graph.live() {
-            if shown(id) && !matches!(kind, NodeKind::Select { .. }) {
+            if shown(id) && !matches!(kind, NodeKind::Select) {
                 *census.entry(census_name(kind)).or_default() += 1;
             }
         }
@@ -1232,15 +1262,15 @@ impl fmt::Display for Listing<'_> {
             // own, an `else` its else arm was too empty to trigger — is
             // owed here, at the select's own depth. A select is not inside
             // its own branch, so that is `mine.len()`.
-            if let (Some(branch), NodeKind::Select { .. }) = (ends, kind)
+            if let (Some(branch), NodeKind::Select) = (ends, kind)
                 && !opened.contains(&branch)
             {
                 ahead.push(("if", branch, mine.len()));
             }
             for (word, branch, depth) in ahead {
-                // An empty name column: a branch is one box and that box
-                // is its `endif`, so an `if` and an `else` are lines the
-                // listing draws rather than boxes it prints.
+                // An empty name column: a branch's `endif`s are its
+                // selects, so an `if` and an `else` are lines the listing
+                // draws rather than boxes it prints.
                 writeln!(
                     f,
                     "{:<margin$}{}{} {}",
@@ -1260,7 +1290,7 @@ impl fmt::Display for Listing<'_> {
                 // A select is the block it closes: what a reader wants from
                 // it is where the arms end, and `endif` is how a reader
                 // already knows how to read that.
-                NodeKind::Select { .. } => format!(
+                NodeKind::Select => format!(
                     "{}endif {}",
                     indent,
                     ends.and_then(|branch| condition.get(&branch))
@@ -1352,7 +1382,7 @@ mod tests {
         let mut graph = built("branch { push 1 } { push 2 } push 10 add");
         let select = graph
             .live()
-            .find_map(|(id, kind)| matches!(kind, NodeKind::Select { .. }).then_some(id))
+            .find_map(|(id, kind)| matches!(kind, NodeKind::Select).then_some(id))
             .expect("the body branches");
         let step = propose(&graph, &[Law::SelectHoist], select)
             .pop()
@@ -1746,9 +1776,7 @@ mod tests {
                 // — each its own box, with its own links. The block is
                 // done when the run is, which is the first line that is
                 // not another `endif` of it.
-                let here = word
-                    .starts_with("endif ")
-                    .then(|| (condition(word), depth));
+                let here = word.starts_with("endif ").then(|| (condition(word), depth));
                 if closing.is_some() && closing != here {
                     stack.pop();
                     closing = None;

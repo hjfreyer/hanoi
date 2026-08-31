@@ -579,9 +579,8 @@ pub(crate) fn blocks(side: &Graph) -> Option<(Graph, Graph)> {
     }
     // Input 0 is the condition, 1 the `then` block and 2 the `else` — the
     // wiring [`NodeKind::Select`] states.
-    let block = |which: usize| -> Vec<Source> {
-        selects.iter().map(|&n| side.sources(n)[which]).collect()
-    };
+    let block =
+        |which: usize| -> Vec<Source> { selects.iter().map(|&n| side.sources(n)[which]).collect() };
     let mut then = side.clone();
     then.close(block(1));
     let mut els = side.clone();
