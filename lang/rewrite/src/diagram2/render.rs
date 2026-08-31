@@ -269,30 +269,98 @@ fn reach(graph: &Graph, from: NodeId, forward: bool) -> HashSet<NodeId> {
     seen
 }
 
+/// Which `select`s a listing draws as **one branch**.
+///
+/// A branch is a select per answer, so the box a source `branch` used to
+/// be is now several, and a reader wants the one bracket back. Peers on
+/// one condition are that bracket — but only where they sit at one depth:
+/// the regions a listing draws have to be laminar for [`schedule`] to nest
+/// them, and a peer inside some other branch that its fellow is outside of
+/// would make a bracket that straddles rather than nests.
+///
+/// So the key is the condition **and** where the select sits, which is
+/// what [`nesting`] answers — and that answer is read in the grouping this
+/// is computing. The two are found together, coarsest-first: every select
+/// alone, then the nesting that follows, then the peers that agree under
+/// it, until nothing more merges. Merging only ever makes a nesting
+/// coarser, so the rounds are monotone and the fixpoint is reached in at
+/// most one round per select.
+///
+/// A group is named by its least member, which is a name like any other:
+/// it keys one listing and is never written down.
+fn grouping(graph: &Graph) -> HashMap<NodeId, u32> {
+    let selects: Vec<NodeId> = graph
+        .live()
+        .filter(|(_, kind)| matches!(kind, NodeKind::Select))
+        .map(|(id, _)| id)
+        .collect();
+    // Every select its own branch, which is what the listing drew before
+    // an answer was a box of its own.
+    let mut named: HashMap<NodeId, u32> = selects
+        .iter()
+        .map(|&id| (id, id.index() as u32))
+        .collect();
+    for _ in 0..selects.len() {
+        let inside = nesting(graph, &named);
+        let mut peers: BTreeMap<(Source, BTreeSet<u32>), Vec<NodeId>> = BTreeMap::new();
+        for &id in &selects {
+            let key = (
+                graph.sources(id)[0],
+                inside.get(&id).cloned().unwrap_or_default(),
+            );
+            peers.entry(key).or_default().push(id);
+        }
+        let mut merged: HashMap<NodeId, u32> = HashMap::new();
+        for members in peers.values() {
+            let name = members
+                .iter()
+                .map(|id| id.index() as u32)
+                .min()
+                .expect("a group has a member");
+            for &id in members {
+                merged.insert(id, name);
+            }
+        }
+        if merged == named {
+            return named;
+        }
+        named = merged;
+    }
+    named
+}
+
+/// The `select`s of each branch a listing draws, by that branch's name.
+fn members(named: &HashMap<NodeId, u32>) -> BTreeMap<u32, Vec<NodeId>> {
+    let mut out: BTreeMap<u32, Vec<NodeId>> = BTreeMap::new();
+    for (&id, &branch) in named {
+        out.entry(branch).or_default().push(id);
+    }
+    for held in out.values_mut() {
+        held.sort_unstable();
+    }
+    out
+}
+
 /// Which branches each box lies inside.
 ///
-/// A branch is named by its `select`, which is the whole of what a branch
-/// is, and a box is inside it when [`arms_of`] finds it: upstream of the
-/// select's blocks, not upstream of its condition, and read by nothing
-/// outside the region. The select is not inside itself; a listing draws it
-/// as the bracket it is.
+/// A branch is named by the `select`s that are it — one per answer, which
+/// [`grouping`] is what collects — and a box is inside it when [`arms_of`]
+/// finds it: upstream of those selects' blocks, not upstream of the
+/// condition they share, and read by nothing outside the region. A select
+/// is not inside its own branch; a listing draws it as the bracket it is.
 ///
 /// A box that reads nothing belongs to no branch by that test and still
 /// *belongs* to the arm that reads it — a `push` is an operand, and the arm
 /// is where a reader looks for it. Such a box goes where everything reading
 /// it agrees it is: the intersection of its readers' branches, to fixpoint,
 /// so a constant feeding a constant follows along.
-fn nesting(graph: &Graph) -> HashMap<NodeId, BTreeSet<u32>> {
-    let selects: Vec<NodeId> = graph
-        .live()
-        .filter(|(_, kind)| matches!(kind, NodeKind::Select { .. }))
-        .map(|(id, _)| id)
-        .collect();
+fn nesting(graph: &Graph, named: &HashMap<NodeId, u32>) -> HashMap<NodeId, BTreeSet<u32>> {
+    let held = members(named);
     let mut inside: HashMap<NodeId, BTreeSet<u32>> = HashMap::new();
-    for &select in &selects {
-        for node in arms_of(graph, select) {
-            if node != select {
-                inside.entry(node).or_default().insert(name_of(select));
+    for (&branch, selects) in &held {
+        for node in arms_of(graph, selects) {
+            if !selects.contains(&node) {
+                inside.entry(node).or_default().insert(branch);
             }
         }
     }
@@ -331,25 +399,30 @@ fn nesting(graph: &Graph) -> HashMap<NodeId, BTreeSet<u32>> {
         }
     }
 
-    // A branch nested inside another is wholly inside it: its select is, so
-    // its arms are too. Each branch above was asked on its own, which
+    // A branch nested inside another is wholly inside it: its selects are,
+    // so its arms are too. Each branch above was asked on its own, which
     // leaves its arms knowing their own branch and no other. This is where
     // they learn the rest, and it is what makes the depth a box is drawn at
     // agree with the depth its brackets open at.
     loop {
         let mut moved = false;
-        for &select in &selects {
-            let branch = name_of(select);
-            let outer = inside.get(&select).cloned().unwrap_or_default();
+        for (&branch, selects) in &held {
+            // Every select of one branch sits in the same branches — that
+            // is what [`grouping`] keyed on — so any of them says where.
+            let outer = selects
+                .first()
+                .and_then(|id| inside.get(id))
+                .cloned()
+                .unwrap_or_default();
             if outer.is_empty() {
                 continue;
             }
-            let held: Vec<NodeId> = inside
+            let owned: Vec<NodeId> = inside
                 .iter()
                 .filter(|(_, mine)| mine.contains(&branch))
                 .map(|(&id, _)| id)
                 .collect();
-            for id in held {
+            for id in owned {
                 let mine = inside.get_mut(&id).expect("it was just listed");
                 for enclosing in &outer {
                     moved |= mine.insert(*enclosing);
@@ -363,34 +436,34 @@ fn nesting(graph: &Graph) -> HashMap<NodeId, BTreeSet<u32>> {
     inside
 }
 
-/// How a branch is named in a nesting: by the id of the `select` that is
-/// it.
-fn name_of(select: NodeId) -> u32 {
-    select.index() as u32
-}
-
-/// The arms of a branch: what feeds the select's arm ports and nothing
+/// The arms of a branch: what feeds its selects' block ports and nothing
 /// else.
 ///
 /// Nothing marks an arm's boxes as the arm's own, so the question is asked
-/// from the select. Start from everything upstream of the arm ports, drop
+/// from the selects. Start from everything upstream of their blocks, drop
 /// what is also upstream of the condition — that is shared context,
 /// computed before the branch was ever reached — and then shrink to a
 /// fixpoint by dropping any box something outside the region reads, because
 /// a box two regions share belongs to neither.
-fn arms_of(graph: &Graph, select: NodeId) -> HashSet<NodeId> {
+///
+/// Asked of the whole branch at once, which is what keeps a listing's arms
+/// what they were when a branch was one box: work an arm does for two of
+/// its answers is read from inside the region either way, where asking
+/// each select on its own would find it shared between two regions and give
+/// it to neither.
+fn arms_of(graph: &Graph, selects: &[NodeId]) -> HashSet<NodeId> {
     let upstream = |source: &Source| match *source {
         Source::Port { node, .. } => reach(graph, node, false),
         Source::Input(_) => HashSet::new(),
     };
-    let sources = graph.sources(select);
-    let Some((condition, arms)) = sources.split_first() else {
+    let Some(&first) = selects.first() else {
         return HashSet::new();
     };
-    let shared = upstream(condition);
-    let mut region: HashSet<NodeId> = arms
+    let shared = upstream(&graph.sources(first)[0]);
+    let mut region: HashSet<NodeId> = selects
         .iter()
-        .flat_map(upstream)
+        .flat_map(|&select| graph.sources(select)[1..].to_vec())
+        .flat_map(|source| upstream(&source))
         .filter(|node| !shared.contains(node))
         .collect();
     loop {
@@ -404,7 +477,9 @@ fn arms_of(graph: &Graph, select: NodeId) -> HashSet<NodeId> {
                         .iter()
                         .any(|sink| match sink {
                             Sink::Output(_) => true,
-                            Sink::Port { node, .. } => *node != select && !region.contains(node),
+                            Sink::Port { node, .. } => {
+                                !selects.contains(node) && !region.contains(node)
+                            }
                         })
                 })
             })
@@ -444,6 +519,7 @@ fn arms_of(graph: &Graph, select: NodeId) -> HashSet<NodeId> {
 /// pass settles it and what is left is the clean split the listing draws.
 fn arms(
     graph: &Graph,
+    named: &HashMap<NodeId, u32>,
     inside: &mut HashMap<NodeId, BTreeSet<u32>>,
 ) -> HashMap<(NodeId, u32), bool> {
     let mut region: HashMap<u32, HashSet<NodeId>> = HashMap::new();
@@ -454,17 +530,21 @@ fn arms(
     }
     let mut out: HashMap<(NodeId, u32), bool> = HashMap::new();
     let mut shared: Vec<(NodeId, u32)> = Vec::new();
-    for (select, kind) in graph.live() {
-        let NodeKind::Select = kind else {
-            continue;
-        };
-        let branch = name_of(select);
+    for (branch, selects) in members(named) {
         let Some(mine) = region.get(&branch) else {
             continue;
         };
-        let sources = graph.sources(select).to_vec();
-        for (blocks, side) in [(&sources[1..2], true), (&sources[2..3], false)] {
-            let mut todo: Vec<Source> = blocks.to_vec();
+        // Every answer's then block, then every answer's else block: the
+        // branch's two sides are the two block ports over all of its
+        // selects.
+        let block = |which: usize| -> Vec<Source> {
+            selects
+                .iter()
+                .map(|&select| graph.sources(select)[which])
+                .collect()
+        };
+        for (blocks, side) in [(block(1), true), (block(2), false)] {
+            let mut todo: Vec<Source> = blocks.clone();
             let mut seen: HashSet<NodeId> = HashSet::new();
             while let Some(source) = todo.pop() {
                 let Source::Port { node, .. } = source else {
@@ -1032,8 +1112,9 @@ impl fmt::Display for Listing<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let graph = self.graph;
         let names = Names::of(graph, self.bold);
-        let mut inside = nesting(graph);
-        let arms = arms(graph, &mut inside);
+        let named = grouping(graph);
+        let mut inside = nesting(graph, &named);
+        let arms = arms(graph, &named, &mut inside);
         let written = schedule(graph, &inside, &arms);
         let shown = |_id: NodeId| true;
 
@@ -1058,7 +1139,7 @@ impl fmt::Display for Listing<'_> {
             .filter_map(|(id, kind)| match kind {
                 NodeKind::Select { .. } => {
                     let source = *graph.sources(id).first()?;
-                    Some((name_of(id), names.source(graph, source)))
+                    Some((named[&id], names.source(graph, source)))
                 }
                 _ => None,
             })
@@ -1091,11 +1172,10 @@ impl fmt::Display for Listing<'_> {
             .map(|(name, n)| format!("{}×{}", n, name))
             .collect();
 
-        // Counted by the select, which is the whole of what a branch is.
-        let branches = graph
-            .live()
-            .filter(|(_, kind)| matches!(kind, NodeKind::Select { .. }))
-            .count();
+        // Counted by the **branch**, not by the select: an answer apiece
+        // is what a `branch` builds, and a reader counting brackets on the
+        // page should get the same number back.
+        let branches = named.values().collect::<HashSet<_>>().len();
         let boxes = graph.live().filter(|&(id, _)| shown(id)).count();
         let arity = graph.arity();
         writeln!(
@@ -1134,7 +1214,7 @@ impl fmt::Display for Listing<'_> {
             // and that is its place in this box's chain: the box is drawn
             // at `mine.len()`, and a branch `mine[k]` holds it from `k`.
             let ends = match kind {
-                NodeKind::Select { .. } => Some(name_of(id)),
+                NodeKind::Select => Some(named[&id]),
                 _ => None,
             };
             let mut ahead: Vec<(&str, u32, usize)> = Vec::new();
@@ -1404,8 +1484,9 @@ mod tests {
     #[test]
     fn a_box_is_listed_after_what_it_reads() {
         let graph = built("push 1 pick 0 add branch { push 3 } { push 4 }");
-        let mut inside = nesting(&graph);
-        let arms = arms(&graph, &mut inside);
+        let named = grouping(&graph);
+        let mut inside = nesting(&graph, &named);
+        let arms = arms(&graph, &named, &mut inside);
         let written = schedule(&graph, &inside, &arms);
         let mut placed: HashSet<NodeId> = HashSet::new();
         for printing in &written {
@@ -1436,8 +1517,9 @@ mod tests {
     #[test]
     fn an_operand_both_arms_read_is_in_neither() {
         let (graph, shared) = grown();
-        let mut inside = nesting(&graph);
-        let arms = arms(&graph, &mut inside);
+        let named = grouping(&graph);
+        let mut inside = nesting(&graph, &named);
+        let arms = arms(&graph, &named, &mut inside);
         assert!(
             inside.get(&shared).is_none_or(|mine| mine.is_empty()),
             "{} is drawn inside a branch its two arms share it:\n{}",
@@ -1570,14 +1652,21 @@ mod tests {
             "pick 0 is_tuple 2 branch { untuple 2 is_symbol swap drop 0 } { drop 0 push false }",
             "pick 0 push 1 equal branch { pick 0 is_bool branch { not } { negate } } { negate }",
             "push 1 pick 1 branch { add } { add }",
+            // Branches leaving more than one answer, which is more than one
+            // `select`: the listing has to draw one bracket over the lot.
+            "branch { push 1 push 3 } { push 2 push 4 }",
+            "branch { pick 0 not } { pick 0 negate }",
+            "branch { branch { push 1 push 2 } { push 3 push 4 } } { drop 0 push 5 push 6 }",
         ];
-        let mut ever_nested = false;
+        let (mut ever_nested, mut ever_grouped) = (false, false);
         for body in bodies {
             let graph = built(body);
-            let mut inside = nesting(&graph);
-            let arms = arms(&graph, &mut inside);
+            let named = grouping(&graph);
+            let mut inside = nesting(&graph, &named);
+            let arms = arms(&graph, &named, &mut inside);
             let written = schedule(&graph, &inside, &arms);
             ever_nested |= inside.values().any(|mine| mine.len() > 1);
+            ever_grouped |= named.values().collect::<HashSet<_>>().len() < named.len();
 
             let once: HashSet<NodeId> = written.iter().map(|p| p.id).collect();
             assert_eq!(
@@ -1616,8 +1705,9 @@ mod tests {
                 let lo = *held.first().expect("a line");
                 let hi = *held.last().expect("a line");
                 for (i, printing) in written.iter().enumerate().take(hi + 1).skip(lo) {
-                    let ends = matches!(graph.kind(printing.id), NodeKind::Select { .. })
-                        && name_of(printing.id) == *branch;
+                    // A branch's own selects are its ends, and there is
+                    // one per answer.
+                    let ends = named.get(&printing.id) == Some(branch);
                     assert!(
                         held.contains(&i) || ends,
                         "{}: {} sits inside branch #{}, which is not its own:\n{}",
@@ -1634,6 +1724,8 @@ mod tests {
             // between at that same depth.
             let text = listing(&graph, "left").to_string();
             let mut stack: Vec<(String, usize)> = Vec::new();
+            // The `endif` run in progress, if a line just drew one.
+            let mut closing: Option<(String, usize)> = None;
             let mut blocks = 0;
             for line in text.lines() {
                 // Past the name column is the gutter, and past that the
@@ -1649,6 +1741,18 @@ mod tests {
                         .expect("a block names its condition")
                         .to_string()
                 };
+                // A branch leaving several answers ends in several
+                // selects, so one `if` is closed by a **run** of `endif`s
+                // — each its own box, with its own links. The block is
+                // done when the run is, which is the first line that is
+                // not another `endif` of it.
+                let here = word
+                    .starts_with("endif ")
+                    .then(|| (condition(word), depth));
+                if closing.is_some() && closing != here {
+                    stack.pop();
+                    closing = None;
+                }
                 if word.starts_with("if ") {
                     blocks += 1;
                     stack.push((condition(word), depth));
@@ -1660,15 +1764,19 @@ mod tests {
                         body,
                         text
                     );
-                } else if word.starts_with("endif ") {
+                } else if let Some(end) = here {
                     assert_eq!(
-                        stack.pop(),
-                        Some((condition(word), depth)),
+                        stack.last(),
+                        Some(&end),
                         "{}: an `endif` out of turn:\n{}",
                         body,
                         text
                     );
+                    closing = Some(end);
                 }
+            }
+            if closing.take().is_some() {
+                stack.pop();
             }
             assert!(
                 stack.is_empty(),
@@ -1678,10 +1786,7 @@ mod tests {
             );
             assert_eq!(
                 blocks,
-                graph
-                    .live()
-                    .filter(|(_, kind)| matches!(kind, NodeKind::Select { .. }))
-                    .count(),
+                named.values().collect::<HashSet<_>>().len(),
                 "{}: a branch got no block, or got two:\n{}",
                 body,
                 text
@@ -1690,6 +1795,11 @@ mod tests {
         assert!(
             ever_nested,
             "the bodies must actually nest, or this proves nothing"
+        );
+        assert!(
+            ever_grouped,
+            "some body must leave a branch of several answers, or the \
+             grouping is untested"
         );
     }
 }
