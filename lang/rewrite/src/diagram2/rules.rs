@@ -348,6 +348,29 @@ impl Law {
             Law::CoercionGuard,
         ]
     }
+
+    /// Whether this law's payload is a **region** — a piece of the host
+    /// lifted out whole, rather than the widths and kinds every other
+    /// payload is.
+    ///
+    /// Two laws are: [`Law::Shannon`] and [`Law::SelectHoist`], whose
+    /// bodies [`read_off`] builds out of the cone below the box they are
+    /// anchored at. That has a consequence for anything looking for one,
+    /// and it is the reason this is asked. Every other law's window is a
+    /// handful of boxes that are all *the law's own* — either `not` of
+    /// `not ; not` is the pair, and naming either is naming that window.
+    /// A region-carrying law's window is one box the law is about and a
+    /// whole cone it merely carries, so a box in the cone is not a
+    /// second name for the same equation: it is a box some *other*
+    /// branch's equation would carry too. Naming it would say nothing
+    /// about which branch was meant.
+    ///
+    /// So these two are **anchored**: the box a driver names is the box
+    /// the payload is read off, which is what [`propose`] already
+    /// answers.
+    pub fn carries_a_region(self) -> bool {
+        matches!(self, Law::Shannon | Law::SelectHoist)
+    }
 }
 
 impl fmt::Display for Law {
