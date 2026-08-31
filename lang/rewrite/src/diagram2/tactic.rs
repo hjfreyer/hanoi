@@ -1044,7 +1044,7 @@ fn hoistable(graph: &Graph, select: NodeId) -> Option<Lifted> {
             let Sink::Port { node, .. } = sink else {
                 continue;
             };
-            if matches!(graph.kind(node), NodeKind::Select { .. }) || region.contains(&node) {
+            if matches!(graph.kind(node), NodeKind::Select) || region.contains(&node) {
                 continue;
             }
             region.push(node);
@@ -1255,10 +1255,22 @@ pub fn branch_pass() -> Tactic {
 /// instead of its answers, so each copy has strictly fewer branches
 /// above it than the box it came from, and no box outside the body
 /// gains one. A multiset of naturals with one member replaced by
-/// finitely many smaller ones is a decreasing multiset, and nothing
-/// else in the round changes: a select is never copied, so the branches
-/// keep their count, and the branch that fired loses its last reader
-/// and drops out of the program.
+/// finitely many smaller ones is a decreasing multiset, and the branch
+/// that fired loses its last reader and drops out of the program.
+///
+/// **That argument is not complete, and it used to be.** It leaned on
+/// "a select is never copied, so the branches keep their count", which
+/// was true while a select carried every answer: a hoist took one
+/// select to one select, however wide. A select carries one answer now,
+/// so a hoist over a region leaving `m` of them puts down `m` selects
+/// where it found one, and the multiset gains `m - 1` members at the
+/// branch-count of the one it lost rather than below it. Nothing here
+/// is known to diverge — the copies are read only by the selects the
+/// step puts down, and nothing upstream of the branch changes — but the
+/// measure needs restating before that is a proof rather than a
+/// reading. Until it is, what holds the drive is the test: `tree` is
+/// run over bodies with branches in branches, and before is compared
+/// against after **on the machine**, at every assignment.
 ///
 /// The condition phase's measure is the graph read as the term it
 /// unfolds to, weighted so that a condition costs what it decides:
@@ -1531,7 +1543,7 @@ mod tests {
                     .iter()
                     .rev()
                     .copied()
-                    .find(|&n| matches!(graph.kind(n), NodeKind::Select { .. }))
+                    .find(|&n| matches!(graph.kind(n), NodeKind::Select))
             })
             .map(|select| graph.sources(select)[0])
             .expect("the split made a branch");
@@ -1579,7 +1591,7 @@ mod tests {
         let mut graph = built("push true branch { push 1 } { push 2 }");
         let cond = graph
             .live()
-            .find(|(_, k)| matches!(k, NodeKind::Select { .. }))
+            .find(|(_, k)| matches!(k, NodeKind::Select))
             .map(|(id, _)| graph.sources(id)[0])
             .expect("the branch as built");
         assert!(arm_nodes(&graph, cond, true).is_some());
@@ -1788,9 +1800,9 @@ mod tests {
     fn decided_first(graph: &Graph) -> bool {
         graph
             .live()
-            .filter(|(_, kind)| matches!(kind, NodeKind::Select { .. }))
+            .filter(|(_, kind)| matches!(kind, NodeKind::Select))
             .all(|(id, _)| match graph.sources(id)[0] {
-                Source::Port { node, .. } => !matches!(graph.kind(node), NodeKind::Select { .. }),
+                Source::Port { node, .. } => !matches!(graph.kind(node), NodeKind::Select),
                 _ => true,
             })
     }
@@ -1800,7 +1812,7 @@ mod tests {
     fn bunched(graph: &Graph) -> bool {
         graph
             .live()
-            .filter(|(_, kind)| matches!(kind, NodeKind::Select { .. }))
+            .filter(|(_, kind)| matches!(kind, NodeKind::Select))
             .flat_map(|(id, kind)| {
                 (0..kind.arity().outputs).map(move |port| Source::Port { node: id, port })
             })
@@ -1808,7 +1820,7 @@ mod tests {
             .all(|sink| match sink {
                 crate::graph::Sink::Output(_) => true,
                 crate::graph::Sink::Port { node, .. } => {
-                    matches!(graph.kind(node), NodeKind::Select { .. })
+                    matches!(graph.kind(node), NodeKind::Select)
                 }
             })
     }
@@ -1923,10 +1935,7 @@ mod tests {
     #[test]
     fn a_branch_below_is_hoisted_first() {
         let mut graph = Graph::empty(5);
-        let answered = graph.add(
-            NodeKind::Select,
-            (0..3).map(Source::Input).collect(),
-        );
+        let answered = graph.add(NodeKind::Select, (0..3).map(Source::Input).collect());
         let decided = graph.add(NodeKind::Op(Prim::Not), vec![answered[0]]);
         let inner = graph.add(
             NodeKind::Select,
@@ -1940,7 +1949,7 @@ mod tests {
         let select = |graph: &Graph, at: usize| {
             graph
                 .live()
-                .filter(|(_, k)| matches!(k, NodeKind::Select { .. }))
+                .filter(|(_, k)| matches!(k, NodeKind::Select))
                 .map(|(id, _)| id)
                 .nth(at)
                 .expect("a branch")
@@ -2427,11 +2436,7 @@ mod tests {
         let mut again = built("not");
         let record: Vec<_> = deriv.steps().cloned().collect();
         replay(&mut again, &record).unwrap();
-        assert!(
-            again
-                .live()
-                .any(|(_, k)| matches!(k, NodeKind::Select { .. }))
-        );
+        assert!(again.live().any(|(_, k)| matches!(k, NodeKind::Select)));
     }
 
     /// A stated wire fails by name, the discipline `at` keeps: a box

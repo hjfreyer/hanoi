@@ -193,7 +193,14 @@ is a decision tree said in a graph.
 Both phases terminate, and the arguments are in `tactic::tree`: a
 multiset over what the copies read for the hoisting phase, and for the
 condition phase the unfolded term weighted so that a condition costs
-what it decides.
+what it decides. The first of those is **not currently a proof**. It
+leaned on a select never being copied, which held while a select carried
+every answer of its branch; now that it carries one, a hoist over a
+region leaving `m` answers puts down `m` selects where it found one, and
+the multiset gains members rather than only losing them. Nothing is known
+to diverge and the drive is held to the machine by test — `tree` run over
+branches inside branches, before against after at every assignment — but
+the measure wants restating.
 
 The order is the drive's own, and it has to find one: a branch whose body
 reads what a branch **below** it answers cannot go first, since the step
@@ -209,7 +216,8 @@ that wants its cases laid out, not for tidying a large one. It does
 terminate: a hoist replaces each body box with two boxes reading that
 branch's blocks rather than its answers, so each copy has strictly fewer
 branches above it than the box it came from, and a multiset of naturals
-with one member replaced by finitely many smaller ones decreases.
+with one member replaced by finitely many smaller ones decreases — with
+the caveat above about the selects the step itself puts down.
 
 ## The model underneath
 

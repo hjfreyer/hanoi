@@ -87,7 +87,7 @@ fn settled() -> (Context, Goal) {
 fn select(graph: &Graph) -> (Source, Source) {
     let (id, _) = graph
         .live()
-        .find(|(_, kind)| matches!(kind, NodeKind::Select { .. }))
+        .find(|(_, kind)| matches!(kind, NodeKind::Select))
         .expect("the goal is a branch");
     let sources = graph.sources(id);
     (sources[0], sources[1])

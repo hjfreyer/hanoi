@@ -76,7 +76,7 @@ impl KindPat {
             (KindPat::Call(want), NodeKind::Call { target, .. }) => {
                 want.as_ref().is_none_or(|w| w == target)
             }
-            (KindPat::Select, NodeKind::Select { .. }) => true,
+            (KindPat::Select, NodeKind::Select) => true,
             _ => false,
         }
     }
@@ -453,10 +453,7 @@ mod tests {
         let found = eval(&graph, &q);
         assert_eq!(found.len(), 1, "one select, one condition:\n{}", graph);
         let b = &found[0];
-        assert!(matches!(
-            graph.kind(b.node(Var("sel"))),
-            NodeKind::Select { .. }
-        ));
+        assert!(matches!(graph.kind(b.node(Var("sel"))), NodeKind::Select));
         assert!(matches!(
             graph.kind(b.node(Var("lit"))),
             NodeKind::Op(Prim::Push(Value::Bool(true)))
