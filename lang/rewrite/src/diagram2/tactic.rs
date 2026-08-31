@@ -1311,6 +1311,68 @@ mod tests {
         }
     }
 
+    /// A program of literals is the values it computes, and `decide`
+    /// runs it out: a window whose every operand is a `push` lands on the
+    /// pushes of its answer, and there is nothing else left.
+    ///
+    /// `tuple 0` is the row this was widened for. It reads no operand, so
+    /// every operand it reads is a literal — vacuously, which is still
+    /// the side condition — and a driver that wanted a literal behind the
+    /// box to anchor at would never fire it.
+    #[test]
+    fn a_window_of_literals_lands_on_its_answer() {
+        let unit = Value::unit();
+        let pair = |a: Value, b: Value| Value::Tuple(vec![a, b]);
+        for (body, answers) in [
+            ("tuple 0", vec![unit.clone()]),
+            (
+                "push 1 push 2 tuple 2",
+                vec![pair(Value::Int(1), Value::Int(2))],
+            ),
+            // The empty tuple built and then built into another: the fold
+            // reaches the second window once the first has answered.
+            (
+                "push 1 tuple 0 tuple 2",
+                vec![pair(Value::Int(1), unit.clone())],
+            ),
+            // A literal taken apart is its parts — and one that is no
+            // tuple is the `()`s the machine fills the slots with, which
+            // is the machine's junk and not a second opinion.
+            ("push (1, 2) untuple 2", vec![Value::Int(1), Value::Int(2)]),
+            ("push 7 untuple 2", vec![unit.clone(), unit.clone()]),
+            // Round trip and arithmetic behind it: three windows, and
+            // what is left is the number.
+            ("push 3 push 4 tuple 2 untuple 2 add", vec![Value::Int(7)]),
+        ] {
+            let mut graph = built(body);
+            let mut deriv = Derivation::default();
+            run(&mut graph, &mut deriv, &decide()).unwrap_or_else(|e| panic!("{}: {}", body, e));
+            graph
+                .check()
+                .unwrap_or_else(|e| panic!("{}: left a torn graph: {}", body, e));
+            assert!(
+                graph
+                    .live()
+                    .all(|(_, kind)| matches!(kind, NodeKind::Op(Prim::Push(_)))),
+                "{}: an operation survived the fold:\n{}",
+                body,
+                graph
+            );
+            let left: Vec<Value> = graph
+                .outputs()
+                .iter()
+                .map(|src| match src {
+                    Source::Port { node, port } => match graph.kind(*node) {
+                        NodeKind::Op(Prim::Push(v)) if *port == 0 => v.clone(),
+                        kind => panic!("{}: the boundary reads {}:\n{}", body, kind, graph),
+                    },
+                    Source::Input(_) => panic!("{}: a closed graph has no inputs", body),
+                })
+                .collect();
+            assert_eq!(left, answers, "{}: the wrong answer:\n{}", body, graph);
+        }
+    }
+
     /// The directed spelling: fold the literal condition, claiming there
     /// is exactly one.
     ///

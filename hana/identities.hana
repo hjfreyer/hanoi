@@ -482,6 +482,26 @@ identity comparing_two_built_tuples
     { push some_sym push 1 tuple 2 push some_sym push 1 tuple 2 equal }
   = { push true };
 
+// The two halves of that widening, each said on its own.
+//
+// `push a ; push b ; tuple n` = `push (a, b)`: a tuple whose every element is
+// a literal is one, and the fold is what says which. `untuple n` of a literal
+// is the other direction, and it is the same law read at the other box — the
+// window is an operation with literals in front of it either way.
+identity a_tuple_of_literals_is_a_literal
+    { push 1 push 2 tuple 2 } = { push (1, 2) };
+
+identity a_literal_taken_apart_is_its_parts
+    { push (1, 2) untuple 2 } = { push 1 push 2 };
+
+// `tuple 0` = `push ()` — the window with nothing in it.
+//
+// It is the same fold and it needs saying, because "every operand a literal"
+// is a condition a search can read off the operands, and here there are none
+// to read: the box has to be its own anchor. Vacuously true is still true,
+// and the empty tuple is a constant like any other.
+identity the_empty_tuple_is_a_literal { tuple 0 } = { push () };
+
 // `untuple n ; tuple n` = `as_tuple n` — the one direction that is not the
 // identity, and what it is instead.
 //
