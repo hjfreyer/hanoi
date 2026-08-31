@@ -18,7 +18,7 @@ use bytecode::{IdentityIndex, Library, SentenceIndex};
 
 use crate::diagram2;
 use crate::diagram2::rules::{Step, replay};
-use crate::graph::{self, Direction, Graph, Match, NodeKind, Pair, Source};
+use crate::graph::{self, Direction, Graph, Match, NodeId, NodeKind, Pair, Source};
 use crate::term::{Context, Error, TermIndex, lower};
 
 /// Two graphs of one arity, claimed to be the same program.
@@ -540,44 +540,52 @@ pub(crate) fn against(ctx: &mut Context, side: &Graph, waypoint: TermIndex) -> (
 }
 
 /// The two graphs a side that **answers with one branch** is: the same
-/// side reading the `select`'s `then` blocks for its outputs, and the same
-/// side reading its `else` blocks.
+/// side reading the `select`s' `then` blocks for its outputs, and the same
+/// side reading their `else` blocks.
 ///
-/// `None` when the side's answer is not one `select` — every boundary
-/// output has to be that box's own output port, in order, which is what
-/// "the last box is a `select`" means. A side answering with a branch and
-/// something else besides is two answers, and the law has nothing to say
-/// about it.
+/// A branch is a `select` per answer, so a side answering with one is a
+/// `select` per boundary output, every one of them turning on the same
+/// wire. That is what this asks for, and `None` where it does not hold: an
+/// output that is not a select's answer, or a select turning on some other
+/// condition, is a side answering with something besides the branch, and
+/// the law has nothing to say about it.
 ///
 /// Nothing is deleted to carve a block out: closing the graph on the
-/// block's sources leaves the condition — and the other block — boxes no
+/// blocks' sources leaves the condition — and the other blocks — boxes no
 /// boundary output reaches, which is the whole of what discarding means
 /// here. Both the prover's `select-same` step and the checker's re-walk of
 /// a [`Proof::SelectSame`] carve their halves here, so the two cannot
 /// disagree about what the split meant.
 pub(crate) fn blocks(side: &Graph) -> Option<(Graph, Graph)> {
-    let outputs = side.outputs();
-    let &Source::Port { node, port: 0 } = outputs.first()? else {
-        return None;
-    };
-    let NodeKind::Select { arity } = *side.kind(node) else {
-        return None;
-    };
-    let whole = outputs.len() == arity
-        && outputs
-            .iter()
-            .enumerate()
-            .all(|(i, &src)| src == Source::Port { node, port: i });
-    if !whole {
+    let outputs = side.outputs().to_vec();
+    if outputs.is_empty() {
         return None;
     }
-    // Input 0 is the condition, `1..=n` the `then` blocks, `n+1..=2n` the
-    // `else` blocks — the wiring [`NodeKind::Select`] states.
-    let takes = side.sources(node).to_vec();
+    let mut selects: Vec<NodeId> = Vec::with_capacity(outputs.len());
+    let mut cond: Option<Source> = None;
+    for out in outputs {
+        let Source::Port { node, port: 0 } = out else {
+            return None;
+        };
+        if !matches!(side.kind(node), NodeKind::Select) {
+            return None;
+        }
+        // One branch, not several: every answer turns on the one wire.
+        let turns_on = side.sources(node)[0];
+        if *cond.get_or_insert(turns_on) != turns_on {
+            return None;
+        }
+        selects.push(node);
+    }
+    // Input 0 is the condition, 1 the `then` block and 2 the `else` — the
+    // wiring [`NodeKind::Select`] states.
+    let block = |which: usize| -> Vec<Source> {
+        selects.iter().map(|&n| side.sources(n)[which]).collect()
+    };
     let mut then = side.clone();
-    then.close(takes[1..=arity].to_vec());
+    then.close(block(1));
     let mut els = side.clone();
-    els.close(takes[arity + 1..].to_vec());
+    els.close(block(2));
     Some((then, els))
 }
 

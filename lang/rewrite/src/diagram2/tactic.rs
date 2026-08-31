@@ -770,9 +770,9 @@ impl Runner<'_> {
                 let id = b
                     .get(*anchor)
                     .ok_or(TacticError::Unresolved { var: *anchor })?;
-                let NodeKind::Select { arity } = *self.graph.kind(id) else {
+                if !matches!(self.graph.kind(id), NodeKind::Select) {
                     return Ok(Vec::new());
-                };
+                }
                 let Some(body) = hoistable(self.graph, id) else {
                     return Ok(Vec::new());
                 };
@@ -789,10 +789,7 @@ impl Runner<'_> {
                 let mut inputs = self.graph.sources(id).to_vec();
                 inputs.extend(body.outside.iter().copied());
                 Ok(vec![Step {
-                    rule: Rule::SelectHoist {
-                        arity,
-                        body: body.graph,
-                    },
+                    rule: Rule::SelectHoist { body: body.graph },
                     dir: Direction::Forward,
                     at: Match { nodes, inputs },
                 }])
@@ -917,58 +914,63 @@ fn upstream(graph: &Graph, node: NodeId) -> HashSet<NodeId> {
 /// from inside may still hold boxes outside in its match, and soundness is
 /// [`rules::apply`]'s either way.
 pub fn arm_nodes(graph: &Graph, cond: Source, side: bool) -> Option<HashSet<NodeId>> {
-    let select = branch_on(graph, cond)?;
-    let NodeKind::Select { arity } = *graph.kind(select) else {
-        unreachable!("`branch_on` answers with a select");
-    };
-    let sources = graph.sources(select).to_vec();
-    let blocks = if side {
-        &sources[1..1 + arity]
-    } else {
-        &sources[1 + arity..1 + 2 * arity]
-    };
+    let selects = branches_on(graph, cond);
+    if selects.is_empty() {
+        return None;
+    }
+    let block = |select: NodeId| graph.sources(select)[if side { 1 } else { 2 }];
 
     let mut region: HashSet<NodeId> = HashSet::new();
-    for src in blocks {
-        if let Source::Port { node, .. } = *src {
+    for &select in &selects {
+        if let Source::Port { node, .. } = block(select) {
             region.extend(upstream(graph, node));
         }
     }
-    if let Source::Port { node, .. } = sources[0] {
+    if let Source::Port { node, .. } = cond {
         for decided in upstream(graph, node) {
             region.remove(&decided);
         }
     }
 
-    region.insert(select);
+    region.extend(selects);
     Some(region)
 }
 
-/// The branch a wire decides: the live `select` reading `cond` at port 0.
+/// The branches a wire decides: the live `select`s reading `cond` at port
+/// 0, and only the **outermost** of them — the ones no other lies inside.
 ///
-/// A wire may decide more than one — `specialize-choice` is the row that
-/// exists because an arm can retest what the branch around it tested — and
-/// the one wanted is the **outermost**, the branch the others lie inside.
-/// That is the candidate every other candidate is upstream of. Where no
-/// candidate is (two branches on one wire, neither inside the other), the
-/// lowest id settles it, so the answer is a reading rather than a
-/// preference.
-pub fn branch_on(graph: &Graph, cond: Source) -> Option<NodeId> {
-    let mut candidates: Vec<NodeId> = graph
+/// Every answer of one source branch is its own `select`, so a wire decides
+/// as many boxes as the branch left values, and every one of them is the
+/// same branch. That is why this answers with a set rather than a box: an
+/// arm is scoped by the *condition*, and taking one select for it would
+/// scope to one of the answers and leave the rest of the arm outside.
+///
+/// A wire may also decide a branch **inside** one it already decides —
+/// `specialize-choice` is the row that exists because an arm can retest
+/// what the branch around it tested. Those are dropped: a select every
+/// other candidate is upstream of is nested in them, and what an arm means
+/// is the outermost reading. What is left is a set of peers, which is what
+/// one branch comes to.
+pub fn branches_on(graph: &Graph, cond: Source) -> Vec<NodeId> {
+    let candidates: Vec<NodeId> = graph
         .live()
         .filter(|(id, kind)| {
-            matches!(kind, NodeKind::Select { .. }) && graph.sources(*id).first() == Some(&cond)
+            matches!(kind, NodeKind::Select) && graph.sources(*id).first() == Some(&cond)
         })
         .map(|(id, _)| id)
         .collect();
-    candidates.sort_unstable();
-    let outermost = candidates.iter().copied().find(|&here| {
-        let mine = upstream(graph, here);
-        candidates
-            .iter()
-            .all(|&other| other == here || mine.contains(&other))
-    });
-    outermost.or_else(|| candidates.first().copied())
+    // A nested retest is upstream of nothing here and downstream of the
+    // branch that decided it, so it is exactly a candidate some other
+    // candidate reaches.
+    candidates
+        .iter()
+        .copied()
+        .filter(|&here| {
+            !candidates
+                .iter()
+                .any(|&other| other != here && upstream(graph, other).contains(&here))
+        })
+        .collect()
 }
 
 // ---- what a branch may grow over -------------------------------------------------
@@ -1025,12 +1027,13 @@ fn downstream(graph: &Graph, from: &[Source]) -> HashSet<NodeId> {
 ///   downstream, and the cone below a select is finite, so the bottom of
 ///   any chain of blocked branches is a branch nothing blocks.
 fn hoistable(graph: &Graph, select: NodeId) -> Option<Lifted> {
-    let NodeKind::Select { arity } = *graph.kind(select) else {
+    if !matches!(graph.kind(select), NodeKind::Select) {
         return None;
-    };
-    let answers: Vec<Source> = (0..arity)
-        .map(|port| Source::Port { node: select, port })
-        .collect();
+    }
+    let answers = vec![Source::Port {
+        node: select,
+        port: 0,
+    }];
 
     // The region: transitive readers of the answers, with every select
     // left standing and not read through.
@@ -1835,10 +1838,13 @@ mod tests {
             ),
             // A branch whose answer two boxes read, one of them the
             // condition of the branch after it — so the second branch
-            // splits under the first, which is three where two stood.
+            // splits under the first. **Five**, where a wider select left
+            // four: the region the first branch grows over leaves two
+            // answers, and a branch is a select per answer, so what comes
+            // down is two selects rather than one two-wide one.
             (
                 "pick 0 branch { not } { as_bool } pick 0 is_bool branch { negate } { not }",
-                4,
+                5,
             ),
         ] {
             let mut graph = built(body);
@@ -1861,13 +1867,26 @@ mod tests {
             assert_eq!(
                 graph
                     .live()
-                    .filter(|(_, k)| matches!(k, NodeKind::Select { .. }))
+                    .filter(|(_, k)| matches!(k, NodeKind::Select))
                     .count(),
                 selects,
                 "{}: a select was copied or lost:\n{}",
                 body,
                 graph
             );
+            // What the count cannot say: that the tree is the same program.
+            // The rows the drive spends are held to the machine one at a
+            // time in [`rules`], and this is the drive as a whole held to
+            // it — every assignment, before against after.
+            for values in rules::tests::samples(graph.arity().inputs) {
+                assert_eq!(
+                    rules::tests::eval_on(&before, &values),
+                    rules::tests::eval_on(&graph, &values),
+                    "{}: the tree is a different program on {:?}",
+                    body,
+                    values
+                );
+            }
             // Every step of it is a checked instance of the table, and
             // the run is a derivation like any other.
             let mut again = before;
@@ -1905,17 +1924,18 @@ mod tests {
     fn a_branch_below_is_hoisted_first() {
         let mut graph = Graph::empty(5);
         let answered = graph.add(
-            NodeKind::Select { arity: 1 },
+            NodeKind::Select,
             (0..3).map(Source::Input).collect(),
         );
         let decided = graph.add(NodeKind::Op(Prim::Not), vec![answered[0]]);
         let inner = graph.add(
-            NodeKind::Select { arity: 1 },
+            NodeKind::Select,
             vec![decided[0], Source::Input(3), Source::Input(4)],
         );
         let summed = graph.add(NodeKind::Op(Prim::Add), vec![answered[0], inner[0]]);
         graph.close(summed);
         graph.check().unwrap();
+        let before = graph.clone();
 
         let select = |graph: &Graph, at: usize| {
             graph
@@ -1938,18 +1958,29 @@ mod tests {
         graph.check().unwrap();
         assert!(bunched(&graph), "\n{}", graph);
         assert!(decided_first(&graph), "\n{}", graph);
-        // Four: `S` grew over the `not` and the `add`, and `T` — which
-        // turns on what that `not` now answers, an answer of `S` — split
-        // in two underneath it.
+        // Five: the region `S` grew over — the `not` and the `add` —
+        // leaves two answers, and a branch is a select per answer, so two
+        // came down where a two-wide select was one; `T` split in two
+        // underneath, and `S` itself is the fifth.
         assert_eq!(
             graph
                 .live()
-                .filter(|(_, k)| matches!(k, NodeKind::Select { .. }))
+                .filter(|(_, k)| matches!(k, NodeKind::Select))
                 .count(),
-            4,
+            5,
             "\n{}",
             graph
         );
+        // And it is the same program, which is what the count stands in
+        // for: the sorted branches answer what the nested ones did.
+        for values in rules::tests::samples(5) {
+            assert_eq!(
+                rules::tests::eval_on(&before, &values),
+                rules::tests::eval_on(&graph, &values),
+                "the sorted branches are a different program on {:?}",
+                values
+            );
+        }
     }
 
     /// The one address that is a **name** rather than a description, and
@@ -2361,7 +2392,7 @@ mod tests {
             "\n{}",
             graph
         );
-        let branch = only(&NodeKind::Select { arity: 1 });
+        let branch = only(&NodeKind::Select);
         assert_eq!(
             graph.sources(branch),
             [

@@ -455,7 +455,7 @@ fn arms(
     let mut out: HashMap<(NodeId, u32), bool> = HashMap::new();
     let mut shared: Vec<(NodeId, u32)> = Vec::new();
     for (select, kind) in graph.live() {
-        let NodeKind::Select { arity } = kind else {
+        let NodeKind::Select = kind else {
             continue;
         };
         let branch = name_of(select);
@@ -463,7 +463,7 @@ fn arms(
             continue;
         };
         let sources = graph.sources(select).to_vec();
-        for (blocks, side) in [(&sources[1..=*arity], true), (&sources[1 + arity..], false)] {
+        for (blocks, side) in [(&sources[1..2], true), (&sources[2..3], false)] {
             let mut todo: Vec<Source> = blocks.to_vec();
             let mut seen: HashSet<NodeId> = HashSet::new();
             while let Some(source) = todo.pop() {
@@ -1202,12 +1202,10 @@ impl fmt::Display for Listing<'_> {
             // already said so, so what is left for this column is what it
             // does with the rest: the two blocks it chooses between.
             let reads = match kind {
-                NodeKind::Select { arity } if sources.len() > 1 => format!(
-                    "then {}  else {}",
-                    sources[1..=*arity].join(" "),
-                    sources[1 + arity..].join(" ")
-                ),
-                NodeKind::Select { .. } => String::new(),
+                NodeKind::Select if sources.len() > 1 => {
+                    format!("then {}  else {}", sources[1], sources[2])
+                }
+                NodeKind::Select => String::new(),
                 _ if sources.is_empty() => String::new(),
                 _ => format!("← {}", sources.join(" ")),
             };

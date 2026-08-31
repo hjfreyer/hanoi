@@ -238,11 +238,7 @@ pub(super) fn eval_graph(m: &mut Meaning, graph: &Graph, inputs: &[SymId]) -> Ve
             NodeKind::Call { target, arity } => {
                 m.apply(format!("call {:?}", target), args, arity.outputs)
             }
-            NodeKind::Select { arity: n } => {
-                let cond = args[0];
-                let (taken, not) = (&args[1..=*n], &args[n + 1..=2 * n]);
-                m.choose(cond, taken, not)
-            }
+            NodeKind::Select => m.choose(args[0], &args[1..2], &args[2..3]),
         };
         for (port, sym) in outs.into_iter().enumerate() {
             ports.insert((id, port), sym);

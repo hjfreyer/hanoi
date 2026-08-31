@@ -462,7 +462,7 @@ pub enum Rule {
     /// The row that `branch { A } { A } = drop-top ; A` comes to: the two
     /// arms' boxes are one by interning, and a condition nothing else
     /// reads drops out of the program with the select.
-    SelectSame { arity: usize, at: usize },
+    SelectSame,
     /// β: a literal condition is the blocks it chooses. Sound on **every**
     /// value and not only on booleans, because `truthy` is total: `false`
     /// is the one falsy value and everything else takes the then block.
@@ -477,7 +477,6 @@ pub enum Rule {
     /// not stand for a port inside the window.
     SelectLiteral {
         value: Value,
-        arity: usize,
         lit_blocks: Vec<usize>,
     },
     /// A negated condition is the branch with its arms the other way
@@ -496,7 +495,7 @@ pub enum Rule {
     ///
     /// `arity` is the select's width: every block moves, since the branch
     /// decided every one of them the other way.
-    NotBranch { arity: usize },
+    NotBranch,
     /// A branch that answers with one operand of its own `equal` where the
     /// test held and the other where it did not is answering with the
     /// second, whatever the test said:
@@ -524,11 +523,7 @@ pub enum Rule {
     /// the other. Both readings are the same row, because `equal` reads
     /// its operands the same way round: the mirror shape
     /// `select(equal(x, y), x, y)` is `y`.
-    SpecializeEqual {
-        arity: usize,
-        at: usize,
-        answered: Side,
-    },
+    SpecializeEqual { answered: Side },
     /// The very value a branch tested, when it is a **bool**, is what the
     /// branch decided: `true` in the then block, `false` in the else block.
     /// A truthy bool is `true` and a falsy one is `false` — there is
@@ -544,7 +539,7 @@ pub enum Rule {
     ///
     /// `at` is the select's block, counted over the whole `2n`; `at <
     /// arity` is the then side, and so decides which literal this folds to.
-    SpecializeBool { arity: usize, at: usize },
+    SpecializeBool { then: bool },
     /// A branch **inside an arm** whose condition is the very value the
     /// outer branch tested is already decided: its then blocks in the outer
     /// then arm, its else blocks in the outer else arm — the same value
@@ -561,12 +556,7 @@ pub enum Rule {
     /// outer branch this is about; `moves` pairs an inner output with the
     /// outer block that reads it (over `m` and `2n`), every pair on the
     /// side `side` says.
-    SpecializeChoice {
-        arity: usize,
-        inner: usize,
-        side: bool,
-        moves: Vec<(usize, usize)>,
-    },
+    SpecializeChoice { side: bool },
     /// Case analysis, as an equation: a wire the instruction set promises
     /// is a bool is `true` or it is `false` — there is no third case — so
     /// everything downstream of it equals a branch holding one copy per
@@ -639,7 +629,7 @@ pub enum Rule {
     ///
     /// Like [`Rule::Shannon`] and the two unpackings, it **grows** a
     /// graph, so no list drives it and a proof names where to spend it.
-    SelectHoist { arity: usize, body: Graph },
+    SelectHoist { body: Graph },
     /// The same conversion at the one port [`Rule::SelectHoist`] cannot
     /// reach without carrying the branch it moves: the **condition**.
     ///
@@ -675,11 +665,7 @@ pub enum Rule {
     /// one select and nothing else. Like its sibling it **grows** a graph
     /// — two boxes become three — so no list drives it and a proof names
     /// where to spend it.
-    CondHoist {
-        inner: usize,
-        port: usize,
-        outer: usize,
-    },
+    CondHoist,
 
     // ---- the value layer ----
     /// An operation on literal operands is the answer the machine gives:
@@ -888,15 +874,15 @@ impl Rule {
             Rule::TupleCancel { .. } => Law::TupleCancel,
             Rule::AsTupleBuilt { .. } => Law::AsTupleBuilt,
             Rule::EqualRefl => Law::EqualRefl,
-            Rule::SelectSame { .. } => Law::SelectSame,
+            Rule::SelectSame => Law::SelectSame,
             Rule::SelectLiteral { .. } => Law::SelectLiteral,
-            Rule::NotBranch { .. } => Law::NotBranch,
+            Rule::NotBranch => Law::NotBranch,
             Rule::SpecializeEqual { .. } => Law::SpecializeEqual,
             Rule::SpecializeBool { .. } => Law::SpecializeBool,
             Rule::SpecializeChoice { .. } => Law::SpecializeChoice,
             Rule::Shannon { .. } => Law::Shannon,
             Rule::SelectHoist { .. } => Law::SelectHoist,
-            Rule::CondHoist { .. } => Law::CondHoist,
+            Rule::CondHoist => Law::CondHoist,
             Rule::Fold { .. } => Law::Fold,
             Rule::PromisedBool { .. } => Law::PromisedBool,
             Rule::TestedBool { .. } => Law::TestedBool,
@@ -1226,172 +1212,101 @@ pub fn sides(rule: &Rule) -> Result<Pair, Error> {
         }
 
         // ---- the branch layer ----
-        Rule::SelectSame { arity, at } => {
-            let (n, j) = (*arity, *at);
-            if j >= n {
-                return Err(ill(Ill::Refused));
-            }
-            // `2n` boundary inputs, not `2n + 1`: the block both sides answer
+        Rule::SelectSame => {
+            // Two boundary inputs, not three: the block both sides answer
             // with is **one** input, read twice, and it has to be one in the
-            // pattern itself. A match that merely pointed two of the pattern's
-            // inputs at one host source would be matching a graph that does
-            // not state the equation.
-            let shared = Source::Input(1 + j);
-            let then = |i: usize| Source::Input(1 + i);
-            let els = |i: usize| {
-                if i == j {
-                    shared
-                } else {
-                    Source::Input(n + 1 + if i < j { i } else { i - 1 })
-                }
-            };
+            // pattern itself. A match that merely pointed two of the
+            // pattern's inputs at one host source would be matching a graph
+            // that does not state the equation.
+            let mut both = Graph::empty(2);
+            let answer = both.add(
+                NodeKind::Select,
+                vec![Source::Input(0), Source::Input(1), Source::Input(1)],
+            );
+            both.close(answer);
 
-            let mut both = Graph::empty(2 * n);
-            let mut takes = vec![Source::Input(0)];
-            takes.extend((0..n).map(then));
-            takes.extend((0..n).map(els));
-            let answers = both.add(NodeKind::Select { arity: n }, takes);
-            both.close(answers);
+            // A branch answering one thing either way is not a branch, and
+            // the answer side holds no box at all: the block itself is what
+            // the equation comes to. The condition loses its one reader with
+            // the select, and a box the boundary no longer reaches is not
+            // part of the program.
+            let mut alone = Graph::empty(2);
+            alone.close(vec![Source::Input(1)]);
 
-            let mut fewer = Graph::empty(2 * n);
-            // A branch that answers nothing is not a branch. Narrowing the
-            // last block away leaves the block itself and no box at all —
-            // and it has to leave no box, because a box with no output
-            // ports is a value nothing can name.
-            let kept = if n == 1 {
-                Vec::new()
-            } else {
-                let mut takes = vec![Source::Input(0)];
-                takes.extend((0..n).filter(|&i| i != j).map(then));
-                takes.extend((0..n).filter(|&i| i != j).map(els));
-                fewer.add(NodeKind::Select { arity: n - 1 }, takes)
-            };
-            let mut answers = Vec::with_capacity(n);
-            let mut next = 0;
-            for i in 0..n {
-                if i == j {
-                    answers.push(shared);
-                } else {
-                    answers.push(kept[next]);
-                    next += 1;
-                }
-            }
-            fewer.close(answers);
-
-            (both, fewer)
+            (both, alone)
         }
-        Rule::SelectLiteral {
-            value,
-            arity,
-            lit_blocks,
-        } => {
-            let n = *arity;
+
+        Rule::SelectLiteral { value, lit_blocks } => {
             let mut named = lit_blocks.clone();
             named.sort_unstable();
             named.dedup();
-            if n == 0 || named.len() != lit_blocks.len() || named.iter().any(|&b| b >= 2 * n) {
+            if named.len() != lit_blocks.len() || named.iter().any(|&b| b >= 2) {
                 return Err(ill(Ill::Refused));
             }
-            let width = 2 * n - lit_blocks.len();
-            let outside: Vec<usize> = (0..2 * n).filter(|b| !named.contains(b)).collect();
-            let source = |lit: Source, b: usize| {
-                if named.contains(&b) {
-                    lit
-                } else {
-                    let idx = outside.iter().position(|&o| o == b).expect("one or other");
-                    Source::Input(idx)
-                }
+            let width = 2 - lit_blocks.len();
+            let outside: Vec<usize> = (0..2).filter(|b| !named.contains(b)).collect();
+            let placed = |b: usize| {
+                let idx = outside.iter().position(|&o| o == b).expect("one or other");
+                Source::Input(idx)
             };
 
             let mut both = Graph::empty(width);
             let lit = both.add(NodeKind::Op(Prim::Push(value.clone())), Vec::new())[0];
-            let mut takes = vec![lit];
-            takes.extend((0..2 * n).map(|b| source(lit, b)));
-            let out = both.add(NodeKind::Select { arity: n }, takes);
-            both.close(out);
-
-            // The literal survives on the answer side only where a chosen
-            // block reads it; interning makes asking for it twice asking
-            // for the one box.
-            let taken = value.truthy();
-            let mut chosen = Graph::empty(width);
-            let out: Vec<Source> = (0..n)
-                .map(|j| {
-                    let b = if taken { j } else { n + j };
-                    if named.contains(&b) {
-                        chosen.add(NodeKind::Op(Prim::Push(value.clone())), Vec::new())[0]
-                    } else {
-                        let idx = outside.iter().position(|&o| o == b).expect("one or other");
-                        Source::Input(idx)
-                    }
-                })
+            let blocks: Vec<Source> = (0..2)
+                .map(|b| if named.contains(&b) { lit } else { placed(b) })
                 .collect();
-            chosen.close(out);
+            let answer = both.add(NodeKind::Select, vec![lit, blocks[0], blocks[1]]);
+            both.close(answer);
+
+            // The literal survives on the answer side only where the chosen
+            // block reads it; interning makes asking for it twice asking for
+            // the one box.
+            let b = if value.truthy() { 0 } else { 1 };
+            let mut chosen = Graph::empty(width);
+            let out = if named.contains(&b) {
+                chosen.add(NodeKind::Op(Prim::Push(value.clone())), Vec::new())[0]
+            } else {
+                placed(b)
+            };
+            chosen.close(vec![out]);
 
             (both, chosen)
         }
-        Rule::NotBranch { arity } => {
-            let n = *arity;
-            if n == 0 {
-                return Err(ill(Ill::Refused));
-            }
-            // The condition, then the two blocks of every answer. Both
-            // sides read the same `2n` blocks and differ only in which half
-            // the select is handed first.
-            let block = |i: usize| Source::Input(1 + i);
 
-            let mut negated = Graph::empty(1 + 2 * n);
+        Rule::NotBranch => {
+            // The condition and the two blocks. Both sides read the same
+            // pair and differ only in which the select is handed first.
+            let mut negated = Graph::empty(3);
             // The `not` is inside the window, not exported: the equation
-            // replaces the select's answers, and a negation something else
+            // replaces the select's answer, and a negation something else
             // reads goes on standing for that reader.
             let flipped = negated.add(NodeKind::Op(Prim::Not), vec![Source::Input(0)]);
-            let mut takes = vec![flipped[0]];
-            takes.extend((0..2 * n).map(block));
-            let answers = negated.add(NodeKind::Select { arity: n }, takes);
-            negated.close(answers);
+            let answer = negated.add(
+                NodeKind::Select,
+                vec![flipped[0], Source::Input(1), Source::Input(2)],
+            );
+            negated.close(answer);
 
-            let mut direct = Graph::empty(1 + 2 * n);
-            let mut takes = vec![Source::Input(0)];
-            takes.extend((0..n).map(|i| block(n + i)));
-            takes.extend((0..n).map(block));
-            let answers = direct.add(NodeKind::Select { arity: n }, takes);
-            direct.close(answers);
+            let mut direct = Graph::empty(3);
+            let answer = direct.add(
+                NodeKind::Select,
+                vec![Source::Input(0), Source::Input(2), Source::Input(1)],
+            );
+            direct.close(answer);
 
             (negated, direct)
         }
-        Rule::SpecializeEqual {
-            arity,
-            at,
-            answered,
-        } => {
-            let (n, j) = (*arity, *at);
-            if j >= n {
-                return Err(ill(Ill::Refused));
-            }
-            // `2n` boundary inputs, and the first two are the operands of
-            // the test: input 0 the one the else block at `j` is, input 1
-            // the one the then block at `j` is. Each is said **once** in
-            // the pattern, for the reason `select-same` says its shared
-            // block once — that a block is the very wire the test read is
-            // what the row is about, and a match merely pointing two
-            // inputs at one host wire would be matching a graph that does
-            // not state it.
+
+        Rule::SpecializeEqual { answered } => {
+            // Two boundary inputs, and they are the operands of the test:
+            // input 0 the one the else block is, input 1 the one the then
+            // block is. Each is said **once** in the pattern, for the reason
+            // `select-same` says its shared block once — that a block is the
+            // very wire the test read is what the row is about, and a match
+            // merely pointing two inputs at one host wire would be matching
+            // a graph that does not state it.
             let answer = Source::Input(0);
             let other = Source::Input(1);
-            let then = |i: usize| {
-                if i == j {
-                    other
-                } else {
-                    Source::Input(2 + if i < j { i } else { i - 1 })
-                }
-            };
-            let els = |i: usize| {
-                if i == j {
-                    answer
-                } else {
-                    Source::Input(1 + n + if i < j { i } else { i - 1 })
-                }
-            };
             // Which way round the test reads them is the payload's, and
             // nothing else about the operands is: `equal` is commutative,
             // but *which operand is which* is what the graph records.
@@ -1400,131 +1315,79 @@ pub fn sides(rule: &Rule) -> Result<Pair, Error> {
                 Side::Top => vec![other, answer],
             };
 
-            let mut tested = Graph::empty(2 * n);
-            let test = tested.add(NodeKind::Op(Prim::Equal), operands.clone());
-            let mut takes = vec![test[0]];
-            takes.extend((0..n).map(then));
-            takes.extend((0..n).map(els));
-            let answers = tested.add(NodeKind::Select { arity: n }, takes);
+            let mut tested = Graph::empty(2);
+            let test = tested.add(NodeKind::Op(Prim::Equal), operands);
+            let answers = tested.add(NodeKind::Select, vec![test[0], other, answer]);
             tested.close(answers);
 
-            let mut decided = Graph::empty(2 * n);
-            // A branch that answers nothing is not a branch, and neither
-            // is a test nothing turns on: at width 1 the answer side is
-            // the operand itself and holds no box at all. The `equal` in
-            // a host goes on standing for whatever else reads it.
-            let kept = if n == 1 {
-                Vec::new()
-            } else {
-                let test = decided.add(NodeKind::Op(Prim::Equal), operands);
-                let mut takes = vec![test[0]];
-                takes.extend((0..n).filter(|&i| i != j).map(then));
-                takes.extend((0..n).filter(|&i| i != j).map(els));
-                decided.add(NodeKind::Select { arity: n - 1 }, takes)
-            };
-            let mut answers = Vec::with_capacity(n);
-            let mut next = 0;
-            for i in 0..n {
-                if i == j {
-                    answers.push(answer);
-                } else {
-                    answers.push(kept[next]);
-                    next += 1;
-                }
-            }
-            decided.close(answers);
+            // A branch that answers nothing is not a branch, and neither is
+            // a test nothing turns on: the answer side is the operand itself
+            // and holds no box at all. The `equal` in a host goes on
+            // standing for whatever else reads it.
+            let mut decided = Graph::empty(2);
+            decided.close(vec![answer]);
 
             (tested, decided)
         }
-        Rule::SpecializeBool { arity, at } => {
-            let (n, b) = (*arity, *at);
-            if b >= 2 * n {
-                return Err(ill(Ill::Refused));
-            }
-            // The block is on the then side exactly when it is in the first
-            // half, and that is what the branch decided about the condition.
-            let decided = Value::Bool(b < n);
-            // The block at `b` is the coercion's own answer — the condition
-            // itself — said once in the pattern rather than tested. That it
-            // is a *coerced* answer is the whole of the side condition: a
-            // truthy bool is `true`, where a truthy `5` is `5`.
-            let block = |other: usize| Source::Input(1 + if other < b { other } else { other - 1 });
 
+        Rule::SpecializeBool { then } => {
+            // The block is the then one exactly when that is what the branch
+            // decided about the condition.
+            let decided = Value::Bool(*then);
+            // The block is the coercion's own answer — the condition itself
+            // — said once in the pattern rather than tested. That it is a
+            // *coerced* answer is the whole of the side condition: a truthy
+            // bool is `true`, where a truthy `5` is `5`.
             let build = |folded: bool| {
-                let mut g = Graph::empty(2 * n);
+                let mut g = Graph::empty(2);
                 let coerced = g.add(NodeKind::Op(Prim::AsBool), vec![Source::Input(0)])[0];
                 let known = if folded {
                     g.add(NodeKind::Op(Prim::Push(decided.clone())), Vec::new())[0]
                 } else {
                     coerced
                 };
-                let mut takes = vec![coerced];
-                takes.extend((0..2 * n).map(|other| if other == b { known } else { block(other) }));
-                let answers = g.add(NodeKind::Select { arity: n }, takes);
-                g.close(answers);
+                let other = Source::Input(1);
+                let (t, e) = if *then { (known, other) } else { (other, known) };
+                let answer = g.add(NodeKind::Select, vec![coerced, t, e]);
+                g.close(answer);
                 g
             };
             (build(false), build(true))
         }
-        Rule::SpecializeChoice {
-            arity,
-            inner,
-            side,
-            moves,
-        } => {
-            let (n, m, then) = (*arity, *inner, *side);
-            let mut taken: Vec<usize> = moves.iter().map(|&(_, b)| b).collect();
-            taken.sort_unstable();
-            taken.dedup();
-            if m == 0
-                || moves.is_empty()
-                || taken.len() != moves.len()
-                || moves
-                    .iter()
-                    .any(|&(j, b)| j >= m || b >= 2 * n || (b < n) != then)
-            {
-                return Err(ill(Ill::Refused));
-            }
+
+        Rule::SpecializeChoice { side } => {
             // Boundary input 0 is the condition, and **both** selects read
             // it: that is the side condition, said in the pattern rather
-            // than tested. Then the inner select's blocks, then the outer
-            // blocks no move covers.
-            let iblock = |k: usize| Source::Input(1 + k);
-            let outside: Vec<usize> = (0..2 * n).filter(|b| !taken.contains(b)).collect();
-            let width = 1 + 2 * m + 2 * n - moves.len();
+            // than tested. Then the inner select's two blocks, then the
+            // outer block this row does not touch.
+            let cond = Source::Input(0);
+            let (inner_then, inner_else) = (Source::Input(1), Source::Input(2));
+            let outer_other = Source::Input(3);
 
             let build = |folded: bool| {
-                let mut g = Graph::empty(width);
-                // The inner select: on the unfolded side the moved blocks
-                // read its answers; folded, they read its blocks straight,
-                // and the equation's answer side never mentions it. In a
-                // host it goes on standing for whatever else reads it —
-                // its own other side's blocks, usually.
-                let chosen = (!folded).then(|| {
-                    let mut takes = vec![Source::Input(0)];
-                    takes.extend((0..2 * m).map(iblock));
-                    g.add(NodeKind::Select { arity: m }, takes)
-                });
-                let mut takes = vec![Source::Input(0)];
-                takes.extend((0..2 * n).map(|b| {
-                    match moves.iter().find(|&&(_, at)| at == b) {
-                        // The block the move covers: the inner select's
-                        // answer, or — folded — the block that answer is,
-                        // read straight.
-                        Some(&(j, _)) if folded => iblock(if then { j } else { m + j }),
-                        Some(&(j, _)) => chosen.as_ref().expect("the unfolded side")[j],
-                        None => {
-                            let idx = outside.iter().position(|&o| o == b).expect("one or other");
-                            Source::Input(1 + 2 * m + idx)
-                        }
-                    }
-                }));
-                let answers = g.add(NodeKind::Select { arity: n }, takes);
-                g.close(answers);
+                let mut g = Graph::empty(4);
+                // The inner select: unfolded, the outer block reads its
+                // answer; folded, it reads the block that answer is, and the
+                // equation's answer side never mentions it. In a host it
+                // goes on standing for whatever else reads it — its own
+                // other side's block, usually.
+                let moved = if folded {
+                    if *side { inner_then } else { inner_else }
+                } else {
+                    g.add(NodeKind::Select, vec![cond, inner_then, inner_else])[0]
+                };
+                let (t, e) = if *side {
+                    (moved, outer_other)
+                } else {
+                    (outer_other, moved)
+                };
+                let answer = g.add(NodeKind::Select, vec![cond, t, e]);
+                g.close(answer);
                 g
             };
             (build(false), build(true))
         }
+
         Rule::Shannon { kind, body } => {
             let NodeKind::Op(prim) = kind else {
                 return Err(ill(Ill::Refused));
@@ -1562,92 +1425,76 @@ pub fn sides(rule: &Rule) -> Result<Pair, Error> {
             };
             let sure = copy(&mut split, true);
             let doubted = copy(&mut split, false);
-            let mut chooses = vec![answer[0]];
-            chooses.extend(sure);
-            chooses.extend(doubted);
-            let out = split.add(NodeKind::Select { arity: m }, chooses);
+            // One select per answer the region leaves. A branch is a choice
+            // per output, so a region of `m` outputs comes out under `m` of
+            // them, every one reading the answer that was split on.
+            let out: Vec<Source> = (0..m)
+                .map(|j| split.add(NodeKind::Select, vec![answer[0], sure[j], doubted[j]])[0])
+                .collect();
             split.close(out);
 
             (asked, split)
         }
-        Rule::SelectHoist { arity, body } => {
-            let n = *arity;
-            if n == 0 || body.arity().inputs < n || body.arity().outputs == 0 {
+        Rule::SelectHoist { body } => {
+            if body.arity().inputs == 0 || body.arity().outputs == 0 {
                 return Err(ill(Ill::Refused));
             }
             body.check().map_err(|e| ill(Ill::Broken(e)))?;
-            let k = body.arity().inputs - n;
+            let k = body.arity().inputs - 1;
             let m = body.arity().outputs;
-            // The condition, the two blocks of every answer, and whatever
-            // the region reads that is not an answer.
-            let width = 1 + 2 * n + k;
-            let outside: Vec<Source> = (0..k).map(|i| Source::Input(1 + 2 * n + i)).collect();
-            let block =
-                |side: bool| move |i: usize| Source::Input(1 + if side { i } else { n + i });
-            let feeds = |blocks: Vec<Source>| {
-                let mut takes = blocks;
+            // The condition, the two blocks of the answer, and whatever the
+            // region reads that is not the answer.
+            let width = 3 + k;
+            let outside: Vec<Source> = (0..k).map(|i| Source::Input(3 + i)).collect();
+            let feeds = |block: Source| {
+                let mut takes = vec![block];
                 takes.extend(outside.iter().copied());
                 takes
             };
 
             let mut chosen = Graph::empty(width);
-            let mut takes = vec![Source::Input(0)];
-            takes.extend((0..n).map(block(true)));
-            takes.extend((0..n).map(block(false)));
-            let answers = chosen.add(NodeKind::Select { arity: n }, takes);
-            let out = chosen.implant(body, &feeds(answers));
+            let answer = chosen.add(
+                NodeKind::Select,
+                vec![Source::Input(0), Source::Input(1), Source::Input(2)],
+            );
+            let out = chosen.implant(body, &feeds(answer[0]));
             chosen.close(out);
 
+            // Both copies run and one is kept, per answer the region leaves.
             let mut hoisted = Graph::empty(width);
-            let sure = hoisted.implant(body, &feeds((0..n).map(block(true)).collect()));
-            let doubted = hoisted.implant(body, &feeds((0..n).map(block(false)).collect()));
-            let mut chooses = vec![Source::Input(0)];
-            chooses.extend(sure);
-            chooses.extend(doubted);
-            let out = hoisted.add(NodeKind::Select { arity: m }, chooses);
+            let sure = hoisted.implant(body, &feeds(Source::Input(1)));
+            let doubted = hoisted.implant(body, &feeds(Source::Input(2)));
+            let out: Vec<Source> = (0..m)
+                .map(|j| {
+                    hoisted.add(NodeKind::Select, vec![Source::Input(0), sure[j], doubted[j]])[0]
+                })
+                .collect();
             hoisted.close(out);
 
             (chosen, hoisted)
         }
-        Rule::CondHoist { inner, port, outer } => {
-            let (i, p, m) = (*inner, *port, *outer);
-            if i == 0 || m == 0 || p >= i {
-                return Err(ill(Ill::Refused));
-            }
-            // Boundary input 0 is the condition the *inner* branch turns
-            // on, then that branch's `2i` blocks, then the `2m` blocks of
-            // the branch that moves. The inner branch's other answers are
-            // no part of the equation: its blocks are all in the window
-            // because a select reads them all, and only the one at `port`
-            // is read on either side.
-            let block = |k: usize| Source::Input(1 + k);
-            let after: Vec<Source> = (0..2 * m).map(|b| Source::Input(1 + 2 * i + b)).collect();
-            let width = 1 + 2 * i + 2 * m;
-            let turning = |g: &mut Graph, on: Source| {
-                let mut takes = vec![on];
-                takes.extend(after.iter().copied());
-                g.add(NodeKind::Select { arity: m }, takes)
-            };
 
-            let mut nested = Graph::empty(width);
-            let mut takes = vec![Source::Input(0)];
-            takes.extend((0..2 * i).map(block));
-            let condition = nested.add(NodeKind::Select { arity: i }, takes);
-            let answers = turning(&mut nested, condition[p]);
-            nested.close(answers);
+        Rule::CondHoist => {
+            // Boundary input 0 is the condition the *inner* branch turns on,
+            // then that branch's two blocks, then the two blocks of the
+            // branch that moves.
+            let (c, t1, e1) = (Source::Input(0), Source::Input(1), Source::Input(2));
+            let (t2, e2) = (Source::Input(3), Source::Input(4));
+
+            let mut nested = Graph::empty(5);
+            let condition = nested.add(NodeKind::Select, vec![c, t1, e1]);
+            let answer = nested.add(NodeKind::Select, vec![condition[0], t2, e2]);
+            nested.close(answer);
 
             // Both copies run and the outermost select keeps one, which is
             // the licence every branch spends. Each turns on a block of the
             // inner branch straight, since the block on the side `C` picks
             // is the very answer the inner select was going to hand over.
-            let mut split = Graph::empty(width);
-            let sure = turning(&mut split, block(p));
-            let doubted = turning(&mut split, block(i + p));
-            let mut chooses = vec![Source::Input(0)];
-            chooses.extend(sure);
-            chooses.extend(doubted);
-            let answers = split.add(NodeKind::Select { arity: m }, chooses);
-            split.close(answers);
+            let mut split = Graph::empty(5);
+            let sure = split.add(NodeKind::Select, vec![t1, t2, e2]);
+            let doubted = split.add(NodeKind::Select, vec![e1, t2, e2]);
+            let answer = split.add(NodeKind::Select, vec![c, sure[0], doubted[0]]);
+            split.close(answer);
 
             (nested, split)
         }
@@ -1869,10 +1716,7 @@ pub fn sides(rule: &Rule) -> Result<Pair, Error> {
             let mut asked = Graph::empty(1);
             let yes = asked.add(NodeKind::Op(Prim::Push(Value::Bool(true))), Vec::new());
             let no = asked.add(NodeKind::Op(Prim::Push(Value::Bool(false))), Vec::new());
-            let kept = asked.add(
-                NodeKind::Select { arity: 1 },
-                vec![Source::Input(0), yes[0], no[0]],
-            );
+            let kept = asked.add(NodeKind::Select, vec![Source::Input(0), yes[0], no[0]]);
             asked.close(kept);
 
             (forced, asked)
@@ -1900,10 +1744,7 @@ pub fn sides(rule: &Rule) -> Result<Pair, Error> {
             // The then block is the value itself — the identity half — and
             // the else block the default. Neither arm computes anything.
             let junk = guarded.add(NodeKind::Op(Prim::Push(junk)), Vec::new());
-            let kept = guarded.add(
-                NodeKind::Select { arity: 1 },
-                vec![holds, Source::Input(0), junk[0]],
-            );
+            let kept = guarded.add(NodeKind::Select, vec![holds, Source::Input(0), junk[0]]);
             guarded.close(kept);
 
             (forced, guarded)
@@ -2235,8 +2076,6 @@ pub fn boxless(law: Law, wires: usize) -> Option<(Rule, Direction)> {
         // is the row that reads the test the other way round afterwards.
         (Law::SpecializeEqual, 2) => Some((
             Rule::SpecializeEqual {
-                arity: 1,
-                at: 0,
                 answered: Side::Deep,
             },
             Direction::Backward,
@@ -2399,23 +2238,24 @@ fn read_off(graph: &Graph, law: Law, id: NodeId) -> Vec<(Rule, NodeId)> {
         }
 
         // A block the select answers with either way.
-        (Law::SelectSame, NodeKind::Select { arity: n }) => (0..*n)
-            .filter(|j| takes[1 + j] == takes[1 + n + j])
-            .map(|j| (Rule::SelectSame { arity: *n, at: j }, id))
-            .collect(),
+        (Law::SelectSame, NodeKind::Select) => {
+            if takes[1] == takes[2] {
+                one(Rule::SelectSame)
+            } else {
+                Vec::new()
+            }
+        }
 
-        // A condition that is already a value: the select is the blocks it
+        // A condition that is already a value: the select is the block it
         // chooses.
-        (Law::SelectLiteral, NodeKind::Select { arity: n }) => {
-            let n = *n;
+        (Law::SelectLiteral, NodeKind::Select) => {
             let Some((lit, NodeKind::Op(Prim::Push(value)))) = made_by(takes[0]) else {
                 return Vec::new();
             };
-            let lit_blocks: Vec<usize> = (0..2 * n).filter(|&b| takes[1 + b] == takes[0]).collect();
+            let lit_blocks: Vec<usize> = (0..2).filter(|&b| takes[1 + b] == takes[0]).collect();
             vec![(
                 Rule::SelectLiteral {
                     value: value.clone(),
-                    arity: n,
                     lit_blocks,
                 },
                 lit,
@@ -2423,116 +2263,70 @@ fn read_off(graph: &Graph, law: Law, id: NodeId) -> Vec<(Rule, NodeId)> {
         }
 
         // A condition made by a `not`: the branch is the same branch with
-        // its arms exchanged, and the negation is spent. Seeded at the
+        // its blocks exchanged, and the negation is spent. Seeded at the
         // `not`, which is the pattern's first box.
-        (Law::NotBranch, NodeKind::Select { arity: n }) => match made_by(takes[0]) {
-            Some((flipped, NodeKind::Op(Prim::Not))) => {
-                vec![(Rule::NotBranch { arity: *n }, flipped)]
-            }
+        (Law::NotBranch, NodeKind::Select) => match made_by(takes[0]) {
+            Some((flipped, NodeKind::Op(Prim::Not))) => vec![(Rule::NotBranch, flipped)],
             _ => Vec::new(),
         },
 
         // A branch turning on an `equal` and answering with the test's own
         // operands — the other one where it held, this one where it did
         // not. Seeded at the `equal`, which is the pattern's first box.
-        (Law::SpecializeEqual, NodeKind::Select { arity: n }) => {
-            let n = *n;
+        (Law::SpecializeEqual, NodeKind::Select) => {
             let Some((test, NodeKind::Op(Prim::Equal))) = made_by(takes[0]) else {
                 return Vec::new();
             };
             let operands = graph.sources(test);
             let (deep, top) = (operands[0], operands[1]);
             // A test of one wire against itself is `equal-refl`'s, and the
-            // branch it decides is `select-same`'s: there is no operand
-            // here for the other to be, and the pattern says two.
+            // branch it decides is `select-same`'s: there is no operand here
+            // for the other to be, and the pattern says two.
             if deep == top {
                 return Vec::new();
             }
-            (0..n)
-                .filter_map(|j| {
-                    let (chose, spurned) = (takes[1 + j], takes[1 + n + j]);
-                    // `answered` is the operand the else block is, and the
-                    // then block has to be the other one: the two are the
-                    // same value exactly where the then block is reached.
-                    let answered = match (spurned == deep, spurned == top) {
-                        (true, _) if chose == top => Side::Deep,
-                        (_, true) if chose == deep => Side::Top,
-                        _ => return None,
-                    };
-                    Some((
-                        Rule::SpecializeEqual {
-                            arity: n,
-                            at: j,
-                            answered,
-                        },
-                        test,
-                    ))
-                })
-                .collect()
+            let (chose, spurned) = (takes[1], takes[2]);
+            // `answered` is the operand the else block is, and the then
+            // block has to be the other one: the two are the same value
+            // exactly where the then block is reached.
+            let answered = match (spurned == deep, spurned == top) {
+                (true, _) if chose == top => Side::Deep,
+                (_, true) if chose == deep => Side::Top,
+                _ => return Vec::new(),
+            };
+            vec![(Rule::SpecializeEqual { answered }, test)]
         }
 
         // A block that answers with the very value the condition was made
-        // of, that condition being manifestly a bool — which is the only
-        // way a block gets to say what the branch decided.
-        (Law::SpecializeBool, NodeKind::Select { arity: n }) => {
-            let (n, cond) = (*n, takes[0]);
+        // of, that condition being manifestly a bool — which is the only way
+        // a block gets to say what the branch decided.
+        (Law::SpecializeBool, NodeKind::Select) => {
+            let cond = takes[0];
             // The `as_bool` that made the condition is the pattern's first
             // box, so it is what the search is anchored at.
             let Some((coercion, NodeKind::Op(Prim::AsBool))) = made_by(cond) else {
                 return Vec::new();
             };
-            (0..2 * n)
+            (0..2)
                 .filter(|&b| takes[1 + b] == cond)
-                .map(|b| (Rule::SpecializeBool { arity: n, at: b }, coercion))
+                .map(|b| (Rule::SpecializeBool { then: b == 0 }, coercion))
                 .collect()
         }
 
         // A branch inside an arm, retesting the value the outer branch
-        // tested — read off the outer select, one rule per inner select
-        // among its blocks.
-        (Law::SpecializeChoice, NodeKind::Select { arity: n }) => {
-            let (n, cond) = (*n, takes[0]);
-            let mut rules: Vec<(Rule, NodeId)> = Vec::new();
-            let mut inners: Vec<NodeId> = Vec::new();
-            for b in 0..2 * n {
+        // tested — read off the outer select, one rule per block of it an
+        // inner select on the same condition answers.
+        (Law::SpecializeChoice, NodeKind::Select) => (0..2)
+            .filter_map(|b| {
                 let Source::Port { node: within, .. } = takes[1 + b] else {
-                    continue;
+                    return None;
                 };
-                let NodeKind::Select { arity: m } = graph.kind(within) else {
-                    continue;
-                };
-                if inners.contains(&within) || graph.sources(within)[0] != cond {
-                    continue;
-                }
-                // Every outer block this inner select answers, at once —
-                // and only on the side the first of them says, since a
-                // block on the other side is decided the other way and is
-                // a rule of its own.
-                let side = b < n;
-                let moves: Vec<(usize, usize)> = (0..2 * n)
-                    .filter_map(|at| match takes[1 + at] {
-                        Source::Port { node, port } if node == within && (at < n) == side => {
-                            Some((port, at))
-                        }
-                        _ => None,
-                    })
-                    .collect();
-                if moves.is_empty() {
-                    continue;
-                }
-                inners.push(within);
-                rules.push((
-                    Rule::SpecializeChoice {
-                        arity: n,
-                        inner: *m,
-                        side,
-                        moves,
-                    },
-                    within,
-                ));
-            }
-            rules
-        }
+                (matches!(graph.kind(within), NodeKind::Select)
+                    && graph.sources(within)[0] == takes[0])
+                    .then_some((Rule::SpecializeChoice { side: b == 0 }, within))
+            })
+            .collect(),
+
 
         // The instruction set's promise, written down as a box. Proposed
         // only where one is not already standing: the equation holds
@@ -2582,41 +2376,26 @@ fn read_off(graph: &Graph, law: Law, id: NodeId) -> Vec<(Rule, NodeId)> {
         // Everything downstream of a branch's answers, lifted out as the
         // body the branch grows forward over. Read off the `select`, which
         // is also where the pattern begins.
-        (Law::SelectHoist, NodeKind::Select { arity, .. }) => {
-            let answers: Vec<Source> = (0..*arity)
-                .map(|port| Source::Port { node: id, port })
-                .collect();
+        (Law::SelectHoist, NodeKind::Select) => {
+            let answers = [Source::Port { node: id, port: 0 }];
             match downstream_of(graph, &answers, true) {
-                Some(body) => vec![(
-                    Rule::SelectHoist {
-                        arity: *arity,
-                        body,
-                    },
-                    id,
-                )],
+                Some(body) => vec![(Rule::SelectHoist { body }, id)],
                 None => Vec::new(),
             }
         }
 
-        // A branch turning on what another branch answered: the outer one
-        // splits, one copy under each block the inner one chooses between.
-        // Read off the select that moves and seeded at the select that
-        // made its condition, which is the pattern's first box.
-        (Law::CondHoist, NodeKind::Select { arity: m }) => {
-            let Source::Port { node, port } = takes[0] else {
+        // A branch whose condition is what another branch answered: the
+        // outer one runs under the inner, once per block the inner chooses
+        // between. Read off the outer select and anchored at the inner,
+        // which is the pattern's first box.
+        (Law::CondHoist, NodeKind::Select) => {
+            let Source::Port { node, .. } = takes[0] else {
                 return Vec::new();
             };
-            let NodeKind::Select { arity: i } = *graph.kind(node) else {
-                return Vec::new();
-            };
-            vec![(
-                Rule::CondHoist {
-                    inner: i,
-                    port,
-                    outer: *m,
-                },
-                node,
-            )]
+            match graph.kind(node) {
+                NodeKind::Select => vec![(Rule::CondHoist, node)],
+                _ => Vec::new(),
+            }
         }
 
         // An operation whose every operand is a literal — the fold, and
@@ -2743,7 +2522,7 @@ fn read_off(graph: &Graph, law: Law, id: NodeId) -> Vec<(Rule, NodeId)> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(in crate::diagram2) mod tests {
     use super::*;
     use crate::diagram2::build;
     use crate::diagram2::meaning::{Meaning, boundary, eval_graph};
@@ -2884,7 +2663,7 @@ mod tests {
     /// laws name: `unit` is a tuple of width 0 and `(1, 2)` one of width 2,
     /// so a law about `as_tuple 2` meets a value it is the identity on, a
     /// tuple it is not, and three things that are no tuple at all.
-    fn samples(width: usize) -> Vec<Vec<Value>> {
+    pub(in crate::diagram2) fn samples(width: usize) -> Vec<Vec<Value>> {
         let each = [
             Value::Bool(true),
             Value::Bool(false),
@@ -2913,7 +2692,7 @@ mod tests {
     /// A closed graph, run: every operation on the machine itself
     /// ([`run_window`], so there is no second semantics), and a select
     /// keeping the block `truthy` says.
-    fn eval_on(graph: &Graph, inputs: &[Value]) -> Vec<Value> {
+    pub(in crate::diagram2) fn eval_on(graph: &Graph, inputs: &[Value]) -> Vec<Value> {
         assert_eq!(inputs.len(), graph.arity().inputs, "one value per input");
         let mut held: HashMap<Source, Value> = inputs
             .iter()
@@ -2929,13 +2708,12 @@ mod tests {
             let answers = match graph.kind(id) {
                 NodeKind::Op(prim) => run_window(&took, &prim.to_instruction())
                     .expect("every prim is total on the machine"),
-                NodeKind::Select { arity } => {
-                    let n = *arity;
-                    if took[0].truthy() {
-                        took[1..=n].to_vec()
+                NodeKind::Select => {
+                    vec![if took[0].truthy() {
+                        took[1].clone()
                     } else {
-                        took[n + 1..].to_vec()
-                    }
+                        took[2].clone()
+                    }]
                 }
                 NodeKind::Call { .. } => unreachable!("a law's side calls nothing"),
             };
@@ -3041,8 +2819,7 @@ mod tests {
     /// A choice between one value is that value.
     #[test]
     fn a_block_answered_either_way_is_the_answer() {
-        holds(Law::SelectSame, Rule::SelectSame { arity: 1, at: 0 });
-        holds(Law::SelectSame, Rule::SelectSame { arity: 3, at: 1 });
+        holds(Law::SelectSame, Rule::SelectSame);
     }
 
     /// An arm of one box on the view it was handed.
@@ -3079,19 +2856,18 @@ mod tests {
             Value::Int(0),
             Value::unit(),
         ] {
-            for (arity, lit_blocks) in [
-                (1, Vec::new()),
-                (2, Vec::new()),
-                // The condition read as an answer too — the shape a `dedup`
+            for lit_blocks in [
+                Vec::new(),
+                // The condition read as a block too — the shape a `dedup`
                 // makes of one pushed value.
-                (1, vec![0]),
-                (2, vec![1, 2]),
+                vec![0],
+                vec![1],
+                vec![0, 1],
             ] {
                 the_machine_agrees(
                     Law::SelectLiteral,
                     Rule::SelectLiteral {
                         value: value.clone(),
-                        arity,
                         lit_blocks,
                     },
                 );
@@ -3104,46 +2880,11 @@ mod tests {
     /// in.
     #[test]
     fn a_value_retested_in_an_arm_is_decided() {
-        for (side, moves) in [
-            // In the then arm the value was truthy; in the else arm it was
-            // `false`, the one falsy value.
-            (true, vec![(0, 0)]),
-            (false, vec![(0, 1)]),
-        ] {
-            the_machine_agrees(
-                Law::SpecializeChoice,
-                Rule::SpecializeChoice {
-                    arity: 1,
-                    inner: 1,
-                    side,
-                    moves,
-                },
-            );
+        // In the then arm the value was truthy; in the else arm it was
+        // `false`, the one falsy value.
+        for side in [true, false] {
+            the_machine_agrees(Law::SpecializeChoice, Rule::SpecializeChoice { side });
         }
-        // A wider window: two of the inner select's answers, moved at once.
-        the_machine_agrees(
-            Law::SpecializeChoice,
-            Rule::SpecializeChoice {
-                arity: 2,
-                inner: 2,
-                side: true,
-                moves: vec![(0, 0), (1, 1)],
-            },
-        );
-        // A move on the wrong side of the window is refused: reasoning
-        // from "the condition held" does not reach the other arm.
-        assert!(matches!(
-            sides(&Rule::SpecializeChoice {
-                arity: 1,
-                inner: 1,
-                side: true,
-                moves: vec![(0, 1)],
-            }),
-            Err(Error::Ill {
-                why: Ill::Refused,
-                ..
-            })
-        ));
     }
 
     /// η, as an equation: everything downstream of a promised bool is a
@@ -3163,10 +2904,7 @@ mod tests {
             Law::Shannon,
             Rule::Shannon {
                 kind: NodeKind::Op(Prim::IsInt),
-                body: sides(&Rule::SelectSame { arity: 1, at: 0 })
-                    .unwrap()
-                    .lhs()
-                    .clone(),
+                body: sides(&Rule::SelectSame).unwrap().lhs().clone(),
             },
         );
         // The set does not promise `add` answers a bool, so there is no
@@ -3193,24 +2931,14 @@ mod tests {
         the_machine_agrees(
             Law::SelectHoist,
             Rule::SelectHoist {
-                arity: 1,
                 body: one_step(NodeKind::Op(Prim::Not)),
             },
         );
-        // Both answers of a two-wide branch, read by one box.
+        // A body that reads *past* the answer: the block of the branch, and
+        // one wire from outside it.
         the_machine_agrees(
             Law::SelectHoist,
             Rule::SelectHoist {
-                arity: 2,
-                body: takes_all(NodeKind::Op(Prim::Add)),
-            },
-        );
-        // A body that reads *past* the answers: one block of the branch,
-        // and one wire from outside it.
-        the_machine_agrees(
-            Law::SelectHoist,
-            Rule::SelectHoist {
-                arity: 1,
                 body: takes_all(NodeKind::Op(Prim::Add)),
             },
         );
@@ -3218,18 +2946,13 @@ mod tests {
         the_machine_agrees(
             Law::SelectHoist,
             Rule::SelectHoist {
-                arity: 1,
-                body: sides(&Rule::SelectSame { arity: 1, at: 0 })
-                    .unwrap()
-                    .lhs()
-                    .clone(),
+                body: sides(&Rule::SelectSame).unwrap().lhs().clone(),
             },
         );
         // A body that leaves nothing states no equation, and neither does
-        // a select of no width: there is no branch to grow.
+        // one that reads nothing: there is no answer to grow over.
         for refused in [
             Rule::SelectHoist {
-                arity: 1,
                 body: {
                     // A body that leaves nothing: one box, nothing exported.
                     let mut g = Graph::empty(1);
@@ -3239,8 +2962,12 @@ mod tests {
                 },
             },
             Rule::SelectHoist {
-                arity: 0,
-                body: one_step(NodeKind::Op(Prim::Not)),
+                body: {
+                    let mut g = Graph::empty(0);
+                    let out = g.add(NodeKind::Op(Prim::Push(Value::Int(1))), Vec::new());
+                    g.close(out);
+                    g
+                },
             },
         ] {
             assert!(matches!(
@@ -3264,19 +2991,16 @@ mod tests {
     /// machine to check it.
     #[test]
     fn an_answer_read_from_outside_passes_through_the_body() {
-        // `select(2)` on five wires: one answer feeds a `negate`, the other
+        // A branch on three wires whose one answer feeds a `negate` *and*
         // leaves by the boundary.
-        let mut graph = Graph::empty(5);
-        let answers = graph.add(
-            NodeKind::Select { arity: 2 },
-            (0..5).map(Source::Input).collect(),
-        );
-        let negated = graph.add(NodeKind::Op(Prim::Negate), vec![answers[0]]);
-        graph.close(vec![negated[0], answers[1]]);
+        let mut graph = Graph::empty(3);
+        let answer = graph.add(NodeKind::Select, (0..3).map(Source::Input).collect());
+        let negated = graph.add(NodeKind::Op(Prim::Negate), vec![answer[0]]);
+        graph.close(vec![negated[0], answer[0]]);
         graph.check().unwrap();
         let before = graph.clone();
 
-        let select = only(&NodeKind::Select { arity: 2 }, &graph);
+        let select = only(&NodeKind::Select, &graph);
         let steps = propose(&graph, &[Law::SelectHoist], select);
         let [step] = &steps[..] else {
             panic!("one branch to move, and {} proposals", steps.len());
@@ -3284,8 +3008,9 @@ mod tests {
         let back = apply(&mut graph, step).unwrap();
         graph.check().unwrap();
 
-        // Two copies of the body, and the select now as wide as the body's
-        // answers rather than as the blocks it was choosing between.
+        // Two copies of the body, and a select per answer the body leaves —
+        // the `negate` and the answer passed through — rather than the one
+        // that was choosing between the blocks.
         assert_eq!(
             graph
                 .live()
@@ -3295,17 +3020,43 @@ mod tests {
             "the body did not go into both arms:\n{}",
             graph
         );
-        let moved = only(&NodeKind::Select { arity: 2 }, &graph);
-        assert_ne!(moved, select, "the select was not rebuilt:\n{}", graph);
+        let moved: Vec<NodeId> = graph
+            .live()
+            .filter(|(_, k)| matches!(k, NodeKind::Select))
+            .map(|(id, _)| id)
+            .collect();
+        assert_eq!(moved.len(), 2, "one select per answer the body leaves");
+        for &id in &moved {
+            assert_eq!(
+                graph.sources(id)[0],
+                Source::Input(0),
+                "every copy turns on the condition the branch always did:\n{}",
+                graph
+            );
+        }
+        // The passed-through answer's copy chooses between the very blocks
+        // the old select chose between — so it **is** the old select, by
+        // interning, and the box stays rather than being rebuilt. That is
+        // the whole of what the pass-through buys: the reading moves to the
+        // copy that grew over the `negate`, and the answer nothing moved
+        // keeps the box it always had.
+        assert!(
+            moved.contains(&select),
+            "the untouched answer did not keep its own box:\n{}",
+            graph
+        );
         assert_eq!(
-            graph.sources(moved)[0],
-            Source::Input(0),
-            "the condition is the one the branch always turned on:\n{}",
+            graph.outputs()[1],
+            Source::Port {
+                node: select,
+                port: 0
+            },
+            "\n{}",
             graph
         );
 
         // The same program, on the machine, at every assignment.
-        for values in samples(5) {
+        for values in samples(3) {
             assert_eq!(
                 eval_on(&before, &values),
                 eval_on(&graph, &values),
@@ -3334,77 +3085,7 @@ mod tests {
     /// judge for the reason it is `select-hoist`'s.
     #[test]
     fn a_branch_grows_over_the_branch_it_conditions() {
-        the_machine_agrees(
-            Law::CondHoist,
-            Rule::CondHoist {
-                inner: 1,
-                port: 0,
-                outer: 1,
-            },
-        );
-        // A branch answering more than the condition: the other answers
-        // are somebody else's, and the equation reads only the one the
-        // outer branch turns on.
-        //
-        // Seven wires, so the whole cross product is 6^7 assignments and
-        // buys nothing — what the extra width is for is `port`, and every
-        // assignment reads that the same way. The sweep is over the three
-        // wires the equation reads, with the answers the branch chooses
-        // between held apart and the rest at junk.
-        let wide = Rule::CondHoist {
-            inner: 2,
-            port: 1,
-            outer: 1,
-        };
-        let pair = sides(&wide).unwrap();
-        assert_eq!(pair.lhs().arity(), pair.rhs().arity());
-        for values in samples(3) {
-            // Input 0 is the condition, `1..=4` the inner branch's blocks
-            // — `port` 1 is the second of each pair — and the last two are
-            // what the branch that moves chooses between.
-            let assignment = vec![
-                values[0].clone(),
-                Value::unit(),
-                values[1].clone(),
-                Value::unit(),
-                values[2].clone(),
-                Value::Int(1),
-                Value::Int(2),
-            ];
-            assert_eq!(
-                eval_on(pair.lhs(), &assignment),
-                eval_on(pair.rhs(), &assignment),
-                "cond-hoist relates two different programs on {:?}",
-                assignment
-            );
-        }
-        // A select of no width states no equation at either end, and
-        // neither does an answer the inner branch does not have.
-        for refused in [
-            Rule::CondHoist {
-                inner: 0,
-                port: 0,
-                outer: 1,
-            },
-            Rule::CondHoist {
-                inner: 1,
-                port: 0,
-                outer: 0,
-            },
-            Rule::CondHoist {
-                inner: 1,
-                port: 1,
-                outer: 1,
-            },
-        ] {
-            assert!(matches!(
-                sides(&refused),
-                Err(Error::Ill {
-                    why: Ill::Refused,
-                    ..
-                })
-            ));
-        }
+        the_machine_agrees(Law::CondHoist, Rule::CondHoist);
     }
 
     /// The row read off a graph, applied, and held to the machine — and
@@ -3421,11 +3102,11 @@ mod tests {
         // after the branch, which stays exactly where it is.
         let mut graph = Graph::empty(5);
         let condition = graph.add(
-            NodeKind::Select { arity: 1 },
+            NodeKind::Select,
             vec![Source::Input(0), Source::Input(1), Source::Input(2)],
         );
         let answers = graph.add(
-            NodeKind::Select { arity: 1 },
+            NodeKind::Select,
             vec![condition[0], Source::Input(3), Source::Input(4)],
         );
         let after = graph.add(NodeKind::Op(Prim::Negate), answers.clone());
@@ -3720,36 +3401,26 @@ mod tests {
     /// on bools, which is what the sample list checks.
     #[test]
     fn a_negated_condition_swaps_the_arms() {
-        for arity in 1..=3 {
-            the_machine_agrees(Law::NotBranch, Rule::NotBranch { arity });
-        }
-        // A branch that answers nothing is not a branch.
-        assert!(matches!(
-            sides(&Rule::NotBranch { arity: 0 }),
-            Err(Error::Ill {
-                why: Ill::Refused,
-                ..
-            })
-        ));
+        the_machine_agrees(Law::NotBranch, Rule::NotBranch);
 
         // And it is read off the select, seeded at the `not` — the box the
         // pattern begins with — with the blocks coming back exchanged.
         let mut graph = Graph::empty(3);
         let flipped = graph.add(NodeKind::Op(Prim::Not), vec![Source::Input(0)]);
         let answers = graph.add(
-            NodeKind::Select { arity: 1 },
+            NodeKind::Select,
             vec![flipped[0], Source::Input(1), Source::Input(2)],
         );
         graph.close(answers);
         graph.check().unwrap();
         let before = graph.clone();
 
-        let select = only(&NodeKind::Select { arity: 1 }, &graph);
+        let select = only(&NodeKind::Select, &graph);
         let steps = propose(&graph, &[Law::NotBranch], select);
         let [step] = &steps[..] else {
             panic!("one negated condition:\n{}", graph)
         };
-        assert_eq!(step.rule, Rule::NotBranch { arity: 1 });
+        assert_eq!(step.rule, Rule::NotBranch);
         assert_eq!(
             step.at.nodes[0],
             only(&NodeKind::Op(Prim::Not), &graph),
@@ -3761,7 +3432,7 @@ mod tests {
         // The negation is gone — nothing else read it — and the branch now
         // turns on the value itself, its blocks exchanged.
         assert_eq!(graph.live_count(), 1, "the `not` is spent:\n{}", graph);
-        let moved = only(&NodeKind::Select { arity: 1 }, &graph);
+        let moved = only(&NodeKind::Select, &graph);
         assert_eq!(
             graph.sources(moved),
             [Source::Input(0), Source::Input(2), Source::Input(1)],
@@ -4133,24 +3804,26 @@ mod tests {
     /// equation, and is refused before anything is compared.
     #[test]
     fn a_block_the_select_lacks_is_refused() {
-        assert!(matches!(
-            sides(&Rule::SelectLiteral {
+        // A select has two blocks, so `2` is not one of them — and a
+        // block named twice is a payload naming one block, not two.
+        for refused in [
+            Rule::SelectLiteral {
                 value: Value::Bool(true),
-                arity: 1,
                 lit_blocks: vec![2],
-            }),
-            Err(Error::Ill {
-                why: Ill::Refused,
-                ..
-            })
-        ));
-        assert!(matches!(
-            sides(&Rule::SelectSame { arity: 1, at: 1 }),
-            Err(Error::Ill {
-                why: Ill::Refused,
-                ..
-            })
-        ));
+            },
+            Rule::SelectLiteral {
+                value: Value::Bool(true),
+                lit_blocks: vec![0, 0],
+            },
+        ] {
+            assert!(matches!(
+                sides(&refused),
+                Err(Error::Ill {
+                    why: Ill::Refused,
+                    ..
+                })
+            ));
+        }
     }
 
     /// A branch choosing between an `equal`'s two operands answers with
@@ -4163,29 +3836,8 @@ mod tests {
     #[test]
     fn a_branch_between_what_it_compared_is_one_of_them() {
         for answered in [Side::Deep, Side::Top] {
-            for (arity, at) in [(1, 0), (2, 0), (2, 1)] {
-                the_machine_agrees(
-                    Law::SpecializeEqual,
-                    Rule::SpecializeEqual {
-                        arity,
-                        at,
-                        answered,
-                    },
-                );
-            }
+            the_machine_agrees(Law::SpecializeEqual, Rule::SpecializeEqual { answered });
         }
-        // A block the select does not have states no equation.
-        assert!(matches!(
-            sides(&Rule::SpecializeEqual {
-                arity: 1,
-                at: 1,
-                answered: Side::Deep,
-            }),
-            Err(Error::Ill {
-                why: Ill::Refused,
-                ..
-            })
-        ));
     }
 
     /// `as_bool` of the very value a branch tested is what the branch
@@ -4193,9 +3845,9 @@ mod tests {
     /// instruction, and the else block is reached only by `false`.
     #[test]
     fn as_bool_of_a_condition_is_what_the_branch_decided() {
-        // `at < arity` is the then side; both halves, at two widths.
-        for (arity, at) in [(1, 0), (1, 1), (2, 1), (2, 3)] {
-            the_machine_agrees(Law::SpecializeBool, Rule::SpecializeBool { arity, at });
+        // Both halves: the then block folds to `true`, the else to `false`.
+        for then in [true, false] {
+            the_machine_agrees(Law::SpecializeBool, Rule::SpecializeBool { then });
         }
     }
 
@@ -4242,38 +3894,25 @@ mod tests {
             Rule::TupleCancel { n: 2 },
             Rule::AsTupleBuilt { n: 2 },
             Rule::EqualRefl,
-            Rule::SelectSame { arity: 1, at: 0 },
+            Rule::SelectSame,
             Rule::SelectLiteral {
                 value: Value::Bool(false),
-                arity: 1,
                 lit_blocks: vec![1],
             },
-            Rule::NotBranch { arity: 1 },
+            Rule::NotBranch,
             Rule::SpecializeEqual {
-                arity: 1,
-                at: 0,
                 answered: Side::Top,
             },
-            Rule::SpecializeBool { arity: 1, at: 0 },
-            Rule::SpecializeChoice {
-                arity: 1,
-                inner: 1,
-                side: true,
-                moves: vec![(0, 0)],
-            },
+            Rule::SpecializeBool { then: true },
+            Rule::SpecializeChoice { side: true },
             Rule::Shannon {
                 kind: NodeKind::Op(Prim::IsBool),
                 body: one_step(NodeKind::Op(Prim::Not)),
             },
             Rule::SelectHoist {
-                arity: 1,
                 body: one_step(NodeKind::Op(Prim::Not)),
             },
-            Rule::CondHoist {
-                inner: 1,
-                port: 0,
-                outer: 1,
-            },
+            Rule::CondHoist,
             Rule::Fold {
                 prim: Prim::Add,
                 operands: vec![Value::Int(1), Value::Int(2)],
