@@ -1478,10 +1478,14 @@ pub fn sides(rule: &Rule) -> Result<Pair, Error> {
             reads,
         } => {
             let arity = prim.arity();
+            // A window is its operands and nothing else, so the payload
+            // has to be exactly them: one operand per input, every one of
+            // them read, and none named that is not there. `tuple 0` takes
+            // nothing and is a window all the same — an operation that
+            // reads no operand has every operand it reads a literal — and
+            // the empty payload is the only one it can carry.
             if matches!(prim, Prim::Push(_) | Prim::Swap)
-                || arity.inputs == 0
                 || reads.len() != arity.inputs
-                || operands.is_empty()
                 || reads.iter().any(|&r| r >= operands.len())
                 || !(0..operands.len()).all(|i| reads.contains(&i))
             {
@@ -2386,9 +2390,12 @@ fn read_off(graph: &Graph, law: Law, id: NodeId) -> Vec<(Rule, NodeId)> {
         }
 
         // An operation whose every operand is a literal — the fold, and
-        // the machine is what answers it.
+        // the machine is what answers it. An operation that reads no
+        // operand is one of those vacuously: `tuple 0` is a window with
+        // nothing in it, anchored at itself because there is no literal
+        // behind it to anchor at.
         (Law::Fold, NodeKind::Op(prim)) => {
-            if matches!(prim, Prim::Push(_) | Prim::Swap) || takes.is_empty() {
+            if matches!(prim, Prim::Push(_) | Prim::Swap) {
                 return Vec::new();
             }
             let mut held: Vec<(NodeId, Value)> = Vec::new();
@@ -2406,7 +2413,7 @@ fn read_off(graph: &Graph, law: Law, id: NodeId) -> Vec<(Rule, NodeId)> {
                 };
                 reads.push(at);
             }
-            let seed = held[0].0;
+            let seed = held.first().map_or(id, |&(node, _)| node);
             vec![(
                 Rule::Fold {
                     prim: prim.clone(),
@@ -3126,6 +3133,35 @@ mod tests {
                 reads: vec![0],
             },
         );
+        // No operands at all: `tuple 0` reads nothing, so there is nothing
+        // for it to read that is not a literal, and the machine answers it
+        // the same way it answers a window that had one.
+        the_machine_agrees(
+            Law::Fold,
+            Rule::Fold {
+                prim: Prim::Tuple(0),
+                operands: Vec::new(),
+                reads: Vec::new(),
+            },
+        );
+        // The payload is the window, so a literal no input reads is not
+        // part of one — and neither is a window short of its operands.
+        for (prim, operands, reads) in [
+            (Prim::Tuple(0), vec![Value::Int(1)], Vec::new()),
+            (Prim::Add, Vec::new(), Vec::new()),
+        ] {
+            assert!(matches!(
+                sides(&Rule::Fold {
+                    prim,
+                    operands,
+                    reads,
+                }),
+                Err(Error::Ill {
+                    why: Ill::Refused,
+                    ..
+                })
+            ));
+        }
         // A literal is not a window, and neither is a crossing.
         for prim in [Prim::Push(Value::Int(1)), Prim::Swap] {
             assert!(matches!(
@@ -3958,6 +3994,15 @@ mod tests {
         // instruction set says its operands are interchangeable, which is
         // a step at the same box and on no driven list.
         offers("push 1 push 2 add", &[Law::Fold, Law::Commute]);
+        // The window with nothing in it. `tuple 0` reads no literal, so
+        // there is none behind it to anchor the pattern at and the box
+        // anchors itself — and the fold is offered all the same.
+        offers("tuple 0", &[Law::Fold]);
+        // Every operand a literal, and the answer is the tuple they
+        // build.
+        offers("push 1 push 2 tuple 2", &[Law::Fold]);
+        // And the way back: a literal taken apart is its parts.
+        offers("push (1, 2) untuple 2", &[Law::Fold]);
         offers("swap swap", &[]);
         offers("push 9 pick 0", &[]);
         offers("dip { swap } swap dip { swap }", &[]);
