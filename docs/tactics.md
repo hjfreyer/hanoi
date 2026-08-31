@@ -87,6 +87,15 @@ them. Every reader of each wire, the goal boundary included, comes to
 read through the introduced pair; the order is the window's shape, so
 `on(in1 in0, tuple-cancel)` builds the other tuple.
 
+`on(#nk in0, specialize-equal)` is the other row on the table, and what
+it puts in is a **branch**: the first wire tested against the second,
+answering with the second where the test held and with the first where
+it did not — which is the first wire either way, and why that side is
+bare. Two wires exactly, and the order says both things at once: the
+wire named first is the one every reader comes to read the branch for,
+and the test reads the pair in the order they are named. `comm` is the
+row that turns the test round afterwards.
+
 The direction is the law's own — the bare side is the pattern, so
 `tuple-cancel` reads backward — and writing it out is allowed and
 checked rather than obeyed. Wire names follow `at`'s discipline: looked
@@ -96,8 +105,10 @@ Stated on wires the pair already cancels, the step **compounds** — a
 second trip stacks on the first, a true thing said one layer deeper, and
 never an error — so a `repeat` around an `on` is the author claiming
 what a `repeat` always claims. `rules::boxless` is the table of laws
-`on` can state: a law both of whose sides hold boxes is not on it, and
-neither is one whose bare side would take more payload than a width.
+`on` can state: a law both of whose sides hold boxes is not on it,
+neither is one whose bare side would take more payload than a width, and
+neither is a width at which the law's own side is not bare — `on` says
+which of the three it is refusing.
 
 What it is for: manifesting a window. A lemma proved about a packed
 value cannot be spent in a goal that never packs until the shape exists;

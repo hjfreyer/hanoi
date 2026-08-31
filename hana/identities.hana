@@ -248,32 +248,48 @@ test sentence building_and_taking_apart_literals {
     push ((), crate::prelude::ok)
 }
 
-// `pick 0 ; push c ; equal ; branch { A } { B }`
-//   = `pick 0 ; push c ; equal ; branch { drop ; push c ; A } { B }`.
+// `select(equal(x, y), y, x)` = `x`.
 //
-// A value that tested equal to a literal *is* that literal. The condition is a
-// copy, so the arm still holds the value the `equal` looked at, and in the then
-// arm the two are names for one thing.
+// A branch that answers with one operand of its own test where the test held
+// and the other where it did not is answering with the second, whatever the
+// test said: where the then block is reached the two operands are one value,
+// so the branch is choosing between a value and itself.
 //
 // `equal` is structural identity on every value the machine has, so the law
 // holds unconditionally — floats, where `0.0 == -0.0` answers `true` on two
 // values that stay distinguishable, were the one exception and are gone.
-#[arity(1,1)] function specialize_lhs {
-    pick 0 push 7 equal branch { push 7 equal } { drop 0 push false } }
-#[arity(1,1)] function specialize_rhs {
-    pick 0 push 7 equal branch { drop 0 push 7 push 7 equal } { drop 0 push false } }
+#[arity(2,1)] sentence chose_between_what_it_compared {
+    pick 1 pick 1 equal branch { drop 1 } { drop 0 } }
+#[arity(2,1)] sentence answered_with_the_one_it_kept {
+    drop 0 }
 
-test sentence a_value_equal_to_a_literal_is_that_literal {
-    push 7        jump specialize_lhs   push true  jump crate::prelude::check_equals ? drop 0
-    push 7        jump specialize_rhs   push true  jump crate::prelude::check_equals ? drop 0
-    push 8        jump specialize_lhs   push false jump crate::prelude::check_equals ? drop 0
-    push 8        jump specialize_rhs   push false jump crate::prelude::check_equals ? drop 0
-    push some_sym jump specialize_lhs   push false jump crate::prelude::check_equals ? drop 0
-    push some_sym jump specialize_rhs   push false jump crate::prelude::check_equals ? drop 0
+test sentence a_branch_between_what_it_compared_is_one_of_them {
+    push 7 push 7          jump chose_between_what_it_compared
+    push 7 push 7          jump answered_with_the_one_it_kept
+    jump crate::prelude::check_equals ? drop 0
+
+    push 7 push 8          jump chose_between_what_it_compared
+    push 7 push 8          jump answered_with_the_one_it_kept
+    jump crate::prelude::check_equals ? drop 0
+
+    push some_sym push 7   jump chose_between_what_it_compared
+    push some_sym push 7   jump answered_with_the_one_it_kept
+    jump crate::prelude::check_equals ? drop 0
+
+    // The falsy value on either side: truthiness is what the select reads,
+    // and what it reads is the answer `equal` gave rather than the operands.
+    push false push false  jump chose_between_what_it_compared
+    push false push false  jump answered_with_the_one_it_kept
+    jump crate::prelude::check_equals ? drop 0
 
     // A tuple too: `equal` reads the whole value, so the law reads it whole.
-    push (2, 1)   jump specialize_lhs   push false jump crate::prelude::check_equals ? drop 0
-    push (2, 1)   jump specialize_rhs   push false jump crate::prelude::check_equals
+    push (2, 1) push (2, 1) jump chose_between_what_it_compared
+    push (2, 1) push (2, 1) jump answered_with_the_one_it_kept
+    jump crate::prelude::check_equals ? drop 0
+
+    push (2, 1) push (1, 2) jump chose_between_what_it_compared
+    push (2, 1) push (1, 2) jump answered_with_the_one_it_kept
+    jump crate::prelude::check_equals
 }
 
 // `X ; drop^m` = `drop^n`, and `pick d ; drop` = nothing.
@@ -491,14 +507,24 @@ identity comparing_two_built_tuples
 // `()`s came from. It is the law that says junk-normalizing has a name.
 identity untupling_and_retupling_is_the_coercion { untuple 2 tuple 2 } = { as_tuple 2 };
 
-// The value an arm tested equal to, written into the arm.
+// A branch that answers with the very value it compared.
 //
-// What it buys is the second line: once the literal is there, folding reads a
-// window it could not read before, and the arm collapses to the constant. That
-// is the entire content of the law — it is the first fact here about what an
-// instruction *computes* rather than about shape, and nothing else reaches it,
-// since `split_bool` splits the boolean and leaves the value opaque in both
-// arms.
+// `specialize-equal` is the row for it: a branch choosing between an `equal`'s
+// two operands answers with the one it takes where the test failed, since where
+// it held the two are one value. Stated at the select, because what licenses
+// reading anything off "the condition held" is the **discard**, and the discard
+// is there.
+identity a_branch_between_what_it_compared_answers_with_it
+    { pick 1 pick 1 equal branch { drop 1 } { drop 0 } }
+  = { drop 0 };
+
+// The arm that recomputes the test its branch decided.
+//
+// No window reaches this one: nothing stands between an arm and what it reads,
+// so the arm's `push 7 equal` *is* the condition — one box, two readers — and
+// what is left is a branch answering with the very value it turns on. The case
+// split on that wire decides both readings at once, which is why the proof
+// spends `cases` where no rewrite would do.
 identity specializing_a_tested_value
     { pick 0 push 7 equal branch { push 7 equal } { drop 0 push false } }
   = { pick 0 push 7 equal branch { drop 0 push true } { drop 0 push false } };

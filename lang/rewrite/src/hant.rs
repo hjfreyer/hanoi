@@ -157,6 +157,14 @@
 //! the step **compounds**: a second trip stacks on the first, a true
 //! thing said one layer deeper, and never an error — so a `repeat` around
 //! an `on` is the author claiming what a `repeat` always claims.
+//!
+//! `on(#nk in0, specialize-equal)` is the other one, and what it puts in
+//! is a **branch**: the first wire tested against the second, answering
+//! with the second where the test held and with the first where it did
+//! not — which is the first wire either way, and why the answer side is
+//! bare. Two wires exactly, and the order is the window's shape here
+//! too: it is the wire named first that every reader comes to read the
+//! branch for, and the test reads them in the order they are named.
 //! [`rules::boxless`] is the table of laws `on` can state, and a law
 //! whose bare side would take more payload than a width is not yet on it.
 //!
@@ -823,10 +831,13 @@ fn parse_on(inside: &str) -> Result<Tactic, String> {
     };
     let Some((rule, dir)) = rules::boxless(law, inputs.len()) else {
         return Err(format!(
-            "`{}` has no bare-wires side to state — `on` introduces a law one \
-             side of which is wiring alone, the way `tuple-cancel`'s right side \
-             is `id(n)`",
-            law.name()
+            "`{}` has no bare-wires side to state on {} {} — `on` introduces a law \
+             one side of which is wiring alone, the way `tuple-cancel`'s right side \
+             is `id(n)` on any width, and `specialize-equal`'s answer is the first \
+             of exactly two wires",
+            law.name(),
+            inputs.len(),
+            if inputs.len() == 1 { "wire" } else { "wires" }
         ));
     };
     let reads = match dir {
@@ -1658,6 +1669,30 @@ mod tests {
             }
         );
 
+        // The other row `on` can state, and the branch it puts in: two
+        // wires exactly, read backward like its neighbour.
+        let entries = parse_hant("proof p = lhs(on(#nk in0, specialize-equal)) diagram;").unwrap();
+        let [Step::Rewrite { tactic, .. }, _] = &entries[0].strategy[..] else {
+            panic!("{:?}", entries[0].strategy);
+        };
+        assert_eq!(
+            tactic.as_ref(),
+            &Tactic::State {
+                at: Query::new(),
+                rule: rules::Rule::SpecializeEqual {
+                    arity: 1,
+                    at: 0,
+                    answered: rules::Side::Deep,
+                },
+                dir: Direction::Backward,
+                with: MatchSpec {
+                    nodes: Vec::new(),
+                    inputs: vec![SrcExpr::Addressed(spelled("nk"), 0), SrcExpr::Input(0)],
+                },
+                pick: Pick::Unique,
+            }
+        );
+
         // A later port, and the direction written out — allowed while it
         // is the law's own.
         let entries =
@@ -1685,6 +1720,10 @@ mod tests {
             (
                 "proof p = lhs(on(#nk in0, fold)) diagram;",
                 "has no bare-wires side",
+            ),
+            (
+                "proof p = lhs(on(#nk, specialize-equal)) diagram;",
+                "no bare-wires side to state on 1 wire",
             ),
             (
                 "proof p = lhs(on(#nk in0, tuple-cancel, forward)) diagram;",

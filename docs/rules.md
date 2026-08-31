@@ -108,18 +108,18 @@ about the blocks as a pair. That is why it is also the one that shrinks
 without deciding anything.
 
 What a window reaches is therefore a *block*, not the inside of an arm:
-`x` tested `equal` to `7` becomes `7` where the select reads it, while the
-boxes of the then arm go on reading `x`. Saying more would mean naming
-which boxes are an arm's own, and nothing in the graph records that — an
-arm is the boxes only that side's blocks read, which is a fact about the
-whole graph rather than about a window.
+the bool a branch turned on becomes `true` where the select reads it,
+while the boxes of the then arm go on reading the value itself. Saying
+more would mean naming which boxes are an arm's own, and nothing in the
+graph records that — an arm is the boxes only that side's blocks read,
+which is a fact about the whole graph rather than about a window.
 
 | law | statement |
 |---|---|
 | `select-literal` | β: `push c ; if { T } else { E }` = the blocks `truthy(c)` chooses. Sound on **every** value, not only bools: `truthy` is total, `false` the one falsy value. The untaken arm is outside the window: its boxes lose their reader when the select goes, and a box the boundary does not reach is not in the program. |
 | `select-same` | `if c { x } else { x } = x`, one block at a time: a block the select answers with either way is what it answers. The select keeps its other blocks and narrows by one. The strategy step of the same name ([docs/proving.md](proving.md)) is this row read as a proof: a goal whose left side answers with a branch becomes one goal per block, and this is what puts them back together. |
 | `not-branch` | `not ; if { A } else { B } = if { B } else { A }`: a negation in front of a branch is the branch with its arms exchanged, and the negation is spent. `not v` is truthy exactly where `v` is falsy — `false` being the one falsy value — so the two selects pick opposite blocks of the same pair. Sound on **every** value, for `select-literal`'s reason: truthiness is all a branch reads, and answering it is all `not` does. |
-| `specialize-equal` | a value that tested `equal` to a literal **is** that literal, in the block the test chose: `equal` answers `Bool(a == b)`, so a truthy answer is `a == b` and nothing weaker. |
+| `specialize-equal` | `select(equal(x, y), y, x) = x`: a branch answering with one operand of its own test where the test held and the other where it did not is answering with the second, whatever the test said. `equal` is structural identity and answers `Bool(a == b)`, so a truthy condition is `x == y` and nothing weaker — where the then block is reached the two operands are one value, and the branch is choosing between a value and itself. One answer at a time, like `select-same`: the select keeps its other blocks and narrows by one, and at width 1 it goes altogether. The mirror `select(equal(x, y), x, y) = y` is the same row read with the operands the other way round. Its answer side is bare wiring at width 1, which is what lets `on(a b, specialize-equal)` state the branch onto two named wires ([docs/tactics.md](tactics.md)). |
 | `specialize-bool` | the very value a branch tested, when it is a bool, is what the branch decided: `true` in the then block, `false` in the else block. The window holds the `as_bool` that made the condition — that coercion's presence is what says the condition is a bool at all (a condition of `5` is truthy, and its then block reads `5`, not `true`). `promised-bool` is the row that puts the coercion there. |
 | `specialize-choice` | a branch inside an arm whose condition is the very value the outer branch tested is already decided: its then blocks are read in the outer then arm, its else blocks in the outer else arm — the same value tested twice answers the same. |
 
