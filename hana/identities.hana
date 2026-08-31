@@ -713,6 +713,19 @@ identity two_branches_on_one_condition_are_one_branch
     { pick 0 branch { push 1 } { push 2 } roll 1 branch { push 3 } { push 4 } }
   = { branch { push 1 push 3 } { push 2 push 4 } };
 
+// The same conversion, spent on a branch that leaves **two** answers — so
+// two selects, and two firings, from the one step that names the branch.
+//
+// A `select` carries one answer, so `select-hoist` is a row about one of
+// them, and the branch a wire decides is as many boxes as the branch left
+// values. `at(selects-on(in0), …)` is how a proof says *that branch*: the
+// wire, and every select turning on it, without the proof knowing how many
+// there are or reading their addresses off a report. It is the same group
+// the listing draws one `if` around.
+identity a_branch_of_two_answers_grows_over_what_follows_it
+    { branch { push 1 push 3 } { push 2 push 4 } negate roll 1 negate roll 1 }
+  = { branch { push 1 negate push 3 negate } { push 2 negate push 4 negate } };
+
 // The same conversion at the one port the row above cannot reach without
 // carrying the branch it moves: the **condition**. A branch whose condition is
 // what another branch answered runs under that branch instead, once per block

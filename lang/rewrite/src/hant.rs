@@ -220,7 +220,7 @@ use bytecode::{IdentityIndex, SentenceIndex};
 
 use crate::diagram2::query::Query;
 use crate::diagram2::rules::{self, Law};
-use crate::diagram2::tactic::{self, MatchSpec, Pick, SrcExpr, Tactic};
+use crate::diagram2::tactic::{self, Aim, MatchSpec, Pick, SrcExpr, Tactic, Wire};
 use crate::graph::{Direction, Prefix};
 use crate::term::TermIndex;
 
@@ -707,7 +707,7 @@ fn parse_tactic(input: &str) -> Result<(Tactic, &str), String> {
         // box id, copied off the residual listing that printed it.
         "at" => {
             let (inside, after) = paren_block(rest.trim_start())
-                .ok_or("`at` expects `(#box, law)` or `(#box, law, backward)`")?;
+                .ok_or("`at` expects `(#box, law)` or `(selects-on(#wire), law, backward)`")?;
             Ok((parse_at(inside)?, after))
         }
         // The introduction: a law stated onto named wires, where no
@@ -767,11 +767,11 @@ fn parse_tactic(input: &str) -> Result<(Tactic, &str), String> {
 /// happens to fire", which is the opposite of what naming a box is for.
 fn parse_at(inside: &str) -> Result<Tactic, String> {
     let mut fields = inside.split(',').map(str::trim);
-    let node = fields
+    let aim = fields
         .next()
         .filter(|f| !f.is_empty())
-        .ok_or("`at` names no box")?;
-    let node = Prefix::parse(node).map_err(|why| format!("`at`: {}", why))?;
+        .ok_or("`at` names nothing to fire at")?;
+    let aim = parse_aim(aim)?;
     let law = fields.next().map(str::trim).unwrap_or("");
     let law = one_law(law)?;
     let dir = match fields.next().map(str::trim) {
@@ -786,11 +786,65 @@ fn parse_at(inside: &str) -> Result<Tactic, String> {
     };
     if let Some(extra) = fields.next() {
         return Err(format!(
-            "`at` takes a box, a law and a direction, and found: {}",
+            "`at` takes an aim, a law and a direction, and found: {}",
             head_of(extra)
         ));
     }
-    Ok(tactic::fire_at(node, law, dir))
+    Ok(tactic::fire_at(aim, law, dir))
+}
+
+/// What an `at` is aimed at: `#nk` is that one box, and
+/// `selects-on(#nk)` every branch turning on what it answers.
+///
+/// The second is a set because a branch is. A `select` carries one answer,
+/// so a `branch` leaving `n` values is `n` peers on one condition — the
+/// lot of which a listing draws one bracket around, and none of which is
+/// the branch on its own. Writing `n` addresses for what a report shows as
+/// one `if` is the thing this spares, and it spares knowing `n`.
+///
+/// The wire is written the way the listing prints one: `in0` for a
+/// boundary input, `#nk` for output 0 of a box, `#nk.1` for a later port.
+fn parse_aim(written: &str) -> Result<Aim, String> {
+    let Some(rest) = written.strip_prefix("selects-on") else {
+        return Ok(Aim::Box(
+            Prefix::parse(written).map_err(|why| format!("`at`: {}", why))?,
+        ));
+    };
+    let inside = rest
+        .trim_start()
+        .strip_prefix('(')
+        .and_then(|rest| rest.strip_suffix(')'))
+        .ok_or("`selects-on` expects `(#wire)`")?
+        .trim();
+    if inside.is_empty() {
+        return Err("`selects-on` names no wire".to_string());
+    }
+    Ok(Aim::SelectsOn(parse_condition(inside)?))
+}
+
+/// One wire, as `at`'s aim spells it — the same alphabet [`parse_wire`]
+/// reads for `on`, and a different type because there are no bindings
+/// here for the other two forms of a source to have come from.
+fn parse_condition(written: &str) -> Result<Wire, String> {
+    if let Some(digits) = written.strip_prefix("in")
+        && !digits.is_empty()
+        && digits.chars().all(|c| c.is_ascii_digit())
+    {
+        let i = digits
+            .parse()
+            .map_err(|_| format!("`selects-on`: `{}` is past any boundary", written))?;
+        return Ok(Wire::Input(i));
+    }
+    let (name, port) = match written.split_once('.') {
+        Some((name, port)) => (
+            name,
+            port.parse::<usize>()
+                .map_err(|_| format!("`selects-on`: `{}` names no port of `{}`", port, name))?,
+        ),
+        None => (written, 0),
+    };
+    let prefix = Prefix::parse(name).map_err(|why| format!("`selects-on`: {}", why))?;
+    Ok(Wire::Port(prefix, port))
 }
 
 /// `on(#nk in0, tuple-cancel)`: wires named in order, and the law whose
@@ -1562,7 +1616,11 @@ mod tests {
         assert_eq!(*side, OnSide::Lhs);
         assert_eq!(
             tactic.as_ref(),
-            &tactic::fire_at(spelled("nkz"), Law::SelectSame, Direction::Forward)
+            &tactic::fire_at(
+                Aim::Box(spelled("nkz")),
+                Law::SelectSame,
+                Direction::Forward
+            )
         );
 
         // The `#` is the listing's spelling, and optional here, so a
@@ -1573,7 +1631,11 @@ mod tests {
         };
         assert_eq!(
             tactic.as_ref(),
-            &tactic::fire_at(spelled("nkz"), Law::SelectSame, Direction::Forward)
+            &tactic::fire_at(
+                Aim::Box(spelled("nkz")),
+                Law::SelectSame,
+                Direction::Forward
+            )
         );
 
         // The third field is the direction, `forward` when it is left out.
@@ -1583,7 +1645,11 @@ mod tests {
         };
         assert_eq!(
             tactic.as_ref(),
-            &tactic::fire_at(spelled("sq"), Law::SelectSame, Direction::Backward)
+            &tactic::fire_at(
+                Aim::Box(spelled("sq")),
+                Law::SelectSame,
+                Direction::Backward
+            )
         );
 
         // And it composes like any other tactic.
@@ -1599,10 +1665,66 @@ mod tests {
         assert_eq!(
             steps[1],
             Tactic::Try(Box::new(tactic::fire_at(
-                spelled("w"),
+                Aim::Box(spelled("w")),
                 Law::NotNot,
                 Direction::Backward
             )))
+        );
+    }
+
+    /// `selects-on(#wire)` is the other thing an `at` can be aimed at: the
+    /// branch a wire decides, which is a `select` per answer and so a set.
+    /// The wire is written the way the listing prints one.
+    #[test]
+    fn a_branch_is_named_by_the_wire_it_turns_on() {
+        for (written, want) in [
+            ("in0", Wire::Input(0)),
+            ("in12", Wire::Input(12)),
+            ("#nkz", Wire::Port(spelled("nkz"), 0)),
+            // Bare, the way `at`'s own address may be written.
+            ("nkz", Wire::Port(spelled("nkz"), 0)),
+            ("#nkz.2", Wire::Port(spelled("nkz"), 2)),
+        ] {
+            let proof = format!(
+                "proof p = lhs(at(selects-on({}), select-hoist)) diagram;",
+                written
+            );
+            let entries = parse_hant(&proof).unwrap();
+            let [Step::Rewrite { tactic, .. }, _] = &entries[0].strategy[..] else {
+                panic!("{}", proof)
+            };
+            assert_eq!(
+                tactic.as_ref(),
+                &tactic::fire_at(Aim::SelectsOn(want), Law::SelectHoist, Direction::Forward),
+                "{}",
+                proof
+            );
+        }
+
+        // It takes a direction like any other `at`.
+        let entries =
+            parse_hant("proof p = lhs(at(selects-on(in0), select-same, backward)) diagram;")
+                .unwrap();
+        let [Step::Rewrite { tactic, .. }, _] = &entries[0].strategy[..] else {
+            panic!()
+        };
+        assert_eq!(
+            tactic.as_ref(),
+            &tactic::fire_at(
+                Aim::SelectsOn(Wire::Input(0)),
+                Law::SelectSame,
+                Direction::Backward
+            )
+        );
+
+        // And an aim prints the way it is written.
+        assert_eq!(
+            Aim::SelectsOn(Wire::Port(spelled("nkz"), 2)).to_string(),
+            "selects-on(#nkz.2)"
+        );
+        assert_eq!(
+            Aim::SelectsOn(Wire::Input(0)).to_string(),
+            "selects-on(in0)"
         );
     }
 
@@ -1614,7 +1736,7 @@ mod tests {
     fn a_named_box_is_written_one_way() {
         for (proof, expected) in [
             ("proof p = lhs(at) diagram;", "expects"),
-            ("proof p = lhs(at()) diagram;", "names no box"),
+            ("proof p = lhs(at()) diagram;", "names nothing to fire at"),
             ("proof p = lhs(at(#nkz)) diagram;", "names no law"),
             (
                 "proof p = lhs(at(the third one, select-same)) diagram;",
@@ -1639,6 +1761,19 @@ mod tests {
             (
                 "proof p = lhs(at(#nkz, select-same, backward, 9)) diagram;",
                 "and found",
+            ),
+            // The set-valued aim, and the three ways of writing it wrong.
+            (
+                "proof p = lhs(at(selects-on, select-same)) diagram;",
+                "expects `(#wire)`",
+            ),
+            (
+                "proof p = lhs(at(selects-on(), select-same)) diagram;",
+                "names no wire",
+            ),
+            (
+                "proof p = lhs(at(selects-on(#nk.z), select-same)) diagram;",
+                "names no port",
             ),
         ] {
             let err = parse_hant(proof).unwrap_err();
