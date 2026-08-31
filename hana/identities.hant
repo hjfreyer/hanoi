@@ -36,6 +36,13 @@ proof identities::a_branch_whose_blocks_agree =
 proof identities::what_follows_a_branch_runs_inside_it =
     lhs(fire(select-hoist)) diagram;
 
+// And the sibling row, at the port that one cannot reach: the branch that
+// turns on what a branch answered runs under it. One firing again, and the
+// same shape of proof — the row grows the graph, so no list drives it and the
+// proof names it.
+proof identities::a_branch_in_a_condition_runs_under_it =
+    lhs(fire(cond-hoist)) diagram;
+
 // And the drive that spends the same row to a fixpoint. `tree` hoists every
 // branch past everything but another branch, one firing at a time, until no
 // box that is not a select reads what a select answers — the decision tree,

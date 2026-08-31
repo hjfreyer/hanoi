@@ -167,7 +167,8 @@ Inside `lhs(…)`, `rhs(…)` and `both(…)` is the rewrite language of
 [docs/tactics.md](tactics.md), juxtaposed like steps are: `saturate(law,
 …)` (those laws to fixpoint), `branches` (the branch layer), `decide`
 (the whole table — what `diagram` drives), `tree` (`select-hoist` past
-everything but another branch, until the selects are all at the output),
+everything but another branch and `cond-hoist` out of every condition,
+until the selects are all at the output and no condition holds one),
 `fire(law, …)` (one directed firing), `at(#box, law)` (one firing at a
 **named box**), `on(#wire …, law)` (a law stated onto **named wires** —
 the introduction no search anchors, `on(in0 in1, tuple-cancel)` putting

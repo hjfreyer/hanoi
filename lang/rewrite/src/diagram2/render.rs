@@ -430,7 +430,8 @@ fn arms_of(graph: &Graph, select: NodeId) -> HashSet<NodeId> {
 /// both sides. [`Law::SelectHoist`](crate::diagram2::rules::Law) grows a
 /// branch *forwards* over the work after it, and the two copies it leaves
 /// read whatever that work read from outside — one wire, a reader in each
-/// arm. Such a box is upstream of both block lists, and if it reads
+/// arm. ([`Law::CondHoist`](crate::diagram2::rules::Law) leaves the same
+/// shape, its two copies reading the blocks of the branch that moved.) Such a box is upstream of both block lists, and if it reads
 /// nothing itself then [`nesting`]'s intersection puts it inside the
 /// branch, since every reader agrees on the branch and the intersection
 /// cannot see that they disagree on the arm.
@@ -1263,8 +1264,9 @@ mod tests {
     /// A branch grown **forwards** over the work after it, and the operand
     /// that work read from outside — now read by a copy in each arm.
     ///
-    /// `select-hoist` is the only row that makes this shape, and it is the
-    /// shape both the arm reading and the writing-at-each-use rest on.
+    /// The two hoists are the rows that make this shape — `select-hoist`
+    /// here — and it is the shape both the arm reading and the
+    /// writing-at-each-use rest on.
     fn grown() -> (Graph, NodeId) {
         use crate::diagram2::rules::{Law, apply, propose};
         use crate::term::Prim;

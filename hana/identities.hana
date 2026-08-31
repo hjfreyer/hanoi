@@ -670,19 +670,79 @@ identity what_follows_a_branch_runs_inside_it
     { branch { not } { as_bool } negate }
   = { branch { not negate } { as_bool negate } };
 
+// The same conversion at the one port the row above cannot reach without
+// carrying the branch it moves: the **condition**. A branch whose condition is
+// what another branch answered runs under that branch instead, once per block
+// it chooses between — and each copy turns on the block itself, which is the
+// value the inner branch was going to hand over anyway.
+//
+//   select(select(C, T1, E1), T2, E2)
+//     = select(C, select(T1, T2, E2), select(E1, T2, E2))
+//
+// Run against the interpreter on both blocks of both branches, and on a
+// condition that is no boolean at all: truthiness is the whole of what either
+// select reads, so nothing here is promised about any wire.
+#[arity(3,1)] sentence a_branch_deciding_a_branch {
+    branch { not } { as_bool } branch { negate } { is_int }
+}
+#[arity(3,1)] sentence the_branch_under_the_one_deciding_it {
+    branch { not     branch { negate } { is_int } }
+           { as_bool branch { negate } { is_int } }
+}
+
+test sentence a_branch_in_a_condition_agrees_either_way {
+    push 7 push true  push true  jump a_branch_deciding_a_branch
+    push 7 push true  push true  jump the_branch_under_the_one_deciding_it
+    jump crate::prelude::check_equals ? drop 0
+
+    push 7 push false push true  jump a_branch_deciding_a_branch
+    push 7 push false push true  jump the_branch_under_the_one_deciding_it
+    jump crate::prelude::check_equals ? drop 0
+
+    push 7 push true  push false jump a_branch_deciding_a_branch
+    push 7 push true  push false jump the_branch_under_the_one_deciding_it
+    jump crate::prelude::check_equals ? drop 0
+
+    push 7 push false push false jump a_branch_deciding_a_branch
+    push 7 push false push false jump the_branch_under_the_one_deciding_it
+    jump crate::prelude::check_equals ? drop 0
+
+    // Neither condition is a bool, and neither branch cares.
+    push "hi" push (2, 1) push 0 jump a_branch_deciding_a_branch
+    push "hi" push (2, 1) push 0 jump the_branch_under_the_one_deciding_it
+    jump crate::prelude::check_equals
+}
+
+// `cond-hoist` is the row, and one firing is the whole proof: the two
+// branches of the left side become three on the right, and every condition
+// among them is select-free.
+identity a_branch_in_a_condition_runs_under_it
+    { branch { not } { as_bool } branch { negate } { is_int } }
+  = { branch { not     branch { negate } { is_int } }
+             { as_bool branch { negate } { is_int } } };
+
 // The same conversion spent everywhere it will go, which is what a decision
 // tree is. Two branches with work between them and work after them: the
 // `negate` decides the second branch, and the `is_int` reads what the second
 // branch answers. `tree` hoists each branch past everything but another
 // branch, so both moves land and what is left reads nothing a branch answers
 // unless it is a branch — every `not`, `negate` and `is_int` above both
-// selects, and the selects at the boundary. The right side is that shape
-// written out.
+// selects.
+//
+// And then the other end of the same sorting. Once the `negate` has gone into
+// the arms, what decides the second branch is what the first one *answered* —
+// which is a select in a condition, and the one place `select-hoist` cannot
+// reach. `cond-hoist` is that row, and the second branch splits in two under
+// the first: one copy per block the first branch chooses between, each turning
+// on that block. The right side is the shape both rows leave — every condition
+// select-free, and the branches at the boundary.
 #[arity(2,1)] sentence branches_where_they_stood {
     pick 1 branch { not } { as_bool } negate branch { negate } { not } is_int
 }
 #[arity(2,1)] sentence branches_at_the_output {
-    pick 1 branch { not negate } { as_bool negate } branch { negate is_int } { not is_int }
+    pick 1
+    branch { not negate     branch { negate is_int } { not is_int } }
+           { as_bool negate branch { negate is_int } { not is_int } }
 }
 
 test sentence the_branches_agree_wherever_they_stand {
@@ -701,7 +761,9 @@ test sentence the_branches_agree_wherever_they_stand {
 
 identity the_branches_end_up_at_the_output
     { pick 1 branch { not } { as_bool } negate branch { negate } { not } is_int }
-  = { pick 1 branch { not negate } { as_bool negate } branch { negate is_int } { not is_int } };
+  = { pick 1
+      branch { not negate     branch { negate is_int } { not is_int } }
+             { as_bool negate branch { negate is_int } { not is_int } } };
 
 // A lemma, and the claim that spends it.
 // ---------------------------------------------------------------------------

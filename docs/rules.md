@@ -83,13 +83,14 @@ Two lists group the rows a driver can run to fixpoint:
 | `folding` | `fold`, `tested-bool`, `as-tuple-round-trip`, `retuple`, `is-tuple-built`, `not-not`, `and-literal`, `or-literal`, `idem`, `tuple-cancel`, `as-tuple-built`, `equal-refl` | the value layer — what specific instructions compute, with the machine as the judge |
 
 The `decide` drive — what the `diagram` closer runs — spends both lists
-to fixpoint. Six rows are on **no** list at all: `promised-bool`,
-`shannon`, `select-hoist`, `comm`, `as-bool-branch` and `coercion-guard`.
+to fixpoint. Seven rows are on **no** list at all: `promised-bool`,
+`shannon`, `select-hoist`, `cond-hoist`, `comm`, `as-bool-branch` and
+`coercion-guard`.
 Each is held out on purpose, and a proof names the one it wants —
 `fire(law)`, `at(#box, law)` — the way it names `inline`.
 
 What holds a row off a list is that a driver could not run it to
-fixpoint. Five of the six **grow** a graph. `comm` does neither: it
+fixpoint. Six of the seven **grow** a graph. `comm` does neither: it
 permutes, and a driver would exchange the same two operands forever.
 
 ## The branch layer (`branching`)
@@ -199,6 +200,34 @@ it. The region rides as payload and *which* region it is, is the
 naming strategy's: the `tree` tactic of [docs/tactics.md](tactics.md)
 spends this row to a fixpoint over a body that stops at every other
 branch, which is what leaves the selects bunched at the output.
+
+**`cond-hoist`** — the same conversion at the one port `select-hoist`
+cannot reach without carrying the branch it moves, the **condition**:
+
+```text
+select(select(C, T1, E1), T2, E2)
+  =  select(C, select(T1, T2, E2), select(E1, T2, E2))
+```
+
+A branch whose condition is what another branch answered runs under that
+branch instead, once per block it chooses between — and each copy turns
+on the block itself, which is the value the inner select was going to
+hand over anyway. On a truthy `C` both sides are `select(T1, T2, E2)`
+and on a falsy one both are `select(E1, T2, E2)`, which is the whole
+proof: nothing is pinned, nothing is promised about any wire, and this
+holds of **any** two branches.
+
+The sibling of `select-hoist`, and a **narrower window** than one, which
+is why it is a row rather than a payload. `select-hoist` carries a
+region, and the region `propose` reads is the select's whole downstream
+cone: hoisting past a branch that way copies everything after it as
+well. Here the payload is three widths — the inner branch's arity, which
+of its answers the condition is, and the arity of the branch that moves
+— the window is two boxes, and what the far side copies is one select
+and nothing else. It grows a graph all the same, two boxes into three,
+so no list drives it. The `tree` tactic of [docs/tactics.md](tactics.md)
+spends it after `select-hoist` has nothing left to move, which is what
+leaves every condition select-free.
 
 **`comm`** — the other way round is the same answer, for any `op` the
 instruction set says is `commutative`:

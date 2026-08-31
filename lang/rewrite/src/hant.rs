@@ -103,7 +103,7 @@
 //! | `saturate(law, …)` | those laws to fixpoint |
 //! | `branches` | the branch layer with its cleanup, to fixpoint |
 //! | `decide` | the whole table to fixpoint — what the `diagram` closer drives |
-//! | `tree` | `select-hoist` to fixpoint, past everything but another branch — the decision tree |
+//! | `tree` | `select-hoist` past everything but another branch, then `cond-hoist` out of every condition — the decision tree |
 //! | `fire(law, …)` | the first proposal of those laws, once — fails finding none |
 //! | `at(#box, law)` | that law, once, in a match that holds **that box** — the address the residual printed |
 //! | `at(#box, law, backward)` | the same, reading the law's equation right to left |

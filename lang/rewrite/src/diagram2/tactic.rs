@@ -1162,26 +1162,46 @@ pub fn branch_pass() -> Tactic {
     Tactic::Repeat(Box::new(fire_first(rules::branching())), None)
 }
 
-/// Every branch grown forward over everything but another branch, to
-/// fixpoint: the **decision tree**.
+/// Every branch grown forward over everything but another branch, and
+/// then out of every condition it stands in, to fixpoint: the
+/// **decision tree**.
 ///
-/// `select-hoist` says that what runs after a branch runs inside
-/// whichever arm the branch takes. Spent everywhere it will go, with
-/// [`hoistable`]'s reading of the body — the cone below a select, every
-/// other select left standing — it sorts a graph into two halves: the
-/// work, which reads nothing a branch answers, and the branches, which
-/// read the work and each other. That is a decision tree said in a
-/// graph, and the fixpoint is exactly the sentence "no box but a select
-/// reads what a select answers".
+/// Two rows, tried in that order. `select-hoist` says that what runs
+/// after a branch runs inside whichever arm the branch takes; spent
+/// everywhere it will go, with [`hoistable`]'s reading of the body — the
+/// cone below a select, every other select left standing — it sorts a
+/// graph into two halves: the work, which reads nothing a branch
+/// answers, and the branches, which read the work and each other.
+/// `cond-hoist` is the row for the one port that leaves behind: a
+/// branch whose **condition** is what another branch answered runs
+/// under that branch instead, once per block it chooses between.
 ///
-/// It **grows** a graph, which is why no list drives the row and why
+/// Between them the fixpoint is two sentences. No box but a select
+/// reads what a select answers, so nothing computes from an answer; and
+/// no select turns on what a select answered, so every condition in the
+/// graph is select-free — a test of the work, decided before any branch
+/// runs. That is a decision tree said in a graph.
+///
+/// The order is what makes the second row cheap and the drive easy to
+/// read. A `cond-hoist` is offered only in a round where no branch has
+/// anything to grow over, so by the time one fires every reader of an
+/// answer is already a select and what the step copies is a **branch**,
+/// never work. Nor can it hand the first row anything back: the copies
+/// are read by the select it puts down, that select is read by whoever
+/// read the branch that moved — selects, all of them — and no box that
+/// is not a select gains an answer to read. So the drive is one phase
+/// and then the other, however the rounds interleave.
+///
+/// It **grows** a graph, which is why no list drives either row and why
 /// this is a tactic a proof names rather than something `decide` runs. A
 /// branch's body goes into both arms, so a value under `n` branches ends
 /// up written `2^n` times in the worst case, and the worst case is a
 /// real program: this is for a goal that wants its cases laid out, not
 /// for tidying a large one.
 ///
-/// It terminates, and the measure is what the copies read. A hoist
+/// It terminates, a phase at a time.
+///
+/// The hoisting phase's measure is what the copies read. A hoist
 /// replaces each body box with two boxes reading that branch's blocks
 /// instead of its answers, so each copy has strictly fewer branches
 /// above it than the box it came from, and no box outside the body
@@ -1190,13 +1210,38 @@ pub fn branch_pass() -> Tactic {
 /// else in the round changes: a select is never copied, so the branches
 /// keep their count, and the branch that fired loses its last reader
 /// and drops out of the program.
+///
+/// The condition phase's measure is the graph read as the term it
+/// unfolds to, weighted so that a condition costs what it decides:
+/// `μ(op(t̄)) = 1 + Σμ(tᵢ)` and `μ(select(c, t̄, ē)) = μ(c)·(1 + Σμ(t̄) +
+/// Σμ(ē))`. A firing takes `μ(c)·(1 + μ(t) + μ(e))·K` to `μ(c)·(1 +
+/// μ(t)·K + μ(e)·K)` for `K = 1 + μ(T) + μ(E)`, which is smaller by
+/// `μ(c)·(K - 1)` — and `K` is at least 3, since a block weighs at
+/// least one. The unfolding is finite because the graph is acyclic, and
+/// a firing is one such conversion at every occurrence it is shared at,
+/// so an endless drive would be an endless run on the unfolding.
 pub fn tree() -> Tactic {
+    let branches = || Query::new().is("sel", query::NodePred::Kind(query::KindPat::Select));
     Tactic::Repeat(
-        Box::new(Tactic::Fire {
-            at: Query::new().is("sel", query::NodePred::Kind(query::KindPat::Select)),
-            rule: RuleSpec::Hoist { anchor: Var("sel") },
-            pick: Pick::First,
-        }),
+        Box::new(Tactic::First(vec![
+            Tactic::Fire {
+                at: branches(),
+                rule: RuleSpec::Hoist { anchor: Var("sel") },
+                pick: Pick::First,
+            },
+            // Read off rather than stated: the payload is three widths,
+            // and the box the pattern anchors at is the branch that made
+            // the condition, which `propose` finds from the branch that
+            // moves.
+            Tactic::Fire {
+                at: branches(),
+                rule: RuleSpec::ReadOff {
+                    laws: vec![Law::CondHoist],
+                    anchor: Var("sel"),
+                },
+                pick: Pick::First,
+            },
+        ])),
         None,
     )
 }
@@ -1685,6 +1730,22 @@ mod tests {
         assert_eq!(kind, &NodeKind::Op(Prim::Push(Value::Int(1))));
     }
 
+    /// Whether every condition in the graph is select-free: no select
+    /// turns on what a select answered.
+    ///
+    /// With [`bunched`] holding, nothing between them either — a box
+    /// that is not a select reads no answer at all — so the two
+    /// together say a condition is decided before any branch runs.
+    fn decided_first(graph: &Graph) -> bool {
+        graph
+            .live()
+            .filter(|(_, kind)| matches!(kind, NodeKind::Select { .. }))
+            .all(|(id, _)| match graph.sources(id)[0] {
+                Source::Port { node, .. } => !matches!(graph.kind(node), NodeKind::Select { .. }),
+                _ => true,
+            })
+    }
+
     /// Whether every branch is where a decision tree wants it: nothing
     /// but another select, or the boundary, reads what a select answers.
     fn bunched(graph: &Graph) -> bool {
@@ -1720,16 +1781,18 @@ mod tests {
             // `negate`, which is the corpus's own `select-hoist` claim.
             ("branch { not } { as_bool } negate", 1),
             // Work between two branches and work after both. Every box of
-            // it ends up above every branch.
+            // it ends up above every branch — and the second branch turned
+            // on what the first answered, so it splits in two under it.
             (
                 "pick 1 branch { not } { as_bool } negate branch { negate } { not } is_int",
-                2,
+                3,
             ),
             // A branch whose answer two boxes read, one of them the
-            // condition of the branch after it.
+            // condition of the branch after it — so the second branch
+            // splits under the first, which is three where two stood.
             (
                 "pick 0 branch { not } { as_bool } pick 0 is_bool branch { negate } { not }",
-                2,
+                4,
             ),
         ] {
             let mut graph = built(body);
@@ -1740,6 +1803,12 @@ mod tests {
             assert!(
                 bunched(&graph),
                 "{}: a branch is still read by something that is not one:\n{}",
+                body,
+                graph
+            );
+            assert!(
+                decided_first(&graph),
+                "{}: a branch still turns on what a branch answered:\n{}",
                 body,
                 graph
             );
@@ -1822,12 +1891,16 @@ mod tests {
         run(&mut graph, &mut deriv, &tree()).expect("the inner branch goes first");
         graph.check().unwrap();
         assert!(bunched(&graph), "\n{}", graph);
+        assert!(decided_first(&graph), "\n{}", graph);
+        // Four: `S` grew over the `not` and the `add`, and `T` — which
+        // turns on what that `not` now answers, an answer of `S` — split
+        // in two underneath it.
         assert_eq!(
             graph
                 .live()
                 .filter(|(_, k)| matches!(k, NodeKind::Select { .. }))
                 .count(),
-            2,
+            4,
             "\n{}",
             graph
         );
