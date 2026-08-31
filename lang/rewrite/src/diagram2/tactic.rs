@@ -155,6 +155,65 @@ pub enum SrcExpr {
     Addressed(Prefix, usize),
 }
 
+/// A wire, written the way a listing prints one: `in2` is boundary input
+/// 2, `#nk` is output 0 of the box that address names, and `#nk.1` a later
+/// port.
+///
+/// [`SrcExpr`] says the same things and more, and cannot be used here: its
+/// other two forms read a [`Bindings`], and an [`Tactic::At`] has no query
+/// to have bound anything. What is left is exactly what a person can write
+/// off a report.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Wire {
+    /// Boundary input `i` of the side.
+    Input(usize),
+    /// Output `port` of the box the written address names, under
+    /// [`Tactic::At`]'s discipline: looked up live, never held.
+    Port(Prefix, usize),
+}
+
+impl fmt::Display for Wire {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Wire::Input(i) => write!(f, "in{}", i),
+            // A `Prefix` writes its own `#`, the way a listing does.
+            Wire::Port(at, 0) => write!(f, "{}", at),
+            Wire::Port(at, port) => write!(f, "{}.{}", at, port),
+        }
+    }
+}
+
+/// What an [`Tactic::At`] is aimed at: a box, or a set of them read off a
+/// wire.
+///
+/// One box was the whole of it while a `select` carried every answer of
+/// its branch. It carries one now, so the branch a wire decides is `n`
+/// boxes — peers, none of them the branch on its own — and a proof that
+/// wants to spend a row on *the branch* has `n` addresses to write and no
+/// way to know `n` without reading the report. [`Aim::SelectsOn`] is the
+/// name of the set instead, which is the same thing the listing draws one
+/// bracket around.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Aim {
+    /// The one box the written address names.
+    Box(Prefix),
+    /// Every live `select` that turns on this wire — its condition, port
+    /// 0, and never a block. Read **literally**: a branch nested inside
+    /// another that retests the same wire turns on it too, and is in.
+    /// (The listing's bracket is the outermost peers, which is a
+    /// different question and a sharper address.)
+    SelectsOn(Wire),
+}
+
+impl fmt::Display for Aim {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Aim::Box(at) => write!(f, "{}", at),
+            Aim::SelectsOn(wire) => write!(f, "selects-on({})", wire),
+        }
+    }
+}
+
 /// The recipe for a stated [`Match`] against one side of one
 /// rule. Resolution is pure reading; the result goes through
 /// [`rules::apply`], so a wrong recipe is a refused step.
@@ -241,7 +300,7 @@ pub enum Tactic {
     /// not. Where it finds nothing it says so, loudly, naming the box and
     /// the law.
     At {
-        at: Prefix,
+        at: Aim,
         law: Law,
         dir: Direction,
         pick: Pick,
@@ -315,6 +374,10 @@ pub enum TacticError {
     /// An address several boxes answer to, with the ones it could have
     /// meant — lengthen it.
     ManyBoxes { at: Prefix, found: Vec<Address> },
+    /// [`Aim::SelectsOn`] named a wire no live `select` turns on. Said
+    /// apart from an address nothing answers to: the wire is there, and
+    /// nothing branches on it.
+    NoSelectsOn { wire: Wire },
     /// [`Tactic::At`] found the box, and no match of that law in that
     /// direction holds it.
     NoMatchAt {
@@ -353,6 +416,9 @@ impl fmt::Display for TacticError {
                     .collect::<Vec<String>>()
                     .join(" ")
             ),
+            TacticError::NoSelectsOn { wire } => {
+                write!(f, "no live branch of this side turns on {}", wire)
+            }
             TacticError::NoMatchAt { at, law, dir } => write!(
                 f,
                 "no {} `{}` match holds {}",
@@ -418,7 +484,13 @@ impl Runner<'_> {
     fn run(&mut self, tactic: &Tactic) -> Result<Progress, TacticError> {
         match tactic {
             Tactic::Fire { at, rule, pick } => self.fire(at, rule, *pick),
-            Tactic::At { at, law, dir, pick } => self.fire_at(at, *law, *dir, *pick),
+            Tactic::At { at, law, dir, pick } => match at {
+                Aim::Box(at) => {
+                    let node = self.named(at)?;
+                    self.fire_at(node, *law, *dir, *pick).map(Progress::of)
+                }
+                Aim::SelectsOn(wire) => self.fire_at_each(wire, *law, *dir, *pick),
+            },
             Tactic::State {
                 at,
                 rule,
@@ -527,29 +599,93 @@ impl Runner<'_> {
     /// crosses an [`apply`](rules::apply). The address does not need
     /// re-resolving, being an id already; what needs re-asking is which
     /// matches still hold it.
-    fn fire_at(
+    /// The live box an address names.
+    ///
+    /// The three answers are three different mistakes, said apart: an
+    /// address nothing answers to is a proof reading a listing from before
+    /// the step in front of it changed what that box computes, and that is
+    /// worth its own sentence; an address several boxes answer to wants
+    /// lengthening; and only the third is a box.
+    fn named(&self, at: &Prefix) -> Result<NodeId, TacticError> {
+        match self.graph.lookup(at) {
+            Named::One(node) => Ok(node),
+            Named::Nothing => Err(TacticError::NoSuchBox { at: at.clone() }),
+            Named::Many(found) => Err(TacticError::ManyBoxes {
+                at: at.clone(),
+                found,
+            }),
+        }
+    }
+
+    /// The wire a [`Wire`] names, resolved against the live side.
+    fn wire(&self, wire: &Wire) -> Result<Source, TacticError> {
+        match wire {
+            Wire::Input(i) => Ok(Source::Input(*i)),
+            Wire::Port(at, port) => Ok(Source::Port {
+                node: self.named(at)?,
+                port: *port,
+            }),
+        }
+    }
+
+    /// [`Aim::SelectsOn`]: that law, that direction, once at **every**
+    /// `select` the wire turns on.
+    ///
+    /// The set is read once, at entry, and kept as **addresses** rather
+    /// than ids — the discipline every other address here is under, and
+    /// here it is load-bearing twice over. A firing rebuilds boxes, so an
+    /// id would go stale; and `select-hoist` puts down fresh selects on the
+    /// very same condition, so re-reading the set between firings would
+    /// find the step's own answers and never finish. What the step means is
+    /// the branch as it stood when the step was reached.
+    ///
+    /// A member that is gone by its turn is skipped and not mourned: a
+    /// firing at one answer may take another with it, and a step that
+    /// insisted on the count would be brittle for nothing. A member still
+    /// standing that the law cannot fire at is the loud case — that is
+    /// [`TacticError::NoMatchAt`], naming the box.
+    fn fire_at_each(
         &mut self,
-        at: &Prefix,
+        wire: &Wire,
         law: Law,
         dir: Direction,
         pick: Pick,
     ) -> Result<Progress, TacticError> {
-        // Said apart from "no match holds it", because the two are
-        // different mistakes: an address nothing answers to is a proof
-        // reading a listing from before the step in front of it changed
-        // what that box computes, and that is worth its own sentence. An
-        // address several boxes answer to is a third, and its answer is to
-        // write more of it.
-        let node = match self.graph.lookup(at) {
-            Named::One(node) => node,
-            Named::Nothing => return Err(TacticError::NoSuchBox { at: at.clone() }),
-            Named::Many(found) => {
-                return Err(TacticError::ManyBoxes {
-                    at: at.clone(),
-                    found,
-                });
-            }
-        };
+        let cond = self.wire(wire)?;
+        let aimed: Vec<Address> = self
+            .graph
+            .live()
+            .filter(|(id, kind)| {
+                matches!(kind, NodeKind::Select) && self.graph.sources(*id).first() == Some(&cond)
+            })
+            .map(|(id, _)| self.graph.address(id))
+            .collect();
+        if aimed.is_empty() {
+            return Err(TacticError::NoSelectsOn { wire: wire.clone() });
+        }
+        let mut total = 0;
+        for address in aimed {
+            let prefix = Prefix::parse(&address.to_string()).expect("an address is a prefix");
+            let node = match self.graph.lookup(&prefix) {
+                Named::One(node) => node,
+                // Taken by an earlier firing, which is allowed.
+                Named::Nothing => continue,
+                Named::Many(found) => {
+                    return Err(TacticError::ManyBoxes { at: prefix, found });
+                }
+            };
+            total += self.fire_at(node, law, dir, pick)?;
+        }
+        Ok(Progress::of(total))
+    }
+
+    fn fire_at(
+        &mut self,
+        node: NodeId,
+        law: Law,
+        dir: Direction,
+        pick: Pick,
+    ) -> Result<usize, TacticError> {
         let address = self.graph.address(node);
         let missing = || TacticError::NoMatchAt {
             at: address,
@@ -560,7 +696,7 @@ impl Runner<'_> {
             Pick::First => {
                 let step = self.at_offers(node, law, dir).into_iter().next();
                 self.land(step.ok_or_else(missing)?)?;
-                Ok(Progress::Advanced(1))
+                Ok(1)
             }
             Pick::Unique => {
                 let mut offers = self.at_offers(node, law, dir);
@@ -568,7 +704,7 @@ impl Runner<'_> {
                     0 => Err(missing()),
                     1 => {
                         self.land(offers.pop().expect("one"))?;
-                        Ok(Progress::Advanced(1))
+                        Ok(1)
                     }
                     found => Err(TacticError::Ambiguous { found }),
                 }
@@ -587,7 +723,7 @@ impl Runner<'_> {
                 if fired == 0 {
                     return Err(missing());
                 }
-                Ok(Progress::Advanced(fired))
+                Ok(fired)
             }
         }
     }
@@ -1176,7 +1312,7 @@ pub fn fire_first(laws: Vec<Law>) -> Tactic {
 /// One law, one box, one direction — [`Tactic::At`] with the canonical
 /// pick, which is what the `.hant` surface `at(#7, not-not, backward)`
 /// builds.
-pub fn fire_at(at: Prefix, law: Law, dir: Direction) -> Tactic {
+pub fn fire_at(at: Aim, law: Law, dir: Direction) -> Tactic {
     Tactic::At {
         at,
         law,
@@ -2012,7 +2148,11 @@ mod tests {
             let fired = run(
                 &mut g,
                 &mut deriv,
-                &fire_at(named(&graph, target), Law::Fold, Direction::Forward),
+                &fire_at(
+                    Aim::Box(named(&graph, target)),
+                    Law::Fold,
+                    Direction::Forward,
+                ),
             )
             .unwrap();
             assert_eq!(fired, Progress::Advanced(1));
@@ -2062,7 +2202,11 @@ mod tests {
         );
 
         let mut deriv = Derivation::default();
-        let step = fire_at(named(&graph, second), Law::NotNot, Direction::Forward);
+        let step = fire_at(
+            Aim::Box(named(&graph, second)),
+            Law::NotNot,
+            Direction::Forward,
+        );
         run(&mut graph, &mut deriv, &step).unwrap();
         assert_eq!(deriv.len(), 1);
         assert!(
@@ -2083,7 +2227,7 @@ mod tests {
         let graph = built("branch { not } { as_bool } branch { not } { as_bool } negate");
         let selects: Vec<NodeId> = graph
             .live()
-            .filter(|(_, kind)| matches!(kind, NodeKind::Select { .. }))
+            .filter(|(_, kind)| matches!(kind, NodeKind::Select))
             .map(|(id, _)| id)
             .collect();
         let [above, moving] = selects[..] else {
@@ -2098,7 +2242,11 @@ mod tests {
         run(
             &mut g,
             &mut deriv,
-            &fire_at(named(&graph, moving), Law::SelectHoist, Direction::Forward),
+            &fire_at(
+                Aim::Box(named(&graph, moving)),
+                Law::SelectHoist,
+                Direction::Forward,
+            ),
         )
         .unwrap();
         assert_eq!(deriv.len(), 1);
@@ -2133,7 +2281,11 @@ mod tests {
         run(
             &mut g,
             &mut deriv,
-            &fire_at(named(&graph, coercion), Law::NotNot, Direction::Backward),
+            &fire_at(
+                Aim::Box(named(&graph, coercion)),
+                Law::NotNot,
+                Direction::Backward,
+            ),
         )
         .unwrap();
         let landed: Vec<Step> = deriv.steps().cloned().collect();
@@ -2158,6 +2310,128 @@ mod tests {
     /// The two ways a named address fails, said apart — because they are
     /// different mistakes. A box that is not there is a proof reading a
     /// listing from before the step in front of it; a box that is there
+    /// A branch is `n` boxes now, and `selects-on` is how a proof names
+    /// the lot without knowing `n` or reading `n` addresses off a report.
+    ///
+    /// The load-bearing part is that it fires at the branch **as it stood**
+    /// and not at what it leaves. `select-hoist` puts down a fresh select
+    /// on the very same condition per answer its region leaves, so a step
+    /// that re-read the set between firings would find its own answers and
+    /// keep going; the set is read once and kept as addresses, so two
+    /// answers is two firings.
+    #[test]
+    fn selects_on_fires_once_at_every_answer_of_a_branch() {
+        // A branch leaving two answers, a `negate` after each: two peer
+        // selects on `in0`, each with something to grow over.
+        let graph = built("branch { push 1 push 3 } { push 2 push 4 } negate roll 1 negate roll 1");
+        let selects: Vec<NodeId> = graph
+            .live()
+            .filter(|(_, kind)| matches!(kind, NodeKind::Select))
+            .map(|(id, _)| id)
+            .collect();
+        assert_eq!(selects.len(), 2, "one select per answer:\n{}", graph);
+        for &id in &selects {
+            assert_eq!(graph.sources(id)[0], Source::Input(0), "\n{}", graph);
+        }
+
+        let mut g = graph.clone();
+        let mut deriv = Derivation::default();
+        let fired = run(
+            &mut g,
+            &mut deriv,
+            &fire_at(
+                Aim::SelectsOn(Wire::Input(0)),
+                Law::SelectHoist,
+                Direction::Forward,
+            ),
+        )
+        .expect("both answers hoist");
+        assert_eq!(fired, Progress::Advanced(2), "once per answer:\n{}", g);
+        g.check().unwrap();
+
+        // Both `negate`s are inside the arms now, two copies apiece, and
+        // the branch is still one branch: every select on the condition.
+        assert_eq!(
+            g.live()
+                .filter(|(_, k)| matches!(k, NodeKind::Op(Prim::Negate)))
+                .count(),
+            4,
+            "each `negate` went into both arms:\n{}",
+            g
+        );
+        for (id, kind) in g.live() {
+            if matches!(kind, NodeKind::Select) {
+                assert_eq!(g.sources(id)[0], Source::Input(0), "\n{}", g);
+            }
+        }
+
+        // Aimed at one of them by name, only that one moves — the set is
+        // the whole of what `selects-on` adds.
+        let mut one = graph.clone();
+        run(
+            &mut one,
+            &mut Derivation::default(),
+            &fire_at(
+                Aim::Box(named(&graph, selects[0])),
+                Law::SelectHoist,
+                Direction::Forward,
+            ),
+        )
+        .expect("one answer hoists");
+        assert_eq!(
+            one.live()
+                .filter(|(_, k)| matches!(k, NodeKind::Op(Prim::Negate)))
+                .count(),
+            3,
+            "one `negate` doubled and the other did not:\n{}",
+            one
+        );
+    }
+
+    /// A wire nothing branches on is its own sentence: the wire is there,
+    /// and no `select` turns on it. Said apart from an address no box
+    /// answers to, which is a different mistake.
+    #[test]
+    fn a_wire_no_branch_turns_on_is_named() {
+        let graph = built("not not");
+        assert_eq!(
+            run(
+                &mut graph.clone(),
+                &mut Derivation::default(),
+                &fire_at(
+                    Aim::SelectsOn(Wire::Input(0)),
+                    Law::SelectHoist,
+                    Direction::Forward
+                ),
+            ),
+            Err(TacticError::NoSelectsOn {
+                wire: Wire::Input(0)
+            })
+        );
+        assert_eq!(
+            TacticError::NoSelectsOn {
+                wire: Wire::Input(0)
+            }
+            .to_string(),
+            "no live branch of this side turns on in0"
+        );
+
+        // And an address inside the aim fails by name, like every other.
+        let ghost = Prefix::parse("zzzzzzzzzzzz").expect("an address of nought");
+        assert_eq!(
+            run(
+                &mut graph.clone(),
+                &mut Derivation::default(),
+                &fire_at(
+                    Aim::SelectsOn(Wire::Port(ghost.clone(), 0)),
+                    Law::SelectHoist,
+                    Direction::Forward
+                ),
+            ),
+            Err(TacticError::NoSuchBox { at: ghost })
+        );
+    }
+
     /// with nothing to fire on it is a proof naming the wrong law.
     #[test]
     fn a_named_address_fails_by_name() {
@@ -2170,7 +2444,7 @@ mod tests {
             run(
                 &mut graph.clone(),
                 &mut Derivation::default(),
-                &fire_at(ghost.clone(), Law::NotNot, Direction::Forward),
+                &fire_at(Aim::Box(ghost.clone()), Law::NotNot, Direction::Forward),
             ),
             Err(TacticError::NoSuchBox { at: ghost })
         );
@@ -2179,7 +2453,11 @@ mod tests {
             run(
                 &mut graph.clone(),
                 &mut Derivation::default(),
-                &fire_at(named(&graph, live), Law::EqualRefl, Direction::Forward),
+                &fire_at(
+                    Aim::Box(named(&graph, live)),
+                    Law::EqualRefl,
+                    Direction::Forward
+                ),
             ),
             Err(TacticError::NoMatchAt {
                 at: graph.address(live),
@@ -2235,7 +2513,7 @@ mod tests {
         let Err(TacticError::ManyBoxes { at, .. }) = run(
             &mut graph.clone(),
             &mut Derivation::default(),
-            &fire_at(short.clone(), Law::Fold, Direction::Forward),
+            &fire_at(Aim::Box(short.clone()), Law::Fold, Direction::Forward),
         ) else {
             panic!("an ambiguous address is not a name")
         };
@@ -2271,7 +2549,7 @@ mod tests {
         let focused = Tactic::Within(
             Region::LastImage,
             Box::new(fire_at(
-                named(&graph, outside),
+                Aim::Box(named(&graph, outside)),
                 Law::Fold,
                 Direction::Forward,
             )),

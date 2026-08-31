@@ -24,7 +24,8 @@ steps are:
 | `tree` | `select-hoist` past everything but another branch, then `cond-hoist` out of every condition, to fixpoint — the decision tree |
 | `fire(law, …)` | the first proposal of those laws, once — fails finding none |
 | `at(#box, law)` | that law, once, in a match that holds **that box** — the address the residual printed |
-| `at(#box, law, backward)` | the same, reading the law's equation right to left |
+| `at(selects-on(#wire), law)` | the same, once at **every branch that wire decides** — one firing per answer |
+| `at(#box, law, backward)` | either aim, reading the law's equation right to left |
 | `on(#wire …, law)` | that law stated onto named wires — the introduction whose bare side no search anchors |
 | `repeat(t …)` | the sequence until it stops advancing |
 | `try(t …)` | the sequence, or nothing — failure becomes no progress |
@@ -87,6 +88,47 @@ computing what it computed. What it buys is that no other spelling of
 "that one" exists. The name is never *held* across a rewrite either — it
 is looked up live at every entry, and fails by name the moment nothing
 answers to it (`NoSuchBox`) or two boxes do (`ManyBoxes`).
+
+### `selects-on`, and why an `at` needs a set
+
+A `select` carries **one answer** ([docs/rules.md](rules.md)), so a
+`branch` leaving `n` values is `n` selects reading one condition. Every
+row of the branch layer is about one of them. That makes "spend
+`select-hoist` on this branch" `n` steps, and worse, `n` addresses a
+proof can only get by reading them off a report — and `n` is not
+something the proof wrote down anywhere.
+
+`at(selects-on(in0), select-hoist)` is the branch named as a branch: the
+wire, and every live `select` that turns on it. It is the same group the
+listing draws one `if` around, which is what makes it writable from a
+report — a reader sees one bracket and writes one aim.
+
+The wire is spelled the way the listing prints one: `in0` for a boundary
+input, `#nk` for output 0 of a box, `#nk.1` for a later port.
+
+`select-hoist` is one of the two laws an `at` **anchors** rather than
+sweeps for, so each of the firings lands on the select it was aimed at
+and never on some other branch whose cone happens to hold it. The set and
+the anchoring are the same idea at two scales: the address means the
+branch it points at, and the aim means all of the branch.
+
+Two details of the semantics are load-bearing:
+
+- The set is read **once, at entry**, and kept as addresses rather than
+  ids. Ids because a firing rebuilds boxes; once because `select-hoist`
+  puts down a fresh select on the very same condition for each answer
+  its region leaves — a step that re-read the set between firings would
+  find its own answers and never finish. What the step means is the
+  branch as it stood when the step was reached.
+- A member gone by its turn is skipped, not mourned: a firing at one
+  answer may take another with it. A member still standing that the law
+  cannot fire at is the loud case, and names the box.
+
+The reading is **literal** — every select turning on that wire, port 0,
+condition and never a block. A branch nested inside another that retests
+the same wire turns on it too, and is in. The listing's bracket is the
+outermost peers, which is a different question; where the two differ,
+the aim is the wider one.
 
 ### `on`
 
@@ -295,9 +337,11 @@ cross a rewrite**. A `Bindings` is consumed within one primitive step,
 before any `apply`; persistence across steps is the query's job — run it
 again. `NodeId`s shift meaning across rewrites, so the language never
 stores one across a step; it stores the *description*, which is exactly
-what "the copy feeding the add" is. (`at`'s named box is the one
-deliberate exception, and it is a name rather than an id — looked up
-against the live graph at every entry rather than held.)
+what "the copy feeding the add" is. (`at`'s aim is the one deliberate
+exception, and it is a name rather than an id — looked up against the
+live graph at every entry rather than held. `selects-on` keeps a *list*
+of names across its own firings, for the reason above, and they are names
+too.)
 
 ### Found and stated steps
 

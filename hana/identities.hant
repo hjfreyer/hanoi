@@ -36,6 +36,13 @@ proof identities::a_branch_whose_blocks_agree =
 proof identities::what_follows_a_branch_runs_inside_it =
     lhs(fire(select-hoist)) diagram;
 
+// `fire` would take the first select it is offered and leave the other
+// answer of the same branch standing. The aim names the branch instead —
+// the wire, and every select on it — so one written step is one firing per
+// answer, and what follows is the ordinary decision procedure.
+proof identities::a_branch_of_two_answers_grows_over_what_follows_it =
+    lhs(at(selects-on(in0), select-hoist)) diagram;
+
 // And the sibling row, at the port that one cannot reach: the branch that
 // turns on what a branch answered runs under it. One firing again, and the
 // same shape of proof — the row grows the graph, so no list drives it and the
