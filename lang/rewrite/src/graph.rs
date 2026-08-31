@@ -350,12 +350,21 @@ pub enum NodeKind {
     /// A sentence called by name, left unopened; the arity is carried for
     /// the same reason [`Term::Call`](crate::term::Term::Call) carries it.
     Call { target: SentenceIndex, arity: Arity },
-    /// `select(n)`: the two blocks of an answer, and the condition that
+    /// `select`: the two blocks of **one** answer, and the condition that
     /// keeps one of them. A branch is this box and nothing else.
     ///
-    /// **Input 0 is the condition**, inputs `1..=n` the `then` block and
-    /// `n+1..=2n` the `else` block. Output `i` is input `1 + i` when the
-    /// condition holds and input `1 + n + i` otherwise.
+    /// **Input 0 is the condition**, input 1 the `then` block and input 2
+    /// the `else` block. The one output is input 1 where the condition
+    /// holds and input 2 where it does not.
+    ///
+    /// One answer, and that is the whole of the box. A source branch
+    /// leaving `n` values is `n` of these reading one condition, because
+    /// that is what it *means*: [`meaning`](crate::diagram2) reads a branch
+    /// as a choice **per output**, so a box grouping `n` of them carried a
+    /// width the denotation does not have. Two graphs saying one thing
+    /// could then differ in how the answers were grouped, and no law
+    /// regrouped them — see [docs/rules.md](../../../docs/rules.md) on why
+    /// the slack is gone rather than quotiented.
     ///
     /// The arms are not in here. They are ordinary boxes upstream of the
     /// blocks, and what makes a box an arm's own is that nothing but that
@@ -363,7 +372,7 @@ pub enum NodeKind {
     /// any box records. Both arms are computed, which is the single-arm
     /// hoist of [docs/totality.md](../../../docs/totality.md) — sound
     /// because every [`Prim`] is total and has no effect but the stack.
-    Select { arity: usize },
+    Select,
 }
 
 impl NodeKind {
@@ -373,7 +382,7 @@ impl NodeKind {
         match self {
             NodeKind::Op(prim) => prim.arity(),
             NodeKind::Call { arity, .. } => *arity,
-            NodeKind::Select { arity } => Arity::new(2 * arity + 1, *arity),
+            NodeKind::Select => Arity::new(3, 1),
         }
     }
 }
@@ -1742,7 +1751,7 @@ impl fmt::Display for NodeKind {
         match self {
             NodeKind::Op(prim) => write!(f, "{}", prim),
             NodeKind::Call { target, .. } => write!(f, "call #{}", usize::from(*target)),
-            NodeKind::Select { arity } => write!(f, "select({})", arity),
+            NodeKind::Select => write!(f, "select"),
         }
     }
 }

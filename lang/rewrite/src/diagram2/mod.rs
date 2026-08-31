@@ -186,18 +186,26 @@ fn emit(graph: &mut Graph, terms: &Context, term: TermIndex, inputs: Vec<Source>
             outputs.extend(emit(graph, terms, *top, above));
             outputs
         }
-        // A branch is a `select` and the arms in front of it. Both arms are
-        // handed the same stack — not a copy of it, the same sources — and
-        // whatever each computes from it are the blocks the select keeps
-        // one of. Work on the path not taken is a value nobody reads.
+        // A branch is a `select` **per answer** and the arms in front of
+        // them. Both arms are handed the same stack — not a copy of it, the
+        // same sources — and whatever each computes from it are the blocks
+        // the selects keep one of, paired off answer by answer. Work on the
+        // path not taken is a value nobody reads.
+        //
+        // The `n` selects read one condition and are peers: none is
+        // upstream of another, and no box says they came from one `branch`.
+        // Nothing needs to. A branch means a choice per answer, so `n`
+        // choices is what it *is*, and the grouping a wider box would have
+        // carried is the listing's to read back off the condition.
         Term::Branch { if_true, if_false } => {
             let mut inputs = inputs;
             let cond = inputs.pop().expect("a branch reads its condition");
-            let mut ports = vec![cond];
-            ports.extend(emit(graph, terms, *if_true, inputs.clone()));
-            ports.extend(emit(graph, terms, *if_false, inputs));
-            let arity = terms.arity(*if_true).outputs;
-            graph.add(NodeKind::Select { arity }, ports)
+            let then = emit(graph, terms, *if_true, inputs.clone());
+            let els = emit(graph, terms, *if_false, inputs);
+            then.into_iter()
+                .zip(els)
+                .map(|(t, e)| graph.add(NodeKind::Select, vec![cond, t, e])[0])
+                .collect()
         }
     }
 }
@@ -353,7 +361,7 @@ pub(crate) mod tests {
 
         let (id, _) = graph
             .live()
-            .find(|(_, kind)| matches!(kind, NodeKind::Select { arity: 1, .. }))
+            .find(|(_, kind)| matches!(kind, NodeKind::Select))
             .expect("the branch ends in a select");
         // Its three inputs: the condition, which is the sentence's own
         // input and sits at port 0, and then the `then` answer and the

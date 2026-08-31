@@ -1680,8 +1680,6 @@ mod tests {
             &Tactic::State {
                 at: Query::new(),
                 rule: rules::Rule::SpecializeEqual {
-                    arity: 1,
-                    at: 0,
                     answered: rules::Side::Deep,
                 },
                 dir: Direction::Backward,
