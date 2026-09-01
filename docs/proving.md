@@ -187,6 +187,14 @@ the cancelling pair in), `repeat(…)` and `try(…)`. Laws are named as
 one is optional, so a list written down the page gains a line without
 touching the one above it.
 
+Tactics are juxtaposed, and no tactics is a run of none: `lhs()` leaves
+its side exactly as it stands, as do `repeat()` and `try()`, and an empty
+strategy — `proof p = ;`, or an arm written empty — runs nothing and
+closes only if the goal's sides are already one diagram. That is what a
+proof has while what it is going to say is commented out. A missing
+argument is not a run of none, and stays an error: `fire()` names no law,
+`inline()` no sentence, `for()` no reader.
+
 `at` is the step that answers a report in the report's own words. `fire`
 takes the first match it is offered anywhere on the side; when that is
 the wrong one, `at(#nkz, fold)` names the box the residual listing

@@ -52,6 +52,21 @@ so a list written down the page gains a line without touching the one
 above it. One separator is spared, and only at the end: a gap between two
 commas names nothing, and each list says so in its own words.
 
+Tactics are juxtaposed, and **no tactics is a run of none**: `lhs()` is
+the step that leaves its side exactly as it stands, and so are `repeat()`
+and `try()`. It is what a proof has while what it is going to say is
+commented out —
+
+```text
+lhs(
+    // at(#nkz, select-same)
+)
+```
+
+— and the reason a list is the other way round: `fire()` names no law to
+fire and `for()` no reader to send, each an argument missing rather than
+a run of none, and each still says so.
+
 ### `fire` and `at`
 
 `fire` takes the first match it is offered anywhere on the side, in the
