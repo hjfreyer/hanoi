@@ -266,6 +266,7 @@ pub fn inline(
         let at = Match {
             nodes: vec![id],
             inputs: graph.sources(id).to_vec(),
+            sel: None,
         };
         pair.apply(graph, Direction::Forward, &at)
             .expect("a call is the window its own box fills");

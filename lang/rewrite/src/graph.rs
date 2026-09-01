@@ -73,6 +73,17 @@
 //! what the pattern says — even an equation spent on its own answer is a
 //! step, which compounds, and which its inverse un-compounds.
 //!
+//! The same fact is what makes a **partial** re-point sound. A match may
+//! carry a stated reader selection ([`Match::sel`]): the substitution
+//! then re-points exactly the sinks it names, and every unselected
+//! reader keeps the box it always read — still standing, still meaning
+//! what it meant. That is how one wire's readers come apart — `A` read
+//! twice becomes `not(not(A))` for one reader and `A` for the other —
+//! without a dup box, an unshare step, or any global accounting: the
+//! selection costs pointwise checks, because a substitution destroys
+//! nothing. Search never produces one; a selection is a proof's stated
+//! choice.
+//!
 //! ## Two graphs are one program by looking
 //!
 //! Content addressing canonicalises, so [`isomorphic`] is not a search: the
@@ -859,8 +870,24 @@ impl Graph {
     /// source is already mapped when the box that reads it comes up; the
     /// boxes made along the way get higher ids than anything in the sweep,
     /// so the sweep never has to consider them.
-    fn substitute(&mut self, sigma: &HashMap<Source, Source>) {
+    ///
+    /// `over` is the selective form of the same thing, keyed by the one
+    /// reader instead of the value: *this* sink comes to read that, and
+    /// every other reader of what it read keeps the box it always read.
+    /// The two compose port by port — a port `over` names is `over`'s,
+    /// any other is `sigma`'s — and everything downstream of a rebuilt
+    /// reader follows through the map either way.
+    ///
+    /// Answers with where the sweep's rebuilds landed, box by box, for
+    /// whoever holds names into this graph — the way back for a selective
+    /// step names the very readers it re-pointed, at their rebuilt homes.
+    fn substitute(
+        &mut self,
+        sigma: &HashMap<Source, Source>,
+        over: &HashMap<Sink, Source>,
+    ) -> HashMap<NodeId, NodeId> {
         let mut map = sigma.clone();
+        let mut moved: HashMap<NodeId, NodeId> = HashMap::new();
         // `live` is already id order, which is producers first.
         let here: Vec<NodeId> = self.live().map(|(id, _)| id).collect();
         for id in here {
@@ -868,7 +895,13 @@ impl Graph {
             let takes: Vec<Source> = node
                 .inputs
                 .iter()
-                .map(|src| map.get(src).copied().unwrap_or(*src))
+                .enumerate()
+                .map(|(port, src)| {
+                    over.get(&Sink::Port { node: id, port })
+                        .or_else(|| map.get(src))
+                        .copied()
+                        .unwrap_or(*src)
+                })
                 .collect();
             if takes == node.inputs {
                 continue;
@@ -876,6 +909,7 @@ impl Graph {
             let kind = node.kind.clone();
             let outs = kind.arity().outputs;
             let made = self.add_node(kind, takes);
+            moved.insert(id, made);
             for port in 0..outs {
                 // A port `sigma` already speaks for keeps what it said:
                 // the replacement is the answer for that one, and this
@@ -887,9 +921,16 @@ impl Graph {
         let outputs = self
             .outputs
             .iter()
-            .map(|src| map.get(src).copied().unwrap_or(*src))
+            .enumerate()
+            .map(|(i, src)| {
+                over.get(&Sink::Output(i))
+                    .or_else(|| map.get(src))
+                    .copied()
+                    .unwrap_or(*src)
+            })
             .collect();
         self.close(outputs);
+        moved
     }
 }
 
@@ -1236,23 +1277,61 @@ impl Pair {
             .map(|&s| carry(s, &fresh))
             .collect();
 
-        // The equation, in the host's values: this source is that one.
+        // The equation, in the host's values: this source is that one —
+        // or, under a selection, this reader of it and no other.
         let mut sigma: HashMap<Source, Source> = HashMap::new();
-        for (j, &src) in pattern.outputs.iter().enumerate() {
-            let key = image(src);
-            if key == leaves[j] {
-                continue;
+        let mut over: HashMap<Sink, Source> = HashMap::new();
+        match &at.sel {
+            None => {
+                for (j, &src) in pattern.outputs.iter().enumerate() {
+                    let key = image(src);
+                    if key == leaves[j] {
+                        continue;
+                    }
+                    match sigma.insert(key, leaves[j]) {
+                        Some(other) if other != leaves[j] => return Err(Mismatch::Conflict(key)),
+                        _ => {}
+                    }
+                }
             }
-            match sigma.insert(key, leaves[j]) {
-                Some(other) if other != leaves[j] => return Err(Mismatch::Conflict(key)),
-                _ => {}
+            Some(sel) => {
+                for (j, &src) in pattern.outputs.iter().enumerate() {
+                    let key = image(src);
+                    if key == leaves[j] {
+                        continue;
+                    }
+                    for &sink in &sel[j] {
+                        match over.insert(sink, leaves[j]) {
+                            Some(other) if other != leaves[j] => return Err(Mismatch::Torn(sink)),
+                            _ => {}
+                        }
+                    }
+                }
             }
         }
-        graph.substitute(&sigma);
+        let moved = graph.substitute(&sigma, &over);
 
         Ok(Match {
             nodes: fresh,
             inputs: at.inputs.clone(),
+            // The way back re-points the same readers, found where the
+            // sweep rebuilt them.
+            sel: at.sel.as_ref().map(|sel| {
+                sel.iter()
+                    .map(|sinks| {
+                        sinks
+                            .iter()
+                            .map(|&sink| match sink {
+                                Sink::Port { node, port } => Sink::Port {
+                                    node: moved.get(&node).copied().unwrap_or(node),
+                                    port,
+                                },
+                                boundary => boundary,
+                            })
+                            .collect()
+                    })
+                    .collect()
+            }),
         })
     }
 }
@@ -1269,10 +1348,17 @@ impl Pair {
 /// anyone may state one. [`Pair::apply`] checks before it builds, so a
 /// wrong claim costs a [`Mismatch`] rather than a wrong graph.
 ///
-/// Two fields, and no choice among them: both are readings of the host.
-/// A substitution re-points *every* reader of the value it replaces and
-/// leaves every reader of anything else alone, so a match never has to
-/// say which of a port's outside readers belong to the window.
+/// The first two fields are readings of the host, with no choice among
+/// them. A substitution re-points *every* reader of the value it replaces
+/// and leaves every reader of anything else alone, so a match never *has*
+/// to say which of a port's outside readers belong to the window — and a
+/// found match never does: search yields `sel: None`, always.
+///
+/// `sel` is the one field that is a choice, and only a proof states one:
+/// which readers come to read the replacement, the rest keeping the value
+/// they always read. Nothing is destroyed either way — an unselected
+/// reader goes on reading a box that is still there and still means what
+/// it meant — so the choice costs pointwise checks and nothing global.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Match {
     /// Image of the pattern's boxes, indexed by the pattern's own node
@@ -1280,6 +1366,12 @@ pub struct Match {
     pub nodes: Vec<NodeId>,
     /// What the pattern's boundary input `i` stands for in the host.
     pub inputs: Vec<Source>,
+    /// For each pattern boundary output, the host sinks that come to read
+    /// the replacement. `None` — the only thing search ever yields — is
+    /// every reader, which is what a substitution always meant. `Some` is
+    /// a stated choice, checked reader by reader: each named sink must
+    /// read the very port the selection says it leaves.
+    pub sel: Option<Vec<Vec<Sink>>>,
 }
 
 impl Match {
@@ -1300,6 +1392,22 @@ impl Match {
                     boundary => boundary,
                 })
                 .collect(),
+            sel: self.sel.as_ref().map(|sel| {
+                sel.iter()
+                    .map(|sinks| {
+                        sinks
+                            .iter()
+                            .map(|&sink| match sink {
+                                Sink::Port { node, port } => Sink::Port {
+                                    node: now(node),
+                                    port,
+                                },
+                                boundary => boundary,
+                            })
+                            .collect()
+                    })
+                    .collect()
+            }),
         }
     }
 }
@@ -1339,7 +1447,10 @@ impl Embedding {
     /// `None` where the match names a box or a boundary this embedding does
     /// not carry — which, for an embedding kept up to date by
     /// [`Embedding::extend`], means the match is not about the inner graph
-    /// at all.
+    /// at all. A selection travels box by box the same way; the one thing
+    /// an embedding cannot say is a selected boundary *output* — the inner
+    /// boundary's readers are the outer graph's business, and no map here
+    /// holds them — so a selection naming one refuses to be carried.
     pub fn carry(&self, at: &Match) -> Option<Match> {
         let source = |src: Source| match src {
             Source::Input(i) => self.inputs.get(i).copied(),
@@ -1347,6 +1458,12 @@ impl Embedding {
                 .nodes
                 .get(&node)
                 .map(|&node| Source::Port { node, port }),
+        };
+        let sink = |sink: Sink| match sink {
+            Sink::Output(_) => None,
+            Sink::Port { node, port } => {
+                self.nodes.get(&node).map(|&node| Sink::Port { node, port })
+            }
         };
         Some(Match {
             nodes: at
@@ -1359,6 +1476,14 @@ impl Embedding {
                 .iter()
                 .map(|&src| source(src))
                 .collect::<Option<_>>()?,
+            sel: match &at.sel {
+                None => None,
+                Some(sel) => Some(
+                    sel.iter()
+                        .map(|sinks| sinks.iter().map(|&s| sink(s)).collect::<Option<_>>())
+                        .collect::<Option<_>>()?,
+                ),
+            },
         })
     }
 
@@ -1400,6 +1525,12 @@ pub enum Mismatch {
     /// The pattern exports one value twice and the match sends it two
     /// ways, which is two answers to one question.
     Conflict(Source),
+    /// A reader the selection names does not read the port it is named
+    /// for.
+    Reader(Sink),
+    /// The selection names one reader under two exports that land on
+    /// different values, which is two answers to one question.
+    Torn(Sink),
 }
 
 impl fmt::Display for Mismatch {
@@ -1417,6 +1548,12 @@ impl fmt::Display for Mismatch {
             ),
             Mismatch::Conflict(src) => {
                 write!(f, "{} is answered two ways by one match", src)
+            }
+            Mismatch::Reader(sink) => {
+                write!(f, "{} does not read what the selection names it for", sink)
+            }
+            Mismatch::Torn(sink) => {
+                write!(f, "{} is sent two ways by one selection", sink)
             }
         }
     }
@@ -1437,6 +1574,11 @@ impl std::error::Error for Mismatch {}
 /// is the price of destroying things, and a substitution destroys
 /// nothing — which is why a law fires in a window other things read into,
 /// which is what a law always meant.
+///
+/// A match that carries a selection is held to it the same way, reader by
+/// reader: one list per pattern export, and every sink it names reads the
+/// very port that export images to. Still nothing global — an unselected
+/// reader is not this match's business, for the same reason as above.
 pub fn check_match(graph: &Graph, pattern: &Graph, at: &Match) -> Result<(), Mismatch> {
     let boxes = pattern.nodes.len();
     if at.nodes.len() != boxes || at.inputs.len() != pattern.inputs {
@@ -1467,6 +1609,28 @@ pub fn check_match(graph: &Graph, pattern: &Graph, at: &Match) -> Result<(), Mis
         for (port, &src) in pattern.nodes[i].inputs.iter().enumerate() {
             if graph.sources(host).get(port) != Some(&image(src)) {
                 return Err(Mismatch::Edge(Sink::Port { node: host, port }));
+            }
+        }
+    }
+    if let Some(sel) = &at.sel {
+        if sel.len() != pattern.outputs.len() {
+            return Err(Mismatch::Shape);
+        }
+        for (j, sinks) in sel.iter().enumerate() {
+            let key = image(pattern.outputs[j]);
+            for &sink in sinks {
+                let reads = match sink {
+                    Sink::Output(i) => graph.outputs().get(i),
+                    Sink::Port { node, port } => {
+                        if !graph.is_live(node) {
+                            return Err(Mismatch::Gone(node));
+                        }
+                        graph.sources(node).get(port)
+                    }
+                };
+                if reads != Some(&key) {
+                    return Err(Mismatch::Reader(sink));
+                }
             }
         }
     }
@@ -1697,7 +1861,11 @@ impl Search<'_> {
         let Some(inputs): Option<Vec<Source>> = self.inputs.iter().copied().collect() else {
             return;
         };
-        let found = Match { nodes, inputs };
+        let found = Match {
+            nodes,
+            inputs,
+            sel: None,
+        };
         if check_match(self.graph, self.pattern, &found).is_ok() && !self.found.contains(&found) {
             self.found.push(found);
         }
@@ -2025,6 +2193,7 @@ mod tests {
         let wrong = Match {
             nodes: vec![push],
             inputs: host.sources(add).to_vec(),
+            sel: None,
         };
         let mut spoiled = host.clone();
         assert_eq!(
@@ -2037,6 +2206,7 @@ mod tests {
         let doubled = Match {
             nodes: vec![add, add],
             inputs: host.sources(add).to_vec(),
+            sel: None,
         };
         let mut spoiled = host.clone();
         assert_eq!(
@@ -2083,6 +2253,7 @@ mod tests {
                     .0,
             ],
             inputs: vec![Source::Input(0)],
+            sel: None,
         };
         let back = pair
             .apply(&mut host, Direction::Forward, &at)
@@ -2140,6 +2311,7 @@ mod tests {
         let at = Match {
             nodes: Vec::new(),
             inputs: vec![Source::Input(0), Source::Input(1)],
+            sel: None,
         };
         let back = pair
             .apply(&mut host, Direction::Backward, &at)
@@ -2152,6 +2324,207 @@ mod tests {
             .expect("the inverse fires");
         host.check().unwrap();
         assert!(isomorphic(&host, &before), "\n{}\n{}", host, before);
+    }
+
+    // ---- a selection: some of a wire's readers, and no other ----
+
+    /// `id = not ; not`, an introduction whose left side is a bare wire.
+    fn a_doubled_not() -> Pair {
+        Pair::new(
+            {
+                let mut g = Graph::empty(1);
+                g.close(vec![Source::Input(0)]);
+                g
+            },
+            {
+                let mut g = Graph::empty(1);
+                let first = g.add(NodeKind::Op(Prim::Not), vec![Source::Input(0)]);
+                let second = g.add(NodeKind::Op(Prim::Not), first);
+                g.close(second);
+                g
+            },
+        )
+        .expect("a wire against a doubled `not`")
+    }
+
+    /// A selection spends the equation for the readers it names and for no
+    /// other: the unselected reader keeps the very box it always read —
+    /// which no unselective step can say, since a substitution re-points a
+    /// *value's* readers all together.
+    #[test]
+    fn a_selection_re_points_only_the_readers_it_names() {
+        // One wire, read twice: by a `not` and by an `is_bool`.
+        let mut host = Graph::empty(1);
+        let b = host.add(NodeKind::Op(Prim::Not), vec![Source::Input(0)]);
+        let c = host.add(NodeKind::Op(Prim::IsBool), vec![Source::Input(0)]);
+        host.close(vec![b[0], c[0]]);
+        host.check().unwrap();
+        let before = host.clone();
+        let Source::Port { node: reader, .. } = b[0] else {
+            unreachable!("a box's port")
+        };
+        let Source::Port {
+            node: bystander, ..
+        } = c[0]
+        else {
+            unreachable!("a box's port")
+        };
+
+        let pair = a_doubled_not();
+        let at = Match {
+            nodes: Vec::new(),
+            inputs: vec![Source::Input(0)],
+            sel: Some(vec![vec![Sink::Port {
+                node: reader,
+                port: 0,
+            }]]),
+        };
+        let back = pair
+            .apply(&mut host, Direction::Forward, &at)
+            .expect("a selection is a step");
+        host.check().unwrap();
+
+        // The `not` reads through the pair; the `is_bool` reads the wire.
+        let mut want = Graph::empty(1);
+        let first = want.add(NodeKind::Op(Prim::Not), vec![Source::Input(0)]);
+        let second = want.add(NodeKind::Op(Prim::Not), first);
+        let through = want.add(NodeKind::Op(Prim::Not), second);
+        let direct = want.add(NodeKind::Op(Prim::IsBool), vec![Source::Input(0)]);
+        want.close(vec![through[0], direct[0]]);
+        assert!(isomorphic(&host, &want), "\n{}\n{}", host, want);
+        assert_eq!(
+            host.sources(bystander),
+            &[Source::Input(0)],
+            "the unselected reader never moved"
+        );
+
+        // The way back names the same readers at their rebuilt homes, and
+        // interning folds them onto the boxes that stood.
+        pair.apply(&mut host, Direction::Backward, &back)
+            .expect("the inverse fires");
+        host.check().unwrap();
+        assert_eq!(host, before, "the very boxes, not merely the program");
+    }
+
+    /// The boundary is a reader like any other: a selection may name an
+    /// output, and a box reading the same wire stays put.
+    #[test]
+    fn a_selection_may_name_the_boundary() {
+        let mut host = Graph::empty(1);
+        let c = host.add(NodeKind::Op(Prim::IsBool), vec![Source::Input(0)]);
+        host.close(vec![c[0], Source::Input(0)]);
+        host.check().unwrap();
+        let before = host.clone();
+
+        let pair = a_doubled_not();
+        let at = Match {
+            nodes: Vec::new(),
+            inputs: vec![Source::Input(0)],
+            sel: Some(vec![vec![Sink::Output(1)]]),
+        };
+        let back = pair
+            .apply(&mut host, Direction::Forward, &at)
+            .expect("the boundary is selectable");
+        host.check().unwrap();
+
+        let mut want = Graph::empty(1);
+        let direct = want.add(NodeKind::Op(Prim::IsBool), vec![Source::Input(0)]);
+        let first = want.add(NodeKind::Op(Prim::Not), vec![Source::Input(0)]);
+        let second = want.add(NodeKind::Op(Prim::Not), first);
+        want.close(vec![direct[0], second[0]]);
+        assert!(isomorphic(&host, &want), "\n{}\n{}", host, want);
+
+        pair.apply(&mut host, Direction::Backward, &back)
+            .expect("the inverse fires");
+        host.check().unwrap();
+        assert_eq!(host, before, "the very boxes, not merely the program");
+    }
+
+    /// A selection is held like the rest of the claim — reader by reader,
+    /// refused whole, the graph untouched.
+    #[test]
+    fn a_wrong_selection_is_refused() {
+        let mut host = Graph::empty(1);
+        let b = host.add(NodeKind::Op(Prim::Not), vec![Source::Input(0)]);
+        let d = host.add(NodeKind::Op(Prim::Negate), b.clone());
+        let c = host.add(NodeKind::Op(Prim::IsBool), vec![Source::Input(0)]);
+        host.close(vec![d[0], c[0]]);
+        host.check().unwrap();
+        let Source::Port { node: removed, .. } = d[0] else {
+            unreachable!("a box's port")
+        };
+        let Source::Port { node: shared, .. } = c[0] else {
+            unreachable!("a box's port")
+        };
+
+        // A box the boundary does not reach, made ahead of time.
+        let dead = host.add_node(NodeKind::Op(Prim::AsBool), vec![Source::Input(0)]);
+        assert!(!host.is_live(dead));
+
+        let pair = a_doubled_not();
+        let refuse = |sel: Vec<Vec<Sink>>, why: Mismatch| {
+            let mut spoiled = host.clone();
+            let at = Match {
+                nodes: Vec::new(),
+                inputs: vec![Source::Input(0)],
+                sel: Some(sel),
+            };
+            assert_eq!(pair.apply(&mut spoiled, Direction::Forward, &at), Err(why));
+            assert_eq!(spoiled, host, "a refusal changes nothing");
+        };
+
+        // One list per export, and this pattern has one.
+        refuse(Vec::new(), Mismatch::Shape);
+
+        // A reader named for a wire it does not read.
+        let elsewhere = Sink::Port {
+            node: removed,
+            port: 0,
+        };
+        refuse(vec![vec![elsewhere]], Mismatch::Reader(elsewhere));
+
+        // A box the boundary does not reach.
+        refuse(
+            vec![vec![Sink::Port {
+                node: dead,
+                port: 0,
+            }]],
+            Mismatch::Gone(dead),
+        );
+
+        // One reader sent two ways: a pattern exporting the wire twice,
+        // its two answers landing on different values, and one sink named
+        // under both.
+        let split = Pair::new(
+            {
+                let mut g = Graph::empty(1);
+                g.close(vec![Source::Input(0), Source::Input(0)]);
+                g
+            },
+            {
+                let mut g = Graph::empty(1);
+                let one = g.add(NodeKind::Op(Prim::Not), vec![Source::Input(0)]);
+                let other = g.add(NodeKind::Op(Prim::IsBool), vec![Source::Input(0)]);
+                g.close(vec![one[0], other[0]]);
+                g
+            },
+        )
+        .unwrap();
+        let torn = Sink::Port {
+            node: shared,
+            port: 0,
+        };
+        let mut spoiled = host.clone();
+        let at = Match {
+            nodes: Vec::new(),
+            inputs: vec![Source::Input(0)],
+            sel: Some(vec![vec![torn], vec![torn]]),
+        };
+        assert_eq!(
+            split.apply(&mut spoiled, Direction::Forward, &at),
+            Err(Mismatch::Torn(torn))
+        );
+        assert_eq!(spoiled, host, "a refusal changes nothing");
     }
 
     // ---- one embedding read through another ----
@@ -2196,6 +2569,7 @@ mod tests {
         let carried = Embedding::of(&Match {
             nodes: vec![NodeId::at(7)],
             inputs: vec![Source::Input(3)],
+            sel: None,
         });
         assert_eq!(carried.node(NodeId::at(0)), Some(NodeId::at(7)));
         assert_eq!(carried.node(NodeId::at(1)), None);
@@ -2203,6 +2577,7 @@ mod tests {
         let stranger = Match {
             nodes: vec![NodeId::at(1)],
             inputs: vec![Source::Input(0)],
+            sel: None,
         };
         assert_eq!(carried.carry(&stranger), None, "box 1 is not covered");
     }
