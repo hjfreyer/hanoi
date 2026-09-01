@@ -13,6 +13,20 @@ proof identities::testing_a_test_by_name = inline diagram;
 // rewrite window could.
 proof identities::specializing_a_tested_value = both(decide) cases(equal) diagram;
 
+// The reader-split, said outright. The right side reads one of a shared
+// wire's two readings through the cancelling pair and leaves the other on
+// the wire, so the unselective statement — every reader through, the
+// boundary included — is not this claim. `for(out1)` names the reader
+// that follows: the top reading goes through the pair, the deep one keeps
+// the wire it always read, and the two sides are the one diagram.
+//
+// `diagram` alone would also close this, by taking the pair *down* on the
+// right instead — which is why the proof is written: it pins the other
+// road, the stated introduction landing on one reader of a shared wire,
+// as a claim the corpus checks and not only a unit test.
+proof identities::a_pair_for_one_reader_only =
+    lhs(on(in0, tuple-cancel, for(out1))) diagram;
+
 // The two unpackings of a coercion. Both grow the graph — they say a
 // coercion as the program it is — so no list drives them and the proof
 // names the one it wants. What follows is the ordinary decision procedure:

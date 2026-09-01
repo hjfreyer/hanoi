@@ -527,6 +527,16 @@ identity the_empty_tuple_is_a_literal { tuple 0 } = { push () };
 // `()`s came from. It is the law that says junk-normalizing has a name.
 identity untupling_and_retupling_is_the_coercion { untuple 2 tuple 2 } = { as_tuple 2 };
 
+// One wire, two readers, and the cancelling pair goes in for one of them.
+//
+// The left side is a bare fan-out — one value read twice — and the right
+// side sends one of the readings, only, through `tuple 1 ; untuple 1`. No
+// search finds an introduction, and stating it plainly would not land this
+// one either: `on` with no clause sends *every* reader of the wire through
+// the pair, the other boundary reading included. The claim is exactly that
+// a wire's readers can come apart.
+identity a_pair_for_one_reader_only { pick 0 } = { pick 0 tuple 1 untuple 1 };
+
 // A branch that answers with the very value it compared.
 //
 // `specialize-equal` is the row for it: a branch choosing between an `equal`'s

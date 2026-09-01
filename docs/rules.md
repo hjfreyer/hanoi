@@ -40,7 +40,13 @@ minimal window and congruence is free: a match is an embedding, so every
 law fires in any context. And a box inside a window may have readers
 outside it, in any row at all: a rewrite replaces the *value* the window
 exports and rebuilds whatever read it, so a reader the window never
-mentioned goes on reading the box it always read.
+mentioned goes on reading the box it always read. Where a proof wants a
+row spent for **some** of a value's readers only, it says so on the
+step — a stated reader selection (`for`/`except` at the surface) that
+re-points exactly the named readers and leaves the rest the box they
+have; each named reader is checked to read the very wire the row
+leaves, and an unselected reader is no more a loose end than an
+unmentioned one.
 
 ## What needs no rule
 

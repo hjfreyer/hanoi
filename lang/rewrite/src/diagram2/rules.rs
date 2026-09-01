@@ -1054,6 +1054,10 @@ pub enum Error {
         dir: Direction,
         at: Mismatch,
     },
+    /// A carried step selects a reader the embedding cannot say in the
+    /// host: the inner graph's own boundary output. Who reads the inner
+    /// boundary is the host's business, so such a step does not travel.
+    NotCarried,
 }
 
 impl fmt::Display for Error {
@@ -1077,6 +1081,12 @@ impl fmt::Display for Error {
                     Direction::Backward => "right",
                 };
                 write!(f, "{:?}'s {} side is not there: {}", law, side, at)
+            }
+            Error::NotCarried => {
+                write!(
+                    f,
+                    "a step selects the derivation's own boundary, which does not travel"
+                )
             }
         }
     }
@@ -1977,9 +1987,9 @@ pub fn transplant(
         // refused where the law can say so, rather than carried into
         // something the host refuses for a stranger reason.
         let left = apply(&mut here, step)?.at;
-        let there = carried
-            .carry(&step.at)
-            .expect("a checked embedding carries every box its own graph's steps can name");
+        // The one thing an embedding cannot say is a selection on the
+        // inner graph's own boundary; every box a step can name, it holds.
+        let there = carried.carry(&step.at).ok_or(Error::NotCarried)?;
         run.push(
             &mut work,
             Step {
@@ -2623,6 +2633,7 @@ pub(in crate::diagram2) mod tests {
         Match {
             nodes: (0..g.live_count()).map(NodeId::at).collect(),
             inputs: (0..g.arity().inputs).map(Source::Input).collect(),
+            sel: None,
         }
     }
 
@@ -4176,6 +4187,7 @@ pub(in crate::diagram2) mod tests {
             at: Match {
                 nodes: vec![negate, not],
                 inputs: vec![Source::Input(0)],
+                sel: None,
             },
         };
         assert_eq!(refuse(&mut graph, &step), Mismatch::Kind(negate));
@@ -4187,6 +4199,7 @@ pub(in crate::diagram2) mod tests {
             at: Match {
                 nodes: vec![not, not],
                 inputs: vec![Source::Input(0)],
+                sel: None,
             },
         };
         assert_eq!(
@@ -4201,6 +4214,7 @@ pub(in crate::diagram2) mod tests {
             at: Match {
                 nodes: vec![not],
                 inputs: vec![Source::Input(0)],
+                sel: None,
             },
         };
         assert_eq!(refuse(&mut graph, &step), Mismatch::Shape);
@@ -4273,6 +4287,7 @@ pub(in crate::diagram2) mod tests {
             at: Match {
                 nodes: vec![made],
                 inputs: vec![Source::Input(0)],
+                sel: None,
             },
         };
         apply(&mut alone, &second).unwrap();
@@ -4349,6 +4364,7 @@ pub(in crate::diagram2) mod tests {
         let backwards = Match {
             nodes: vec![boxes[1], boxes[0]],
             inputs: vec![Source::Input(0)],
+            sel: None,
         };
         let mut there = host.clone();
         assert!(matches!(

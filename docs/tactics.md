@@ -352,7 +352,11 @@ cannot say what that input stands for. Those steps are **stated** rather
 than found — `on` is the surface spelling for the bare-wires case.
 Everything else is searchable in either direction — a substitution
 re-points every reader of the value it replaces, so no pattern leaves a
-reader-split for the host to settle.
+reader-split for the host to settle. Where a proof *wants* a split, it
+states one: a `for(…)`/`except(…)` clause on an `at` or an `on` resolves
+to the match's `sel` — which readers of what the law leaves follow it —
+and the checker holds that selection reader by reader, like the rest of
+the claim.
 
 A stated step is what is read, and nothing else:
 
@@ -485,10 +489,13 @@ Three phenomena, three policies:
   *not* detected: canonical ordering already makes the list
   deterministic, the derivation records the actual match, and `Unique`
   intentionally counts automorphic duplicates — the fix for "unique up
-  to symmetry" is a sharper query. A match carries no choice of its own
-  besides: a substitution re-points every reader of the value it
-  replaces and leaves every reader of anything else alone, so there is
-  no split of a port's readers for anyone to decide.
+  to symmetry" is a sharper query. A *found* match carries no choice of
+  its own besides: a substitution re-points every reader of the value it
+  replaces and leaves every reader of anything else alone, so search
+  never has a split of a port's readers to decide. The one choice a
+  match can carry is a **stated** reader selection (`for`/`except`),
+  which a proof writes and the checker verifies — never something a
+  search answers with.
 
 ### Failure and speculation
 

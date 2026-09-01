@@ -108,6 +108,7 @@
 //! | `at(#box, law)` | that law, once, in a match that holds **that box** — the address the residual printed |
 //! | `at(#box, law, backward)` | the same, reading the law's equation right to left |
 //! | `on(#wire …, law)` | that law stated onto named wires — the introduction whose bare side no search anchors |
+//! | `…, for(#reader …)` / `…, except(#reader …)` | on an `at` or an `on`: only the named readers follow the law — or all but them |
 //! | `repeat(t …)` | the sequence until it stops advancing |
 //! | `try(t …)` | the sequence, or nothing — failure becomes no progress |
 //!
@@ -168,6 +169,22 @@
 //! [`rules::boxless`] is the table of laws `on` can state, and a law
 //! whose bare side would take more payload than a width is not yet on it.
 //!
+//! ## Pointing at readers
+//!
+//! "Every reader" has one stated exception: a `for(…)` or `except(…)`
+//! clause, on an `at` or an `on` alike, says **which** of the wires'
+//! readers follow the law — `for` names the ones that do, `except` the
+//! ones that keep the wire they have, and the rest is what a rewrite
+//! always did. A reader is a box by address or `outN` for a boundary
+//! output, and each must actually read a wire the law leaves, or the step
+//! fails naming it. The choice travels inside the recorded match and is
+//! checked reader by reader, so `on(in0, tuple-cancel, for(#nk))` sends
+//! the pair in for `#nk` alone while `#qm` and the boundary go on reading
+//! the wire — the split no unselective step can state. Like a `cases`
+//! split, the clause covers the readers the wires have when it fires: an
+//! `except`ed name is spent against that moment, not held against readers
+//! a later step creates.
+//!
 //! An address is a box's **name**: a digest of what it computes and of
 //! what that is computed from, written in letters, and the same letters
 //! wherever that computation is written — the goal's other side included.
@@ -220,7 +237,7 @@ use bytecode::{IdentityIndex, SentenceIndex};
 
 use crate::diagram2::query::Query;
 use crate::diagram2::rules::{self, Law};
-use crate::diagram2::tactic::{self, Aim, MatchSpec, Pick, SrcExpr, Tactic, Wire};
+use crate::diagram2::tactic::{self, Aim, MatchSpec, Pick, Reader, Readers, SrcExpr, Tactic, Wire};
 use crate::graph::{Direction, Prefix};
 use crate::term::TermIndex;
 
@@ -755,7 +772,8 @@ fn parse_tactic(input: &str) -> Result<(Tactic, &str), String> {
 
 /// `at(#nkz, fold)`, `at(#nkz, not-not, backward)`: a box named by as much
 /// of its address as tells it from the others, one law, and which way
-/// round to read its equation.
+/// round to read its equation — and, where a proof wants the law spent
+/// for some readers only, a `for(…)`/`except(…)` clause naming them.
 ///
 /// The `#` is the listing's own spelling and is optional here, so a
 /// pasted `#nkz` and a typed `nkz` are the same box. Any prefix will do
@@ -774,23 +792,94 @@ fn parse_at(inside: &str) -> Result<Tactic, String> {
     let aim = parse_aim(aim)?;
     let law = fields.next().map(str::trim).unwrap_or("");
     let law = one_law(law)?;
-    let dir = match fields.next().map(str::trim) {
-        None | Some("forward") => Direction::Forward,
-        Some("backward") => Direction::Backward,
-        Some(other) => {
-            return Err(format!(
-                "`at`: a direction is `forward` or `backward`, not `{}`",
-                other
-            ));
+    let mut dir = None;
+    let mut readers = None;
+    for field in fields {
+        match field {
+            "forward" | "backward" => {
+                if dir.is_some() {
+                    return Err("`at` takes one direction".to_string());
+                }
+                dir = Some(if field == "backward" {
+                    Direction::Backward
+                } else {
+                    Direction::Forward
+                });
+            }
+            _ => match parse_readers(field)? {
+                Some(clause) => {
+                    if readers.is_some() {
+                        return Err("`at` takes one `for(…)` or `except(…)`".to_string());
+                    }
+                    readers = Some(clause);
+                }
+                None => {
+                    return Err(format!(
+                        "`at`: a direction is `forward` or `backward`, a reader clause \
+                         `for(…)` or `except(…)`, and found: {}",
+                        head_of(field)
+                    ));
+                }
+            },
         }
-    };
-    if let Some(extra) = fields.next() {
-        return Err(format!(
-            "`at` takes an aim, a law and a direction, and found: {}",
-            head_of(extra)
-        ));
     }
-    Ok(tactic::fire_at(aim, law, dir))
+    let dir = dir.unwrap_or(Direction::Forward);
+    Ok(match readers {
+        None => tactic::fire_at(aim, law, dir),
+        Some(readers) => tactic::fire_at_for(aim, law, dir, readers),
+    })
+}
+
+/// `for(#nk out0)` / `except(#nk)`: which readers of the wires a law
+/// leaves the step is for — the rest keep the wire they have. Readers are
+/// spelled the way a listing prints them: a box by address, `outN` a
+/// boundary output. `None` for a field that is no reader clause at all,
+/// so the caller can say what else it takes.
+fn parse_readers(written: &str) -> Result<Option<Readers>, String> {
+    let (keyword, rest) = if let Some(rest) = written.strip_prefix("for") {
+        ("for", rest)
+    } else if let Some(rest) = written.strip_prefix("except") {
+        ("except", rest)
+    } else {
+        return Ok(None);
+    };
+    let inside = rest
+        .trim_start()
+        .strip_prefix('(')
+        .and_then(|rest| rest.strip_suffix(')'))
+        .ok_or_else(|| format!("`{}` expects `(#reader …)`", keyword))?
+        .trim();
+    if inside.is_empty() {
+        return Err(format!("`{}` names no readers", keyword));
+    }
+    let readers: Vec<Reader> = inside
+        .split_whitespace()
+        .map(|reader| parse_reader(keyword, reader))
+        .collect::<Result<_, _>>()?;
+    Ok(Some(match keyword {
+        "for" => Readers::For(readers),
+        _ => Readers::Except(readers),
+    }))
+}
+
+/// One reader: `out2` is boundary output 2, anything else a box by as
+/// much of its address as tells it apart — the `#` optional, as
+/// everywhere. Unambiguous even though the alphabet has `o`, `u` and `t`:
+/// no address holds a digit, so `out1` can only be the boundary and
+/// `outq` only a box.
+fn parse_reader(keyword: &str, written: &str) -> Result<Reader, String> {
+    if let Some(digits) = written.strip_prefix("out")
+        && !digits.is_empty()
+        && digits.chars().all(|c| c.is_ascii_digit())
+    {
+        let i = digits
+            .parse()
+            .map_err(|_| format!("`{}`: `{}` is past any boundary", keyword, written))?;
+        return Ok(Reader::Output(i));
+    }
+    Ok(Reader::Box(
+        Prefix::parse(written).map_err(|why| format!("`{}`: {}", keyword, why))?,
+    ))
 }
 
 /// What an `at` is aimed at: `#nk` is that one box, and
@@ -851,7 +940,8 @@ fn parse_condition(written: &str) -> Result<Wire, String> {
 /// **bare-wires side** they stand for — the introduction no search can
 /// find, since a side with no boxes anchors nowhere. The wires are the
 /// pattern, so the law's window goes in *on* them: every reader of each
-/// wire, the goal boundary included, comes to read through it, and the
+/// wire, the goal boundary included, comes to read through it — unless a
+/// `for(…)`/`except(…)` clause says which readers follow — and the
 /// order is the window's shape — `on(in1 in0, tuple-cancel)` builds the
 /// other tuple.
 ///
@@ -898,29 +988,35 @@ fn parse_on(inside: &str) -> Result<Tactic, String> {
         Direction::Forward => "forward",
         Direction::Backward => "backward",
     };
-    match fields.next().map(str::trim) {
-        None => {}
-        Some(word) if word == reads => {}
-        Some(other @ ("forward" | "backward")) => {
-            return Err(format!(
-                "`on`: `{}`'s bare-wires side reads {}, not {}",
-                law.name(),
-                reads,
-                other
-            ));
+    let mut spelled = false;
+    let mut readers = None;
+    for field in fields {
+        match field {
+            word if word == reads && !spelled => spelled = true,
+            "forward" | "backward" if !spelled => {
+                return Err(format!(
+                    "`on`: `{}`'s bare-wires side reads {}, not {}",
+                    law.name(),
+                    reads,
+                    field
+                ));
+            }
+            _ => match parse_readers(field)? {
+                Some(clause) => {
+                    if readers.is_some() {
+                        return Err("`on` takes one `for(…)` or `except(…)`".to_string());
+                    }
+                    readers = Some(clause);
+                }
+                None => {
+                    return Err(format!(
+                        "`on`: a direction is `forward` or `backward`, a reader clause \
+                         `for(…)` or `except(…)`, and found: {}",
+                        head_of(field)
+                    ));
+                }
+            },
         }
-        Some(other) => {
-            return Err(format!(
-                "`on`: a direction is `forward` or `backward`, not `{}`",
-                other
-            ));
-        }
-    }
-    if let Some(extra) = fields.next() {
-        return Err(format!(
-            "`on` takes wires, a law and a direction, and found: {}",
-            head_of(extra)
-        ));
     }
     Ok(Tactic::State {
         at: Query::new(),
@@ -931,6 +1027,7 @@ fn parse_on(inside: &str) -> Result<Tactic, String> {
             inputs,
         },
         pick: Pick::Unique,
+        readers,
     })
 }
 
@@ -1796,6 +1893,7 @@ mod tests {
                 at: Query::new(),
                 rule: rules::Rule::TupleCancel { n: 2 },
                 dir: Direction::Backward,
+                readers: None,
                 with: MatchSpec {
                     nodes: Vec::new(),
                     inputs: vec![SrcExpr::Addressed(spelled("nk"), 0), SrcExpr::Input(0)],
@@ -1818,6 +1916,7 @@ mod tests {
                     answered: rules::Side::Deep,
                 },
                 dir: Direction::Backward,
+                readers: None,
                 with: MatchSpec {
                     nodes: Vec::new(),
                     inputs: vec![SrcExpr::Addressed(spelled("nk"), 0), SrcExpr::Input(0)],
@@ -1881,6 +1980,66 @@ mod tests {
             (
                 "proof p = lhs(on(#nk in0, tuple-cancel, backward, 9)) diagram;",
                 "and found",
+            ),
+        ] {
+            let err = parse_hant(proof).unwrap_err();
+            assert!(err.contains(expected), "{}: {}", proof, err);
+        }
+    }
+
+    /// The reader clause, parsed on `at` and `on` alike: `for(...)` names
+    /// the readers that follow the law, `except(...)` the ones that keep
+    /// their wire, and the readers are spelled the way a listing prints
+    /// them — a box by address, `outN` a boundary output.
+    #[test]
+    fn a_reader_clause_is_parsed_on_at_and_on() {
+        let entries =
+            parse_hant("proof p = lhs(at(#nk, not-not, backward, for(#qm out0))) diagram;")
+                .unwrap();
+        let [Step::Rewrite { tactic, .. }, _] = &entries[0].strategy[..] else {
+            panic!("{:?}", entries[0].strategy);
+        };
+        assert_eq!(
+            tactic.as_ref(),
+            &Tactic::At {
+                at: Aim::Box(spelled("nk")),
+                law: Law::NotNot,
+                dir: Direction::Backward,
+                pick: Pick::First,
+                readers: Some(Readers::For(vec![
+                    Reader::Box(spelled("qm")),
+                    Reader::Output(0)
+                ])),
+            }
+        );
+
+        let entries =
+            parse_hant("proof p = lhs(on(#nk in0, tuple-cancel, except(#qm))) diagram;").unwrap();
+        let [Step::Rewrite { tactic, .. }, _] = &entries[0].strategy[..] else {
+            panic!("{:?}", entries[0].strategy);
+        };
+        let Tactic::State { readers, .. } = tactic.as_ref() else {
+            panic!("{:?}", tactic)
+        };
+        assert_eq!(
+            *readers,
+            Some(Readers::Except(vec![Reader::Box(spelled("qm"))]))
+        );
+
+        // And every way of writing one wrong, answered where it is written.
+        for (proof, expected) in [
+            (
+                "proof p = lhs(at(#nk, not-not, for())) diagram;",
+                "names no readers",
+            ),
+            ("proof p = lhs(at(#nk, not-not, for)) diagram;", "expects"),
+            (
+                "proof p = lhs(at(#nk, not-not, for(#q), except(#q))) diagram;",
+                "takes one",
+            ),
+            (
+                "proof p = lhs(on(#nk in0, tuple-cancel, for(#i7))) diagram;",
+                "is not one of the letters",
             ),
         ] {
             let err = parse_hant(proof).unwrap_err();

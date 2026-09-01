@@ -51,6 +51,16 @@ it, so a reader the window never mentioned is not a loose end: `not-not`
 fires on a first `not` somebody else reads, and that somebody goes on
 reading the box it always read.
 
+A match never *has* to say which readers belong to the window — search
+yields choice-free matches, always — but a proof *may* state which
+readers follow: a `Match` carries an optional reader selection (`sel`,
+the surface's `for`/`except`), and the substitution then re-points
+exactly the named sinks, every other reader keeping the box it always
+read. Nothing is destroyed either way, which is why the selection costs
+pointwise checks — each named sink reads the very port it is named
+for — and nothing global. The choice is a stated payload of the step,
+carried by its interface, and never a question a match could answer.
+
 ## Totality, purity and determinism are load-bearing
 
 - Discarding work (a box the boundary does not reach, and every branch's

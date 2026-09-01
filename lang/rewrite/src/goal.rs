@@ -769,6 +769,7 @@ mod tests {
             at: Match {
                 nodes: Vec::new(),
                 inputs: Vec::new(),
+                sel: None,
             },
         }
     }

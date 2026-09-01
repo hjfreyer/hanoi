@@ -214,6 +214,46 @@ impl fmt::Display for Aim {
     }
 }
 
+/// A reader of a wire, named the way a listing prints one: a box by
+/// address, or a boundary output by index. What a [`Readers`] clause is
+/// written in, under [`Tactic::At`]'s discipline — looked up live at
+/// every firing, never held.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Reader {
+    /// The box the written address names — every port of it that reads a
+    /// wire the stated law leaves.
+    Box(Prefix),
+    /// Boundary output `i` of the side.
+    Output(usize),
+}
+
+impl fmt::Display for Reader {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Reader::Box(at) => write!(f, "{}", at),
+            Reader::Output(i) => write!(f, "out{}", i),
+        }
+    }
+}
+
+/// Which of a wire's readers a step is for: the [`Match`]'s selection,
+/// spelled in names rather than sinks.
+///
+/// Resolved against the live side at the moment the step is stated —
+/// `Except` takes the complement of what the wire's readers are *then*,
+/// so the recorded match carries a concrete selection either way, and a
+/// reader a later step creates is not retroactively covered (the same
+/// statement-time semantics a `cases` split has). Absent, the step is
+/// what it always was: every reader follows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Readers {
+    /// These readers come to read through the law's window; every other
+    /// reader keeps the wire it has.
+    For(Vec<Reader>),
+    /// Every reader follows except these, which keep the wire they have.
+    Except(Vec<Reader>),
+}
+
 /// The recipe for a stated [`Match`] against one side of one
 /// rule. Resolution is pure reading; the result goes through
 /// [`rules::apply`], so a wrong recipe is a refused step.
@@ -221,9 +261,9 @@ impl fmt::Display for Aim {
 /// Deliberately weaker than the matcher: only *bound* nodes can stand in
 /// the pattern's image, so a stated step whose pattern has boxes needs the
 /// query to have bound them. What the matcher cannot read, the derivation
-/// must literally say. Nothing about outputs is said or sayable: a
-/// substitution re-points every reader of the value it replaces, so a
-/// match has no reader-split left to state.
+/// must literally say. Nothing about outputs is said here: the
+/// reader-split, where a proof wants one, is a [`Readers`] clause beside
+/// the spec rather than anything the matcher could answer.
 #[derive(Debug, Clone, PartialEq)]
 pub struct MatchSpec {
     /// Image of the pattern's boxes. Empty for every box-less side.
@@ -304,6 +344,9 @@ pub enum Tactic {
         law: Law,
         dir: Direction,
         pick: Pick,
+        /// Which readers of what the law leaves follow it — `None` is all
+        /// of them, which is what a substitution always meant.
+        readers: Option<Readers>,
     },
     /// Stated, either direction: query, resolve the spec, apply.
     State {
@@ -312,6 +355,9 @@ pub enum Tactic {
         dir: Direction,
         with: MatchSpec,
         pick: Pick,
+        /// Which readers of what the rule leaves follow it — `None` is
+        /// all of them.
+        readers: Option<Readers>,
     },
     /// Each in order. A failure propagates and keeps the progress made —
     /// the graph stands at the last step that landed.
@@ -391,6 +437,16 @@ pub enum TacticError {
     OutOfRange { var: Var, port: usize },
     /// A stated wire named a port its box does not have.
     NoSuchPort { at: Prefix, port: usize },
+    /// A `for(...)`/`except(...)` output index past the boundary.
+    NoSuchOutput { port: usize },
+    /// A `for(...)`/`except(...)` reader that reads no wire the stated
+    /// law leaves: the selection is about those wires, and this reader is
+    /// off all of them.
+    ReaderOffWire { reader: Reader },
+    /// An `except(...)` that excepted every reader there was. The step
+    /// would re-point nobody, and a step that finds nothing to do fails
+    /// loudly rather than becoming a no-op.
+    NobodyLeft,
     /// An iteration advanced past the fuel.
     OutOfFuel { after: usize },
 }
@@ -436,6 +492,18 @@ impl fmt::Display for TacticError {
             }
             TacticError::NoSuchPort { at, port } => {
                 write!(f, "{} has no output port {}", at, port)
+            }
+            TacticError::NoSuchOutput { port } => {
+                write!(f, "the boundary has no output {}", port)
+            }
+            TacticError::ReaderOffWire { reader } => {
+                write!(f, "{} reads no wire this law leaves", reader)
+            }
+            TacticError::NobodyLeft => {
+                write!(
+                    f,
+                    "every reader was excepted, and the step would state nothing"
+                )
             }
             TacticError::OutOfFuel { after } => {
                 write!(f, "still advancing after {} iterations", after)
@@ -484,12 +552,21 @@ impl Runner<'_> {
     fn run(&mut self, tactic: &Tactic) -> Result<Progress, TacticError> {
         match tactic {
             Tactic::Fire { at, rule, pick } => self.fire(at, rule, *pick),
-            Tactic::At { at, law, dir, pick } => match at {
+            Tactic::At {
+                at,
+                law,
+                dir,
+                pick,
+                readers,
+            } => match at {
                 Aim::Box(at) => {
                     let node = self.named(at)?;
-                    self.fire_at(node, *law, *dir, *pick).map(Progress::of)
+                    self.fire_at(node, *law, *dir, *pick, readers.as_ref())
+                        .map(Progress::of)
                 }
-                Aim::SelectsOn(wire) => self.fire_at_each(wire, *law, *dir, *pick),
+                Aim::SelectsOn(wire) => {
+                    self.fire_at_each(wire, *law, *dir, *pick, readers.as_ref())
+                }
             },
             Tactic::State {
                 at,
@@ -497,7 +574,8 @@ impl Runner<'_> {
                 dir,
                 with,
                 pick,
-            } => self.state(at, rule, *dir, with, *pick),
+                readers,
+            } => self.state(at, rule, *dir, with, *pick, readers.as_ref()),
             Tactic::Seq(steps) => {
                 let mut total = 0;
                 for step in steps {
@@ -650,6 +728,7 @@ impl Runner<'_> {
         law: Law,
         dir: Direction,
         pick: Pick,
+        readers: Option<&Readers>,
     ) -> Result<Progress, TacticError> {
         let cond = self.wire(wire)?;
         let aimed: Vec<Address> = self
@@ -674,7 +753,7 @@ impl Runner<'_> {
                     return Err(TacticError::ManyBoxes { at: prefix, found });
                 }
             };
-            total += self.fire_at(node, law, dir, pick)?;
+            total += self.fire_at(node, law, dir, pick, readers)?;
         }
         Ok(Progress::of(total))
     }
@@ -685,6 +764,7 @@ impl Runner<'_> {
         law: Law,
         dir: Direction,
         pick: Pick,
+        readers: Option<&Readers>,
     ) -> Result<usize, TacticError> {
         let address = self.graph.address(node);
         let missing = || TacticError::NoMatchAt {
@@ -695,7 +775,8 @@ impl Runner<'_> {
         match pick {
             Pick::First => {
                 let step = self.at_offers(node, law, dir).into_iter().next();
-                self.land(step.ok_or_else(missing)?)?;
+                let step = self.select(step.ok_or_else(missing)?, readers)?;
+                self.land(step)?;
                 Ok(1)
             }
             Pick::Unique => {
@@ -703,7 +784,8 @@ impl Runner<'_> {
                 match offers.len() {
                     0 => Err(missing()),
                     1 => {
-                        self.land(offers.pop().expect("one"))?;
+                        let step = self.select(offers.pop().expect("one"), readers)?;
+                        self.land(step)?;
                         Ok(1)
                     }
                     found => Err(TacticError::Ambiguous { found }),
@@ -717,6 +799,7 @@ impl Runner<'_> {
                 while self.graph.is_live(node)
                     && let Some(step) = self.at_offers(node, law, dir).into_iter().next()
                 {
+                    let step = self.select(step, readers)?;
                     self.land(step)?;
                     fired += 1;
                 }
@@ -726,6 +809,115 @@ impl Runner<'_> {
                 Ok(fired)
             }
         }
+    }
+
+    /// A step, held to a stated reader selection.
+    ///
+    /// This is where a `for(...)`/`except(...)` clause becomes the
+    /// [`Match`]'s `sel`: the wires the selection is about are what the
+    /// step's pattern side *leaves*, read off the match, and each named
+    /// reader resolves to its sinks on those wires against the live side —
+    /// so an `except` is a concrete complement taken now, and the
+    /// recorded step replays without re-asking. Untrusted like every
+    /// resolution here: the selection travels inside the match, and
+    /// [`rules::apply`] holds it reader by reader.
+    fn select(&self, step: Step, readers: Option<&Readers>) -> Result<Step, TacticError> {
+        let Some(readers) = readers else {
+            return Ok(step);
+        };
+        let pair = rules::sides(&step.rule).map_err(TacticError::Refused)?;
+        let pattern = pair.pattern(step.dir);
+        let image = |src: Source| match src {
+            Source::Input(i) => step.at.inputs[i],
+            Source::Port { node, port } => Source::Port {
+                node: step.at.nodes[node.index()],
+                port,
+            },
+        };
+        let keys: Vec<Source> = pattern.outputs().iter().map(|&src| image(src)).collect();
+
+        // A named reader, as its sinks on the step's wires — every port of
+        // a box that reads one of them, or the one boundary output. A
+        // reader off all of the wires is a name that states nothing, said
+        // loudly.
+        let resolve = |reader: &Reader| -> Result<Vec<Sink>, TacticError> {
+            let sinks: Vec<Sink> = match reader {
+                Reader::Box(at) => {
+                    let node = self.named(at)?;
+                    self.graph
+                        .sources(node)
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, src)| keys.contains(src))
+                        .map(|(port, _)| Sink::Port { node, port })
+                        .collect()
+                }
+                Reader::Output(i) => {
+                    let read = self
+                        .graph
+                        .outputs()
+                        .get(*i)
+                        .ok_or(TacticError::NoSuchOutput { port: *i })?;
+                    keys.contains(read)
+                        .then_some(Sink::Output(*i))
+                        .into_iter()
+                        .collect()
+                }
+            };
+            if sinks.is_empty() {
+                return Err(TacticError::ReaderOffWire {
+                    reader: reader.clone(),
+                });
+            }
+            Ok(sinks)
+        };
+        let reads = |sink: Sink| match sink {
+            Sink::Output(i) => self.graph.outputs()[i],
+            Sink::Port { node, port } => self.graph.sources(node)[port],
+        };
+
+        let sel: Vec<Vec<Sink>> = match readers {
+            Readers::For(list) => {
+                let mut per: Vec<Vec<Sink>> = vec![Vec::new(); keys.len()];
+                for reader in list {
+                    for sink in resolve(reader)? {
+                        for (j, &key) in keys.iter().enumerate() {
+                            if reads(sink) == key && !per[j].contains(&sink) {
+                                per[j].push(sink);
+                            }
+                        }
+                    }
+                }
+                per
+            }
+            Readers::Except(list) => {
+                let mut kept: HashSet<Sink> = HashSet::new();
+                for reader in list {
+                    kept.extend(resolve(reader)?);
+                }
+                let per: Vec<Vec<Sink>> = keys
+                    .iter()
+                    .map(|&key| {
+                        self.graph
+                            .sinks(key)
+                            .into_iter()
+                            .filter(|sink| !kept.contains(sink))
+                            .collect()
+                    })
+                    .collect();
+                if per.iter().all(Vec::is_empty) {
+                    return Err(TacticError::NobodyLeft);
+                }
+                per
+            }
+        };
+        Ok(Step {
+            at: Match {
+                sel: Some(sel),
+                ..step.at
+            },
+            ..step
+        })
     }
 
     /// Every step of `law`, in direction `dir`, whose match holds `node`.
@@ -817,6 +1009,7 @@ impl Runner<'_> {
         dir: Direction,
         spec: &MatchSpec,
         pick: Pick,
+        readers: Option<&Readers>,
     ) -> Result<Progress, TacticError> {
         match pick {
             Pick::First | Pick::Unique => {
@@ -828,7 +1021,7 @@ impl Runner<'_> {
                     .into_iter()
                     .next()
                     .ok_or(TacticError::NothingFound { at: "state" })?;
-                let step = self.stated(rule, dir, spec, &b)?;
+                let step = self.select(self.stated(rule, dir, spec, &b)?, readers)?;
                 self.land(step)?;
                 Ok(Progress::Advanced(1))
             }
@@ -839,7 +1032,7 @@ impl Runner<'_> {
                     let Some(b) = bound.into_iter().next() else {
                         break;
                     };
-                    let step = self.stated(rule, dir, spec, &b)?;
+                    let step = self.select(self.stated(rule, dir, spec, &b)?, readers)?;
                     self.land(step)?;
                     landed += 1;
                 }
@@ -927,7 +1120,11 @@ impl Runner<'_> {
                 Ok(vec![Step {
                     rule: Rule::SelectHoist { body: body.graph },
                     dir: Direction::Forward,
-                    at: Match { nodes, inputs },
+                    at: Match {
+                        nodes,
+                        inputs,
+                        sel: None,
+                    },
                 }])
             }
             RuleSpec::Concrete { rule, anchor, pin } => {
@@ -1291,7 +1488,11 @@ fn resolve(graph: &Graph, b: &Bindings, spec: &MatchSpec) -> Result<Match, Tacti
         });
     }
 
-    Ok(Match { nodes, inputs })
+    Ok(Match {
+        nodes,
+        inputs,
+        sel: None,
+    })
 }
 
 // ---- the library -----------------------------------------------------------------
@@ -1318,6 +1519,19 @@ pub fn fire_at(at: Aim, law: Law, dir: Direction) -> Tactic {
         law,
         dir,
         pick: Pick::First,
+        readers: None,
+    }
+}
+
+/// [`fire_at`], for some of the readers only — what a `for(...)` or
+/// `except(...)` clause on an `at` builds.
+pub fn fire_at_for(at: Aim, law: Law, dir: Direction, readers: Readers) -> Tactic {
+    Tactic::At {
+        at,
+        law,
+        dir,
+        pick: Pick::First,
+        readers: Some(readers),
     }
 }
 
@@ -2585,6 +2799,7 @@ mod tests {
             at: Query::new(),
             rule: Rule::TupleCancel { n: 2 },
             dir: Direction::Backward,
+            readers: None,
             with: MatchSpec {
                 nodes: Vec::new(),
                 inputs: vec![SrcExpr::Addressed(named(&graph, not), 0), SrcExpr::Input(0)],
@@ -2631,6 +2846,117 @@ mod tests {
         assert_eq!(again, graph, "\n{}\n{}", again, graph);
     }
 
+    /// A `for(...)` on a stated step: the pair goes in on the named wire
+    /// for the named reader alone, and the other reader keeps the very
+    /// box it always read — the split no unselective step can state.
+    /// `except(...)` is the same choice said from the other end.
+    #[test]
+    fn a_stated_introduction_can_be_for_some_readers_only() {
+        use crate::graph::isomorphic;
+        // One wire, read by a `not` and an `is_bool`.
+        let two_readers = || {
+            let mut g = Graph::empty(1);
+            let not = g.add(NodeKind::Op(Prim::Not), vec![Source::Input(0)]);
+            let test = g.add(NodeKind::Op(Prim::IsBool), vec![Source::Input(0)]);
+            g.close(vec![not[0], test[0]]);
+            g.check().unwrap();
+            g
+        };
+        let mut graph = two_readers();
+        let not = graph
+            .live()
+            .find(|(_, k)| matches!(k, NodeKind::Op(Prim::Not)))
+            .expect("the not")
+            .0;
+        let test = graph
+            .live()
+            .find(|(_, k)| matches!(k, NodeKind::Op(Prim::IsBool)))
+            .expect("the test")
+            .0;
+        let (rule, dir) = rules::boxless(Law::TupleCancel, 1).expect("a bare-wires side");
+        let stated = |readers: Option<Readers>| Tactic::State {
+            at: Query::new(),
+            rule: rule.clone(),
+            dir,
+            readers,
+            with: MatchSpec {
+                nodes: Vec::new(),
+                inputs: vec![SrcExpr::Input(0)],
+            },
+            pick: Pick::Unique,
+        };
+
+        let mut deriv = Derivation::default();
+        let picked = stated(Some(Readers::For(vec![Reader::Box(named(&graph, not))])));
+        assert_eq!(
+            run(&mut graph, &mut deriv, &picked),
+            Ok(Progress::Advanced(1))
+        );
+        graph.check().unwrap();
+
+        // The `not` reads through the pair; the `is_bool` reads the wire.
+        assert_eq!(graph.sources(test), [Source::Input(0)], "\n{}", graph);
+        let mut want = Graph::empty(1);
+        let tuple = want.add(NodeKind::Op(Prim::Tuple(1)), vec![Source::Input(0)]);
+        let apart = want.add(NodeKind::Op(Prim::Untuple(1)), tuple);
+        let through = want.add(NodeKind::Op(Prim::Not), apart);
+        let direct = want.add(NodeKind::Op(Prim::IsBool), vec![Source::Input(0)]);
+        want.close(vec![through[0], direct[0]]);
+        assert!(isomorphic(&graph, &want), "\n{}\n{}", graph, want);
+
+        // The run replays, selection and all.
+        let record: Vec<_> = deriv.steps().cloned().collect();
+        let mut again = two_readers();
+        replay(&mut again, &record).unwrap();
+        assert_eq!(again, graph, "\n{}\n{}", again, graph);
+
+        // `except` of the other reader is the same statement.
+        let mut other = two_readers();
+        let mut deriv = Derivation::default();
+        let excepted = stated(Some(Readers::Except(vec![Reader::Box(named(
+            &other, test,
+        ))])));
+        assert_eq!(
+            run(&mut other, &mut deriv, &excepted),
+            Ok(Progress::Advanced(1))
+        );
+        assert!(isomorphic(&other, &graph), "\n{}\n{}", other, graph);
+
+        // A reader off the wire is a loud name: boundary output 0 reads
+        // the `not`'s answer, not the wire the law is stated on.
+        let mut fresh = two_readers();
+        let mut deriv = Derivation::default();
+        assert_eq!(
+            run(
+                &mut fresh,
+                &mut deriv,
+                &stated(Some(Readers::For(vec![Reader::Output(0)])))
+            ),
+            Err(TacticError::ReaderOffWire {
+                reader: Reader::Output(0)
+            })
+        );
+        // An output past the boundary is its own mistake.
+        assert_eq!(
+            run(
+                &mut fresh,
+                &mut deriv,
+                &stated(Some(Readers::For(vec![Reader::Output(5)])))
+            ),
+            Err(TacticError::NoSuchOutput { port: 5 })
+        );
+        // And excepting every reader leaves the step stating nothing.
+        let everyone = stated(Some(Readers::Except(vec![
+            Reader::Box(named(&fresh, not)),
+            Reader::Box(named(&fresh, test)),
+        ])));
+        assert_eq!(
+            run(&mut fresh, &mut deriv, &everyone),
+            Err(TacticError::NobodyLeft)
+        );
+        assert_eq!(fresh, two_readers(), "a refusal changes nothing");
+    }
+
     /// The other stated introduction, and the one a branch layer wants:
     /// `specialize-equal` read backward puts a **branch** on a wire —
     /// the test of it against a second wire, answering with that second
@@ -2649,6 +2975,7 @@ mod tests {
             at: Query::new(),
             rule,
             dir,
+            readers: None,
             with: MatchSpec {
                 nodes: Vec::new(),
                 inputs: vec![SrcExpr::Addressed(named(&graph, not), 0), SrcExpr::Input(0)],
@@ -2729,6 +3056,7 @@ mod tests {
             at: Query::new(),
             rule: Rule::TupleCancel { n: 2 },
             dir: Direction::Backward,
+            readers: None,
             with: MatchSpec {
                 nodes: Vec::new(),
                 inputs,

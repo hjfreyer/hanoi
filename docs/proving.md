@@ -185,6 +185,17 @@ anchor. A third field is the direction, `forward` when left out:
 `at(#nkz, select-same, backward)` reads the law's equation right to
 left, which is how a proof says "put this back".
 
+A rewrite ordinarily re-points **every** reader of what its window
+leaves. Where a proof wants only some of them, a `for(…)` or
+`except(…)` clause on an `at` or an `on` names the readers that follow
+the law — or all but them — a box by address, `outN` for a boundary
+output: `on(in0, tuple-cancel, for(out1))` sends one reading of a
+shared wire through the pair and leaves the other on the wire. Each
+named reader must actually read a wire the law leaves, or the step
+fails naming it; the choice is resolved when the step fires and
+recorded in the match, so — like a `cases` split — it covers the
+readers the wire has then, not ones a later step creates.
+
 **A box's name is what it computes** — a digest of its kind and of the
 names of what it reads, written in twelve letters and printed by the
 listing beside every line, the way Jujutsu writes a change id. A proof
