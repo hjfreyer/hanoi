@@ -183,7 +183,8 @@ pub struct Listing<'g> {
 /// Plain by default: the emphasis is an escape sequence, and a listing
 /// goes into a test's assertion and a piped log as often as it goes to a
 /// terminal. Whoever is writing to a terminal says so — `bin/prove` asks
-/// the terminal itself.
+/// the terminal itself, and takes `--color` as the answer when a reader
+/// says the pipe ends at a pager.
 pub fn listing<'g>(graph: &'g Graph, tag: &'g str) -> Listing<'g> {
     Listing {
         graph,
