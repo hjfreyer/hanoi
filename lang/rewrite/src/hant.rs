@@ -120,6 +120,21 @@
 //! and stated backward steps exist as data first, and grow a spelling here
 //! when a proof needs one.
 //!
+//! Everywhere commas separate — a law list, an `at`'s or an `on`'s
+//! fields, a `via`'s or a `cases`'s sides — **the last one is optional**:
+//!
+//! ```text
+//! proof identities::the_long_one = lhs(saturate(
+//!     fold,
+//!     not-not,
+//! )) diagram;
+//! ```
+//!
+//! so a list written down the page gains a line without touching the one
+//! above it, and the line a proof adds reads like the lines already there.
+//! One separator is spared, and only at the end: a gap between two commas
+//! names nothing, and each list says so in its own words.
+//!
 //! ## Pointing at a box
 //!
 //! `fire` takes the first match it is offered anywhere on the side. `at`
@@ -784,7 +799,7 @@ fn parse_tactic(input: &str) -> Result<(Tactic, &str), String> {
 /// rewrite, and `structural` there would mean "whichever of twelve laws
 /// happens to fire", which is the opposite of what naming a box is for.
 fn parse_at(inside: &str) -> Result<Tactic, String> {
-    let mut fields = inside.split(',').map(str::trim);
+    let mut fields = spare_last_comma(inside).split(',').map(str::trim);
     let aim = fields
         .next()
         .filter(|f| !f.is_empty())
@@ -951,7 +966,7 @@ fn parse_condition(written: &str) -> Result<Wire, String> {
 /// cancels, the step compounds: a second trip stacks on the first, a true
 /// thing said one layer deeper, and never an error.
 fn parse_on(inside: &str) -> Result<Tactic, String> {
-    let mut fields = inside.split(',').map(str::trim);
+    let mut fields = spare_last_comma(inside).split(',').map(str::trim);
     let wires = fields
         .next()
         .filter(|f| !f.is_empty())
@@ -1057,6 +1072,17 @@ fn parse_wire(written: &str) -> Result<SrcExpr, String> {
     Ok(SrcExpr::Addressed(prefix, port))
 }
 
+/// The last comma of a list is optional — `fire(fold, not-not,)`, and an
+/// `at`'s fields the same. It is what lets a list written down the page
+/// gain a line without touching the one above it, which a `via`'s sides
+/// have always allowed; the lists spelled with commas allow it here.
+///
+/// Exactly one separator is spared, and at the end: a gap between two
+/// commas still names nothing, and the list says so in its own words.
+fn spare_last_comma(inside: &str) -> &str {
+    inside.trim_end().strip_suffix(',').unwrap_or(inside)
+}
+
 /// One law and not a list — what an address to a single box may name.
 fn one_law(name: &str) -> Result<Law, String> {
     if name.is_empty() {
@@ -1078,7 +1104,7 @@ fn one_law(name: &str) -> Result<Law, String> {
 /// names a law cannot disagree with a proof that names the same one.
 fn parse_laws(inside: &str) -> Result<Vec<Law>, String> {
     let mut out = Vec::new();
-    for name in inside.split(',') {
+    for name in spare_last_comma(inside).split(',') {
         let name = name.trim();
         out.extend(match name {
             "branching" => rules::branching(),
@@ -2058,5 +2084,70 @@ mod tests {
         let group = "branching";
         assert!(parse_laws(group).unwrap().len() > 1, "{}", group);
         assert!(one_law(group).is_err(), "{}", group);
+    }
+
+    /// A list's last comma is optional, so the same proof is written with
+    /// it and without it, and the two parse to the same strategy.
+    #[test]
+    fn a_list_may_end_on_its_separator() {
+        for (spelled, bare) in [
+            (
+                "proof p = lhs(saturate(fold, not-not,)) diagram;",
+                "proof p = lhs(saturate(fold, not-not)) diagram;",
+            ),
+            (
+                "proof p = lhs(fire(fold,)) diagram;",
+                "proof p = lhs(fire(fold)) diagram;",
+            ),
+            (
+                "proof p = lhs(at(#nkz, not-not, backward,)) diagram;",
+                "proof p = lhs(at(#nkz, not-not, backward)) diagram;",
+            ),
+            (
+                "proof p = lhs(at(#nkz, fold, except(out0),)) diagram;",
+                "proof p = lhs(at(#nkz, fold, except(out0))) diagram;",
+            ),
+            (
+                "proof p = lhs(on(in1 in0, tuple-cancel,)) diagram;",
+                "proof p = lhs(on(in1 in0, tuple-cancel)) diagram;",
+            ),
+            // The sides of a split have always allowed it; they are here
+            // so that the one rule is stated over every list that has one.
+            (
+                "proof p = via { id(0) } (left: diagram, right: diagram,);",
+                "proof p = via { id(0) } (left: diagram, right: diagram);",
+            ),
+            (
+                "proof p = cases(is_bool) (true: lhs(decide), false: lhs(decide),);",
+                "proof p = cases(is_bool) (true: lhs(decide), false: lhs(decide));",
+            ),
+        ] {
+            let spelled = parse_hant(spelled).unwrap_or_else(|e| panic!("{}: {}", spelled, e));
+            let bare = parse_hant(bare).unwrap_or_else(|e| panic!("{}: {}", bare, e));
+            assert_eq!(
+                format!("{:?}", spelled),
+                format!("{:?}", bare),
+                "a spared comma changed the proof"
+            );
+        }
+    }
+
+    /// One separator is spared, and only the last: a list of nothing is
+    /// still nothing, and a gap between two commas still names nothing.
+    #[test]
+    fn a_spared_comma_is_the_last_one_only() {
+        for (proof, expected) in [
+            ("proof p = lhs(fire(,)) diagram;", "names no law"),
+            ("proof p = lhs(saturate(fold,,)) diagram;", "names no law"),
+            ("proof p = lhs(at(#nkz,)) diagram;", "`at` names no law"),
+            (
+                "proof p = lhs(at(#nkz, fold,, backward)) diagram;",
+                "a direction is `forward` or `backward`",
+            ),
+            ("proof p = lhs(on(in0,)) diagram;", "`on` names no law"),
+        ] {
+            let err = parse_hant(proof).unwrap_err();
+            assert!(err.contains(expected), "{}: {}", proof, err);
+        }
     }
 }

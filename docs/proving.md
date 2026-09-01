@@ -182,7 +182,10 @@ until the selects are all at the output and no condition holds one),
 the introduction no search anchors, `on(in0 in1, tuple-cancel)` putting
 the cancelling pair in), `repeat(…)` and `try(…)`. Laws are named as
 [docs/rules.md](rules.md) names them — `fold`, `select-same`, `not-not`
-— and `branching` names the list.
+— and `branching` names the list. Wherever commas separate — a law list, an
+`at`'s or an `on`'s fields, the sides of a `via` or a `cases` — the last
+one is optional, so a list written down the page gains a line without
+touching the one above it.
 
 `at` is the step that answers a report in the report's own words. `fire`
 takes the first match it is offered anywhere on the side; when that is
