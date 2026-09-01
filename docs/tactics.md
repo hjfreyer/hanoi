@@ -38,6 +38,20 @@ deliberately smaller than the language underneath: queries and stated
 backward steps exist as data first, and grow a spelling here when a
 proof needs one.
 
+Wherever commas separate — a law list, an `at`'s or an `on`'s fields,
+and the sides of a `via` or a `cases` — **the last one is optional**:
+
+```text
+lhs(saturate(
+    fold,
+    not-not,
+))
+```
+
+so a list written down the page gains a line without touching the one
+above it. One separator is spared, and only at the end: a gap between two
+commas names nothing, and each list says so in its own words.
+
 ### `fire` and `at`
 
 `fire` takes the first match it is offered anywhere on the side, in the
