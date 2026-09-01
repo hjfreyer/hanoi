@@ -21,6 +21,7 @@ what is trusted, and why a close can be believed.
 cd lang
 cargo run --bin prove -- ../hana
 cargo run --bin prove -- ../hana --filter two_spellings
+cargo run --bin prove -- ../hana --color | less -R
 ```
 
 ```
@@ -35,6 +36,13 @@ identity result: ok. 25 passed; 0 failed; 0 problem(s); 0 filtered out
 Exit codes: `0` every identity proved, `1` a claim unproved or a hint
 orphaned, `2` the corpus would not build or the arguments were wrong.
 `--expand` additionally cashes every citation (see below).
+
+A stuck goal's residual emphasises the telling prefix of each address in
+bold, which only a terminal shows: piped, the escapes would land in a log
+as themselves, so the default is plain, and `NO_COLOR` keeps it plain on a
+terminal too. `--color` emphasises regardless — a pager reads escapes as
+well as a terminal does, and nothing but the reader can tell that pipe
+from a log file, so `--color | less -R` is how a long residual is read.
 
 ## The pieces
 

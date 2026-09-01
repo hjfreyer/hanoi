@@ -16,6 +16,8 @@
 //! one proof compare — which is what watching a proof means. On a
 //! terminal each name is printed with the shortest prefix that tells it
 //! apart in bold: that prefix is what an `at` step is written with.
+//! `--color` says to emphasise anyway, for a pipe that ends at a reader —
+//! `prove ../hana --color | less -R`.
 //!
 //! `--expand` spends every `by` in full: instead of citing a claim and
 //! taking the corpus's word for it, the cited proof's own steps are carried
@@ -46,6 +48,9 @@ struct Args {
     /// and re-checked here — rather than citing the claim on the corpus's
     /// word.
     expand: bool,
+    /// Emphasise addresses whether or not stdout is a terminal, for a pipe
+    /// that ends at a reader rather than a log — `| less -R`.
+    color: bool,
 }
 
 fn main() -> ExitCode {
@@ -53,7 +58,7 @@ fn main() -> ExitCode {
         Ok(args) => args,
         Err(message) => {
             eprintln!("error: {}", message);
-            eprintln!("usage: prove <root> [--filter <substr>] [--expand]");
+            eprintln!("usage: prove <root> [--filter <substr>] [--expand] [--color]");
             return ExitCode::from(2);
         }
     };
@@ -71,11 +76,13 @@ fn parse_args() -> Result<Args, String> {
     let mut root = None;
     let mut filter = None;
     let mut expand = false;
+    let mut color = false;
     let mut argv = std::env::args().skip(1);
     while let Some(arg) = argv.next() {
         match arg.as_str() {
             "--filter" => filter = Some(argv.next().ok_or("--filter needs a value")?),
             "--expand" => expand = true,
+            "--color" => color = true,
             other if root.is_none() && !other.starts_with('-') => root = Some(PathBuf::from(other)),
             other => return Err(format!("unrecognized argument: {}", other)),
         }
@@ -84,6 +91,7 @@ fn parse_args() -> Result<Args, String> {
         root: root.ok_or("no corpus root given")?,
         filter,
         expand,
+        color,
     })
 }
 
@@ -102,12 +110,17 @@ fn field(label: &str, value: &impl std::fmt::Display) {
 /// a terminal shows it, a pipe and a log file would show the escapes
 /// themselves, and [`NO_COLOR`](https://no-color.org) is a reader saying
 /// they would rather not either way.
-fn emphasis() -> bool {
-    std::io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none()
+///
+/// `--color` settles it instead: a pager reads escapes as well as a
+/// terminal does, and the guess cannot tell that pipe from a log file, so
+/// whoever is piping to one says so and is taken at their word — over
+/// `NO_COLOR` too, since asking for it here is the later word.
+fn emphasis(args: &Args) -> bool {
+    args.color || (std::io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none())
 }
 
 fn run(args: &Args) -> Result<bool, String> {
-    let emphasis = emphasis();
+    let emphasis = emphasis(args);
     let mut corpus = corpus::load(&args.root)?;
     for problem in &corpus.problems {
         eprintln!("{}", problem);
