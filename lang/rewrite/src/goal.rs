@@ -197,8 +197,8 @@ pub enum Proof {
         then_sub: Box<Proof>,
         else_sub: Box<Proof>,
     },
-    /// A `cases` expanded a boolean-valued wire — η, spent as the table's
-    /// own Shannon law — on each side that held one, and the expanded goal
+    /// A `cases` expanded a boolean-valued wire — η, spent as the three
+    /// table rows it is — on each side that held one, and the expanded goal
     /// closed. The per-side records hold the split(s) and, when the step
     /// carried per-case sub-strategies, every step those landed inside the
     /// arms, in order — all ordinary rewrites, replayed blind by the

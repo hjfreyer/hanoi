@@ -1866,7 +1866,7 @@ mod tests {
         );
     }
 
-    /// An arm region: after a Shannon split, each side of the fresh branch
+    /// An arm region: after a case split, each side of the fresh branch
     /// is its own focus — the pinned literal and that side's copy of the
     /// body in, the condition op and the other side out, the select in
     /// because the branch layer's laws anchor there. A fire scoped to the
@@ -1880,23 +1880,9 @@ mod tests {
             .find(|(_, k)| matches!(k, NodeKind::Op(Prim::IsBool)))
             .map(|(id, _)| id)
             .expect("the split target");
-        let split = rules::propose(&graph, &[Law::Shannon], test)
-            .into_iter()
-            .next()
-            .expect("the Shannon row offers the split");
-        deriv.push(&mut graph, split).unwrap();
-        let cond = deriv
-            .latest_undo()
-            .and_then(|back| {
-                back.at
-                    .nodes
-                    .iter()
-                    .rev()
-                    .copied()
-                    .find(|&n| matches!(graph.kind(n), NodeKind::Select))
-            })
-            .map(|select| graph.sources(select)[0])
-            .expect("the split made a branch");
+        let cond = rules::case_split(&mut graph, &mut deriv, test)
+            .expect("the split lands")
+            .expect("there is a split to make");
 
         let is_bool = graph
             .live()
@@ -1931,7 +1917,7 @@ mod tests {
             .filter(|(_, k)| matches!(k, NodeKind::Op(Prim::Not)))
             .count();
         assert_eq!(nots, 1, "only the then copy folded:\n{}", graph);
-        assert_eq!(deriv.len(), 2, "the split and the one scoped fold");
+        assert_eq!(deriv.len(), 4, "the split's three rows and one scoped fold");
     }
 
     /// A branch that is gone resolves to the empty region, which binds

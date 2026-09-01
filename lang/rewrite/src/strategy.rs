@@ -39,11 +39,11 @@ use std::collections::HashMap;
 
 use bytecode::{IdentityIndex, Library};
 
-use crate::diagram2::rules::{self, Derivation, Law};
+use crate::diagram2::rules::{self, Derivation};
 use crate::diagram2::tactic::{Region, Tactic};
 use crate::diagram2::{self, tactic};
 use crate::goal::{self, Goal, Outcome, Proof, Residual, against};
-use crate::graph::{self, Direction, Graph, Match, NodeId, NodeKind, Pair, Source};
+use crate::graph::{self, Direction, Graph, Match, NodeId, Pair, Source};
 use crate::hant::{Body, OnSide, Step, Strategy, default_strategy};
 use crate::term::{Context, Error, Prim};
 
@@ -223,11 +223,12 @@ impl<'l> Prover<'l> {
                 )))
             }
 
-            // Case analysis on an intermediate result, as a checked
-            // rewrite: the operation's answer is `true` or `false` and
+            // Case analysis on an intermediate result, as checked
+            // rewrites: the operation's answer is `true` or `false` and
             // nothing else, so everything downstream of it becomes a
-            // branch over both assumptions — the table's Shannon row,
-            // fired once per side through `apply` like any rewrite. The
+            // branch over both assumptions — `rules::case_split`, the
+            // three rows that comes to, spent once per side and every one
+            // of them through `apply` like any rewrite. The
             // step picks the earliest such answer (the box with the least
             // upstream), because splitting on a late result says nothing
             // usable about the computations feeding it; a side without
@@ -645,32 +646,21 @@ impl<'l> Prover<'l> {
             let Some(wire) = outermost(side, prim, literal, within) else {
                 continue;
             };
-            let split = diagram2::rules::propose(side, &[Law::Shannon], wire)
-                .into_iter()
-                .next();
-            let Some(split) = split else {
+            // Three checked rewrites, landing in this side's record like
+            // any others — and what the arms scope to is the wire the
+            // branch they made turns on, which survives a rewrite that
+            // puts a narrower select in its place.
+            let split = match diagram2::rules::case_split(side, &mut derivs[i], wire) {
+                Ok(split) => split,
+                Err(e) => {
+                    let why = format!("`cases` proposed a split the checker refused: {}", e);
+                    return Err(Box::new(gave_up(goal, &why)));
+                }
+            };
+            let Some(condition) = split else {
                 continue;
             };
-            if let Err(e) = derivs[i].push(side, split) {
-                let why = format!("`cases` proposed a split the checker refused: {}", e);
-                return Err(Box::new(gave_up(goal, &why)));
-            }
-            // The Shannon replacement adds its select last, so the
-            // introduced branch is the last select the recorded inverse
-            // names — and what the arms scope to is the wire that select
-            // turns on, which survives a rewrite that puts a narrower
-            // select in its place.
-            branches[i] = derivs[i]
-                .latest_undo()
-                .and_then(|back| {
-                    back.at
-                        .nodes
-                        .iter()
-                        .rev()
-                        .copied()
-                        .find(|&n| matches!(side.kind(n), NodeKind::Select))
-                })
-                .map(|select| side.sources(select)[0]);
+            branches[i] = Some(condition);
             counts.splits += 1;
         }
         if branches.iter().all(Option::is_none) {
@@ -877,6 +867,7 @@ fn gave_up(goal: &Goal, why: &str) -> Residual {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::graph::NodeKind;
     use crate::hant::parse_hant;
     use bytecode::{Value, assemble};
 

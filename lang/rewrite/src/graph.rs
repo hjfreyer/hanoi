@@ -937,8 +937,8 @@ impl Graph {
 // ---- lifting a region out --------------------------------------------------------
 
 /// Some of a graph's boxes, lifted out as a graph of their own — the body
-/// a region-carrying rule ([`Rule::Shannon`](crate::diagram2::rules::Rule),
-/// [`SelectHoist`](crate::diagram2::rules::Rule)) puts in its payload.
+/// a region-carrying rule
+/// ([`SelectHoist`](crate::diagram2::rules::Rule)) puts in its payload.
 ///
 /// A region is a **reading** of the host and never a choice, so everything
 /// here is said by the caller and nothing is inferred: `region` is which
