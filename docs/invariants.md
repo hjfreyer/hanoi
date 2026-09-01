@@ -16,7 +16,7 @@ Trusted, and the whole of it:
 - `graph::isomorphic` — answers `true` only after verifying its
   bijection link by link;
 - the machine itself, where a law is *about* what an operation computes —
-  `fold` and `shannon` consult `run_window`, the real `vm`.
+  `fold` consults `run_window`, the real `vm`.
 
 Everything else — `find`, `propose`, drivers, tactics, queries, the
 `cases` step's wire-picking, strategy interpretation — is untrusted
@@ -41,8 +41,8 @@ the opaque-operation oracle (`rules::is_wiring` is the split).
 
 A rule's pattern boundary says what the rule is *about*, and a rule that
 wants a shape says it in the pattern rather than testing for it —
-`select-hoist` exports its body's outputs, `shannon` carries the region
-it pins as payload, `select-literal` carries its arms. Nothing asks a
+`select-hoist` exports its body's outputs and carries the region it moves
+as payload, `select-literal` carries its arms. Nothing asks a
 question a match could answer. New rules follow the same discipline.
 
 What a boundary does **not** say is *and nothing else reads this*. A
@@ -123,14 +123,15 @@ the check that the shorthand was honest.
 
 No driver opens a call or invents a case analysis: `inline` and `cases`
 are a proof's decisions, stated in the `.hant`. Rows that grow a graph —
-`shannon`, the two hoists, the two unpackings — are on no driven list;
-a strategy names them, and a driver run to fixpoint spends only rows
-that shrink.
+the two hoists, the two unpackings — are on no driven list; a strategy
+names them, and a driver run to fixpoint spends only rows that shrink.
+A case split is three of them in a row (`rules::case_split`), which is
+why it is a strategy's act and not a law of its own.
 
 ## Hypotheses are structure, and only guard-shaped ones exist
 
 The checker has no turnstile and is not getting one. "Assume the
-condition holds" is the branch itself: `shannon` introduces it, the
+condition holds" is the branch itself: a case split introduces it, the
 specializing rows spend it (anchored on the select, which holds both the
 condition and the discard that licenses reasoning from it),
 `select-same` discharges it — as a row the branch layer drives, and as

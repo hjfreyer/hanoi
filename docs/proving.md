@@ -279,11 +279,13 @@ operation the instruction set guarantees answers a boolean (`equal`,
 `is_int`, `not`, …; the parser refuses anything else). That answer is
 `true` or it is `false`, and there is no third case, so the goal's
 downstream computation equals a branch holding one copy per case with the
-assumed answer pasted in as a literal — the `shannon` row of the table
-([docs/rules.md](rules.md)). The step fires that row **once** per side
-that computes `op`, at the earliest such wire, and that firing is an
-ordinary checked rewrite. The power is in what the rest of the table does
-*afterwards*, inside the copies, where the assumption is now a literal: a
+assumed answer pasted in as a literal. That is not a row of its own: it
+is three rows of the table spent in order — `promised-bool`,
+`as-bool-branch` and `select-hoist` ([docs/rules.md](rules.md)). The step
+spends them **once** per side that computes `op`, at the earliest such
+wire, and each is an ordinary checked rewrite. The power is in what the
+rest of the table does *afterwards*, inside the copies, where the
+assumption is now a literal: a
 branch on it resolves (`select-literal`), a test against it computes
 (`fold`), untouched code falls away by not being reached. When both
 copies simplify to the same thing, the introduced branch collapses too

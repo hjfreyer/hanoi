@@ -369,10 +369,12 @@ pub enum Step<V> {
     /// so its answer is `true` or `false` and nothing else — and
     /// everything that depends on that answer can be replaced by a branch
     /// holding one copy of it per case, the assumed answer pasted in as a
-    /// literal. That replacement is an ordinary equation (the table's
-    /// Shannon row, which refuses any operation without the guarantee),
-    /// and this step fires it once per side that computes the operation,
-    /// at the earliest such answer — each firing an
+    /// literal. That replacement is three ordinary equations (the
+    /// promise written down, the coercion unpacked, and the branch grown
+    /// forward over the region — see
+    /// [`case_split`](crate::diagram2::rules::case_split)), and this step
+    /// spends them once per side that computes the operation, at the
+    /// earliest such answer — each rewrite an
     /// [`apply`](crate::diagram2::rules::apply)-checked rewrite like any
     /// other, so the step itself is untrusted convenience that only picks
     /// where. The ordinary laws then simplify each copy under its
