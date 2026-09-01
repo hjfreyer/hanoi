@@ -135,6 +135,34 @@
 //! One separator is spared, and only at the end: a gap between two commas
 //! names nothing, and each list says so in its own words.
 //!
+//! ## Saying nothing
+//!
+//! **Steps are juxtaposed, and no steps is a run of none.** `lhs()` is
+//! the tactic that leaves its side as it stands, and `proof p = ;` the
+//! strategy that runs nothing at all — the goal closes if its sides are
+//! already one diagram, and says it is still open if they are not, which
+//! is what the prover has always done with a strategy that ran out. So
+//! commenting a proof's steps out leaves a proof that reports where the
+//! goal stands, rather than a file that will not parse:
+//!
+//! ```text
+//! proof identities::the_one_being_worked_on =
+//!     lhs(decide)
+//!     lhs(
+//!         // at(#nkz, select-same)
+//!     )
+//!     diagram;
+//! ```
+//!
+//! An arm written empty is a run of none too, and so is *not* an arm left
+//! out: an omitted `via` side gets `diagram`, and `(left: )` gets nothing.
+//!
+//! A list is the other way round, and for the reason the two differ:
+//! juxtaposing no tactics is a run of no tactics, but `fire()` names no
+//! law to fire, `inline()` no sentence to open and `for()` no reader to
+//! send — each an argument missing rather than a run of none, and each
+//! still says so.
+//!
 //! ## Pointing at a box
 //!
 //! `fire` takes the first match it is offered anywhere on the side. `at`
@@ -490,6 +518,13 @@ pub fn parse_hant(text: &str) -> Result<Vec<ProofEntry>, String> {
 }
 
 /// Steps by juxtaposition, ending at `;`, `,` or `)` — whichever encloses.
+///
+/// **No steps is a run of no steps**, which the prover already means
+/// something by: a goal whose sides are one diagram closes before any step
+/// runs, and one whose sides are not says the strategy ended with it still
+/// open. So an empty strategy is written rather than refused, and a proof
+/// whose steps are all commented out says what it has become instead of
+/// failing to parse.
 fn parse_strategy(input: &str) -> Result<(Strategy<String>, &str), String> {
     let mut rest = input.trim_start();
     let mut steps = Vec::new();
@@ -497,9 +532,6 @@ fn parse_strategy(input: &str) -> Result<(Strategy<String>, &str), String> {
         let (step, after) = parse_step(rest)?;
         steps.push(step);
         rest = after.trim_start();
-    }
-    if steps.is_empty() {
-        return Err("an empty strategy proves nothing".to_string());
     }
     Ok((steps, rest))
 }
@@ -699,6 +731,12 @@ fn parse_tactics(input: &str) -> Result<Tactic, String> {
 }
 
 /// Tactics by juxtaposition — a sequence, or the one tactic it holds.
+///
+/// The sequence may be empty, and then it is the tactic that does
+/// nothing: `lhs()` leaves its side exactly as it stands, succeeding
+/// without landing a rewrite, which is what a `Seq` of nothing already
+/// meant to [`tactic::run`]. It is the step a proof has while what it is
+/// going to say is commented out.
 fn parse_tactic_seq(input: &str) -> Result<(Tactic, &str), String> {
     let mut rest = input.trim_start();
     let mut steps = Vec::new();
@@ -708,7 +746,7 @@ fn parse_tactic_seq(input: &str) -> Result<(Tactic, &str), String> {
         rest = after.trim_start();
     }
     match steps.len() {
-        0 => Err("an empty tactic does nothing".to_string()),
+        0 => Ok((Tactic::Seq(Vec::new()), rest)),
         1 => Ok((steps.pop().expect("one"), rest)),
         _ => Ok((Tactic::Seq(steps), rest)),
     }
@@ -1644,8 +1682,6 @@ mod tests {
         assert!(err.contains("no tactic is called `flatten`"), "{}", err);
         let err = parse_hant("proof p = lhs(fire(fold, upside-down)) exact;").unwrap_err();
         assert!(err.contains("no law is called `upside-down`"), "{}", err);
-        let err = parse_hant("proof p = lhs() exact;").unwrap_err();
-        assert!(err.contains("empty tactic"), "{}", err);
         let err = parse_hant("proof p = lhs(saturate(fold) exact;").unwrap_err();
         assert!(err.contains("parenthesized tactic"), "{}", err);
     }
@@ -1654,8 +1690,6 @@ mod tests {
     fn a_malformed_entry_is_refused_with_its_name() {
         let err = parse_hant("proof foo = flatten;").unwrap_err();
         assert!(err.contains("foo") && err.contains("flatten"), "{}", err);
-        let err = parse_hant("proof foo = ;").unwrap_err();
-        assert!(err.contains("empty strategy"), "{}", err);
         let err = parse_hant("prove foo = diagram;").unwrap_err();
         assert!(err.contains("expected `proof`"), "{}", err);
     }
@@ -2129,6 +2163,83 @@ mod tests {
                 format!("{:?}", bare),
                 "a spared comma changed the proof"
             );
+        }
+    }
+
+    /// A run of no steps is a step that does nothing, written — a tactic
+    /// block, a whole strategy, and an arm alike — so that commenting a
+    /// proof's steps out leaves a proof.
+    #[test]
+    fn a_run_of_no_steps_is_written() {
+        let entries = parse_hant("proof p = lhs() rhs() both() diagram;").unwrap();
+        let [
+            Step::Rewrite {
+                side: l,
+                tactic: lt,
+            },
+            Step::Rewrite {
+                side: r,
+                tactic: rt,
+            },
+            Step::Rewrite {
+                side: b,
+                tactic: bt,
+            },
+            Step::Diagram,
+        ] = &entries[0].strategy[..]
+        else {
+            panic!("{:?}", entries[0].strategy);
+        };
+        assert_eq!((*l, *r, *b), (OnSide::Lhs, OnSide::Rhs, OnSide::Both));
+        for tactic in [lt, rt, bt] {
+            assert_eq!(tactic.as_ref(), &Tactic::Seq(Vec::new()));
+        }
+
+        // The bodies that hold a sequence hold an empty one.
+        let entries = parse_hant("proof p = lhs(repeat() try()) diagram;").unwrap();
+        let [Step::Rewrite { tactic, .. }, Step::Diagram] = &entries[0].strategy[..] else {
+            panic!("{:?}", entries[0].strategy);
+        };
+        assert_eq!(
+            tactic.as_ref(),
+            &Tactic::Seq(vec![
+                Tactic::Repeat(Box::new(Tactic::Seq(Vec::new())), None),
+                Tactic::Try(Box::new(Tactic::Seq(Vec::new()))),
+            ])
+        );
+
+        // A whole strategy, and an arm — which is a run of none rather
+        // than an arm left out, the one an omitted side would have got.
+        assert_eq!(parse_hant("proof p = ;").unwrap()[0].strategy, vec![]);
+        let entries = parse_hant("proof p = via { id(0) } (left: , right: diagram);").unwrap();
+        let [Step::Via { left, right, .. }] = &entries[0].strategy[..] else {
+            panic!("{:?}", entries[0].strategy);
+        };
+        assert_eq!(left.as_deref(), Some(&[][..]));
+        assert_eq!(right.as_deref(), Some(&[Step::Diagram][..]));
+    }
+
+    /// A run of none is a run; a missing argument is missing. `fire()`
+    /// names no law, `inline()` no sentence, `for()` no reader — and each
+    /// says so rather than standing for a step that does nothing.
+    #[test]
+    fn an_absent_argument_is_not_a_run_of_none() {
+        for (proof, expected) in [
+            ("proof p = lhs(fire()) diagram;", "a law list names no law"),
+            (
+                "proof p = lhs(saturate()) diagram;",
+                "a law list names no law",
+            ),
+            ("proof p = inline() diagram;", "names no sentence"),
+            ("proof p = lhs(at()) diagram;", "`at` names nothing"),
+            ("proof p = lhs(on()) diagram;", "`on` names no wires"),
+            (
+                "proof p = lhs(at(#nkz, fold, for())) diagram;",
+                "`for` names no readers",
+            ),
+        ] {
+            let err = parse_hant(proof).unwrap_err();
+            assert!(err.contains(expected), "{}: {}", proof, err);
         }
     }
 
