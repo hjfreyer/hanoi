@@ -59,9 +59,9 @@
 //! What is here is the two things the representation cannot decide: what
 //! a branch means ([`branching`]) and what an operation computes
 //! ([`folding`]). [`Law::NotNot`] — `not ; not = as_bool` — is the elder
-//! of the second: the opaque-operation oracle the tests judge by reads
-//! `not(not(x))` and `as_bool(x)` as different symbols, so this is a law
-//! about what the machine computes, and `vm` is what measures it.
+//! of the second: nothing about the wiring relates `not(not(x))` to
+//! `as_bool(x)`, so this is a law about what the machine computes, and
+//! `vm` is what measures it.
 //!
 //! ## One row for a family
 //!
@@ -896,14 +896,12 @@ impl Rule {
 /// Kept out of [`structural`], for the reason [`Law::NotNot`] is kept out of
 /// it. Three of these turn on what an operation *computes* — which
 /// values are truthy, that `equal` is identity, that `as_bool` is `truthy` —
-/// and the oracle the corpus tests judge by reads every operation as opaque,
-/// so it cannot tell a graph that spent one of them from a graph that means
-/// something else. `vm` is the judge for those, and the tests call it.
+/// and nothing about the wiring settles any of them. `vm` is the judge for
+/// those, and the tests call it.
 ///
-/// The rest are pure wiring and the oracle can judge them; they are here
-/// rather than in [`structural`] because they take a branch apart, and a
-/// rewriter that dissolves every branch it can is a strategy, which this
-/// module does not decide.
+/// The rest are pure wiring; they are here rather than in [`structural`]
+/// because they take a branch apart, and a rewriter that dissolves every
+/// branch it can is a strategy, which this module does not decide.
 ///
 /// [`Law::SelectHoist`] and [`Law::CondHoist`] are branch laws and are
 /// **not** here, for the reason the unpackings are not in [`folding`]: they
@@ -960,41 +958,6 @@ pub fn folding() -> Vec<Law> {
         Law::AsTupleBuilt,
         Law::EqualRefl,
     ]
-}
-
-/// Whether a law can be judged by reading every operation as opaque.
-///
-/// The wiring laws can: they move boxes around without asking what any box
-/// does. The rest are claims about the machine, and only the machine settles
-/// them — which is why they are tested against `vm` and not against the
-/// corpus oracle.
-pub fn is_wiring(law: Law) -> bool {
-    !matches!(
-        law,
-        Law::NotNot
-            | Law::AndLiteral
-            | Law::OrLiteral
-            | Law::TupleCancel
-            | Law::AsTupleBuilt
-            | Law::EqualRefl
-            | Law::PromisedBool
-            | Law::SelectLiteral
-            | Law::NotBranch
-            | Law::SpecializeEqual
-            | Law::SpecializeBool
-            | Law::SpecializeChoice
-            | Law::SelectHoist
-            | Law::CondHoist
-            | Law::Fold
-            | Law::TestedBool
-            | Law::Retuple
-            | Law::AsTupleRoundTrip
-            | Law::IsTupleBuilt
-            | Law::Idem
-            | Law::Commute
-            | Law::AsBoolBranch
-            | Law::CoercionGuard
-    )
 }
 
 // ---- where a step lands ----------------------------------------------------------
@@ -2584,45 +2547,30 @@ fn read_off(graph: &Graph, law: Law, id: NodeId) -> Vec<(Rule, NodeId)> {
 pub(in crate::diagram2) mod tests {
     use super::*;
     use crate::diagram2::build;
-    use crate::diagram2::meaning::{Meaning, boundary, eval_graph};
     use crate::graph::{find, find_pinned, isomorphic, pins_itself};
     use crate::term::Context;
     use bytecode::{Value, assemble};
 
-    /// The two graphs a rule relates, run on the same symbols. A law whose
-    /// two sides are different programs is not a law, and this is what says
-    /// so — the same oracle `super` holds its own rewriting to, with every
-    /// operation left opaque.
-    fn means_the_same(law: Law, a: &Graph, b: &Graph) {
-        let mut m = Meaning::default();
-        let inputs = boundary(&mut m, a.arity().inputs);
-        assert_eq!(
-            eval_graph(&mut m, a, &inputs),
-            eval_graph(&mut m, b, &inputs),
-            "{:?} relates two different programs:\n{}\n{}",
-            law,
-            a,
-            b
-        );
-    }
-
-    /// A law holds. Five claims, and the payload is the only input: the two
+    /// A law holds. Four claims, and the payload is the only input: the two
     /// sides are *built* from it rather than written out here, so this
     /// tests the table itself and not a second copy of it.
     ///
     /// 1. Both sides are graphs, and of one interface — so no step can
     ///    change what a graph takes or leaves.
-    /// 2. They are the same program.
-    /// 3. Each side, taken as a graph in its own right, matches itself.
-    /// 4. Applying the rule to one side lands on the other.
-    /// 5. The step that comes back undoes it.
+    /// 2. Each side, taken as a graph in its own right, matches itself.
+    /// 3. Applying the rule to one side lands on the other.
+    /// 4. The step that comes back undoes it.
+    ///
+    /// What it does **not** say is that the two sides mean the same thing:
+    /// that is the law's own content, and each caller states it in the
+    /// terms the law is about. What holds the table as a whole to meaning
+    /// is the corpus — see [`crate::strategy`]'s identities.
     fn holds(law: Law, rule: Rule) {
         assert_eq!(rule.law(), law, "the payload names the wrong law");
         let pair =
             sides(&rule).unwrap_or_else(|e| panic!("{:?} does not state an equation: {}", law, e));
         let (lhs, rhs) = (pair.lhs(), pair.rhs());
         assert_eq!(lhs.arity(), rhs.arity());
-        means_the_same(law, lhs, rhs);
 
         for (dir, here, there) in [
             (Direction::Forward, &lhs, &rhs),
@@ -2660,13 +2608,27 @@ pub(in crate::diagram2) mod tests {
             whole
                 .check()
                 .unwrap_or_else(|e| panic!("{:?} {:?} left a torn graph: {}", law, dir, e));
-            means_the_same(law, &whole, there);
+            assert!(
+                isomorphic(&whole, there),
+                "{:?} {:?} does not land on the other side:\n{}\n{}",
+                law,
+                dir,
+                whole,
+                there
+            );
 
             // And the way back really is the way back.
             apply(&mut whole, &back)
                 .unwrap_or_else(|e| panic!("{:?} {:?} does not undo: {}", law, dir, e));
             whole.check().unwrap();
-            means_the_same(law, &whole, here);
+            assert!(
+                isomorphic(&whole, here),
+                "{:?} {:?} does not undo to the side it started on:\n{}\n{}",
+                law,
+                dir,
+                whole,
+                here
+            );
         }
     }
 
@@ -2791,14 +2753,13 @@ pub(in crate::diagram2) mod tests {
     /// A law held to the **machine**, over every assignment of a handful of
     /// values to its boundary.
     ///
-    /// The opaque oracle cannot judge these: `equal(x, 7)` is a symbol to
-    /// it, and the whole content of the law is what that symbol computes.
-    /// So both sides *run*, every operation on the machine itself.
-    /// Sampling is not a proof, and the proof is in the docs; this is what
-    /// would catch the proof being wrong.
+    /// The wiring settles nothing about these: the whole content of the
+    /// law is what `equal`, `truthy` or `as_bool` computes. So both sides
+    /// *run*, every operation on the machine itself. Sampling is not a
+    /// proof, and the proof is in the docs; this is what would catch the
+    /// proof being wrong.
     fn the_machine_agrees(law: Law, rule: Rule) {
         assert_eq!(rule.law(), law, "the payload names the wrong law");
-        assert!(!is_wiring(law), "a wiring law has a cheaper judge");
         let pair =
             sides(&rule).unwrap_or_else(|e| panic!("{:?} does not state an equation: {}", law, e));
         let (lhs, rhs) = (pair.lhs(), pair.rhs());
@@ -2877,9 +2838,29 @@ pub(in crate::diagram2) mod tests {
     }
 
     /// A choice between one value is that value.
+    ///
+    /// [`holds`] says the two sides are one window and that the step is
+    /// reversible; what the law *claims* is which of the two inputs the
+    /// answer side keeps, and that is stated here. Keeping the condition
+    /// instead would pass every mechanical check and be a false law.
     #[test]
     fn a_block_answered_either_way_is_the_answer() {
         holds(Law::SelectSame, Rule::SelectSame);
+
+        let pair = sides(&Rule::SelectSame).unwrap();
+        let answer = pair.rhs();
+        assert_eq!(
+            answer.live_count(),
+            0,
+            "the answer holds no box:\n{}",
+            answer
+        );
+        assert_eq!(
+            answer.outputs(),
+            [Source::Input(1)],
+            "the answer is the block both arms gave, not the condition:\n{}",
+            answer
+        );
     }
 
     /// An arm of one box on the view it was handed.
@@ -3044,9 +3025,9 @@ pub(in crate::diagram2) mod tests {
 
     /// The commuting conversion: what runs after a branch runs inside
     /// whichever arm it takes. Nothing is pinned, so no promise about the
-    /// condition is spent — but the oracle reads a `Choice` per output and
-    /// cannot push an opaque application through one, so the machine is
-    /// the judge.
+    /// condition is spent — but a branch is a choice per output, and no
+    /// wiring pushes an application through one, so the machine is the
+    /// judge.
     #[test]
     fn a_branch_grows_over_what_follows_it() {
         the_machine_agrees(
