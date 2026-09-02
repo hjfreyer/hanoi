@@ -128,7 +128,8 @@
 
 use bytecode::{Library, SentenceIndex};
 
-use crate::kernel::graph::{Direction, Graph, Match, NodeKind, Pair, Source};
+use crate::kernel::graph::{Direction, Graph, Match, NodeKind, Source};
+use crate::kernel::rules::{Rule, Step};
 use crate::kernel::term::{Context, Prim, Term, TermIndex, lower};
 
 pub mod goal;
@@ -238,22 +239,24 @@ fn emit(graph: &mut Graph, terms: &Context, term: TermIndex, inputs: Vec<Source>
 /// all the way down (recursion is forbidden, so the walk drains); labelled,
 /// one pass, and the opened body's own calls stay shut.
 ///
-/// It is a [`Pair::apply`] like any other, and that is the point: the pair
-/// is the call's own one-box window against the body's graph — equal by
-/// definition rather than by any law — and the [`Match`] is read straight
-/// off the call, since a window of one box that exports every port has
-/// nothing left to choose. What makes the splice safe is what makes every
-/// splice safe, so nothing here re-points a link by hand.
+/// Every open is a [`Step`] by [`Rule::Open`] like any other rewrite, and
+/// that is the point: the pair is the call's own one-box window against
+/// the body's graph — equal by definition rather than by any law — and the
+/// [`Match`] is read straight off the call, since a window of one box that
+/// exports every port has nothing left to choose. What makes the splice
+/// safe is what makes every splice safe, so nothing here re-points a link
+/// by hand.
 ///
-/// Answers how many calls it opened — zero is the caller's business to
-/// refuse.
+/// Answers the steps it spent, in order, so a proof can carry them: replayed
+/// on the graph as it was, they open the same calls. Empty is the caller's
+/// business to refuse.
 pub fn inline(
     graph: &mut Graph,
     terms: &mut Context,
     library: &Library,
     only: Option<SentenceIndex>,
-) -> Result<usize, crate::kernel::term::Error> {
-    let mut opened = 0;
+) -> Result<Vec<Step>, crate::kernel::term::Error> {
+    let mut opened = Vec::new();
     // One at a time, asked again each time round. A rewrite rebuilds
     // everything downstream of what it replaced, so a call that sat under
     // an opened one is a *new* box afterwards and the id that named it is
@@ -274,20 +277,20 @@ pub fn inline(
             return Ok(opened);
         };
         let body = lower(terms, library, target)?;
-        let call = graph.kind(id).clone();
-        // The one thing the pair needs of the two sides is that they agree
-        // on what they take and leave, and a call carries its arity for
-        // exactly the reason the term does.
-        let pair = Pair::new(Graph::of_box(call), build(terms, body))
-            .expect("a call and its body agree by arity, and both are graphs");
-        let at = Match {
-            nodes: vec![id],
-            inputs: graph.sources(id).to_vec(),
-            sel: None,
+        let step = Step {
+            rule: Rule::Open {
+                target,
+                body: build(terms, body),
+            },
+            dir: Direction::Forward,
+            at: Match {
+                nodes: vec![id],
+                inputs: graph.sources(id).to_vec(),
+                sel: None,
+            },
         };
-        pair.apply(graph, Direction::Forward, &at)
-            .expect("a call is the window its own box fills");
-        opened += 1;
+        rules::apply(graph, &step).expect("a call is the window its own box fills");
+        opened.push(step);
     }
 }
 
@@ -443,7 +446,7 @@ pub(crate) mod tests {
         // shut.
         let mut labelled = graph.clone();
         let opened = inline(&mut labelled, &mut terms, &library, Some(named("outer"))).unwrap();
-        assert_eq!(opened, 1);
+        assert_eq!(opened.len(), 1);
         labelled.check().unwrap();
         assert!(matches!(
             labelled.live().next().map(|(_, k)| k),
@@ -452,11 +455,23 @@ pub(crate) mod tests {
 
         // Unlabelled opens all the way down, and lands on the graph the
         // opened term builds.
+        let before = graph.clone();
         let opened = inline(&mut graph, &mut terms, &library, None).unwrap();
-        assert_eq!(opened, 2);
+        assert_eq!(opened.len(), 2);
         graph.check().unwrap();
         let (_t, flat) = built("not not");
         assert!(isomorphic(&graph, &flat), "\n{}\n{}", graph, flat);
-        assert_eq!(inline(&mut graph, &mut terms, &library, None).unwrap(), 0);
+        assert!(
+            inline(&mut graph, &mut terms, &library, None)
+                .unwrap()
+                .is_empty()
+        );
+
+        // The opens are ordinary steps: replayed on the graph as it was,
+        // they land on the same program, which is what lets a proof carry
+        // an `inline` as the rewrites it is.
+        let mut again = before;
+        rules::replay(&mut again, &opened).unwrap();
+        assert!(isomorphic(&again, &graph), "\n{}\n{}", again, graph);
     }
 }

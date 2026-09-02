@@ -258,7 +258,7 @@ use crate::kernel::graph::{
     Direction, Embedding, Graph, Match, Mismatch, NodeId, NodeKind, Pair, Sink, Source, Unpaired,
     check_match, find_at, lift,
 };
-use bytecode::{Instruction, Library, Value};
+use bytecode::{Instruction, Library, SentenceIndex, Value};
 
 use crate::kernel::term::{Arity, Prim};
 
@@ -299,6 +299,10 @@ pub enum Law {
     // a graph, so no list drives them — see [`folding`].
     AsBoolBranch,
     CoercionGuard,
+    // Definitional unfolding: a call is its body. Not a law of the table
+    // but a fact of the library, and the one row whose payload the kernel
+    // holds to the library before it is spent — see [`Rule::Open`].
+    Open,
 }
 
 impl Law {
@@ -335,15 +339,18 @@ impl Law {
             Law::Commute => "comm",
             Law::AsBoolBranch => "as-bool-branch",
             Law::CoercionGuard => "coercion-guard",
+            Law::Open => "open",
         }
     }
 
-    /// Every law there is, in the order the enum declares them.
+    /// Every law of the table, in the order the enum declares them.
     ///
     /// Not a list to *drive* — [`structural`], [`branching`] and
     /// [`folding`] are the lists a strategy spends. This is the
     /// vocabulary: what a name can resolve to, and what a table of names is
-    /// checked against.
+    /// checked against. [`Law::Open`] is not in it: it is a fact of the
+    /// library rather than a row of the table, nothing reads one off a
+    /// box, and no strategy spells it — `inline` states it.
     pub fn every() -> Vec<Law> {
         vec![
             Law::NotNot,
@@ -857,6 +864,21 @@ pub enum Rule {
     /// what a value *is*, and this puts the test that decides it into the
     /// graph where a case split can spend it.
     CoercionGuard { prim: Prim },
+    /// A call is its body: `call target = body`, definitional unfolding
+    /// said as the pair it is — the call's own one-box window against the
+    /// graph of the sentence it names.
+    ///
+    /// The one payload that carries a *graph the library determines*
+    /// rather than widths and kinds. [`sides`] builds the pair from the
+    /// payload like every other row and asks nothing of the library, so
+    /// a step stating a wrong body is a well-formed rewrite by a false
+    /// equation — which is why the kernel's judgement,
+    /// [`certify`](crate::kernel::goal::certify), holds every `Open` it
+    /// replays to the body the library lowers before spending it. Nothing
+    /// proposes one: [`read_off`] has no library to read a body from, and
+    /// opening calls is a proof step (`inline`) rather than a law a
+    /// strategy drives.
+    Open { target: SentenceIndex, body: Graph },
 }
 
 impl Rule {
@@ -887,6 +909,7 @@ impl Rule {
             Rule::Commute { .. } => Law::Commute,
             Rule::AsBoolBranch => Law::AsBoolBranch,
             Rule::CoercionGuard { .. } => Law::CoercionGuard,
+            Rule::Open { .. } => Law::Open,
         }
     }
 }
@@ -1067,6 +1090,18 @@ pub fn sides(rule: &Rule) -> Result<Pair, Error> {
     let law = rule.law();
     let ill = |why| Error::Ill { law, why };
     let (a, b) = match rule {
+        // The window is the call box alone, every port exported; the
+        // other side is the body as handed in. The call's arity is the
+        // body's, which is what makes the two sides one interface — a
+        // body of the wrong arity is refused as a pair, and a body of the
+        // wrong *program* is `certify`'s to refuse.
+        Rule::Open { target, body } => (
+            Graph::of_box(NodeKind::Call {
+                target: *target,
+                arity: body.arity(),
+            }),
+            body.clone(),
+        ),
         Rule::NotNot => {
             let mut long = Graph::empty(1);
             let first = long.add(NodeKind::Op(Prim::Not), vec![Source::Input(0)]);

@@ -568,9 +568,9 @@ impl<'l> Prover<'l> {
                     Some(_) => unreachable!("the loader reads an inline label as a target"),
                 };
                 let mut goal = goal;
-                let opened = kernel::inline(&mut goal.lhs, ctx, self.library, only)?
-                    + kernel::inline(&mut goal.rhs, ctx, self.library, only)?;
-                if opened == 0 {
+                let lhs = kernel::inline(&mut goal.lhs, ctx, self.library, only)?;
+                let rhs = kernel::inline(&mut goal.rhs, ctx, self.library, only)?;
+                if lhs.is_empty() && rhs.is_empty() {
                     let why = match only {
                         None => "`inline` found no calls to open".to_string(),
                         Some(idx) => format!(
@@ -585,6 +585,8 @@ impl<'l> Prover<'l> {
                     Outcome::Closed(sub) => Outcome::Closed(Proof::Inlined {
                         target: only,
                         name,
+                        lhs,
+                        rhs,
                         sub: Box::new(sub),
                     }),
                     stuck => stuck,

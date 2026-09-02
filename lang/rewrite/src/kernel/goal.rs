@@ -132,6 +132,10 @@ pub enum Proof {
     Inlined {
         target: Option<SentenceIndex>,
         name: Option<String>,
+        /// The opens each side spent, as the [`Rule::Open`](crate::kernel::rules::Rule::Open)
+        /// steps they are, so a proof can be carried as its rewrites.
+        lhs: Vec<Step>,
+        rhs: Vec<Step>,
         sub: Box<Proof>,
     },
     /// A `by` **cited** another identity where its left side occurred, and
@@ -256,6 +260,10 @@ impl Proof {
                 }
             }
             Proof::Inlined { target, sub, .. } => {
+                // Re-performed from the sentence rather than replayed from
+                // the record: an `Open` step's body is a payload, and a
+                // payload is what the library says it is, not what a
+                // proof says.
                 kernel::inline(&mut goal.lhs, ctx, library, *target)
                     .map_err(|e| format!("the recorded inline does not re-open: {}", e))?;
                 kernel::inline(&mut goal.rhs, ctx, library, *target)
@@ -661,6 +669,8 @@ mod tests {
         let opened = Proof::Inlined {
             target: None,
             name: None,
+            lhs: Vec::new(),
+            rhs: Vec::new(),
             sub: Box::new(Proof::Trivial),
         };
         assert!(
