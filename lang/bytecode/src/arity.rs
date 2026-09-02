@@ -252,12 +252,12 @@ pub fn sentence_arity(library: &Library, s_idx: SentenceIndex) -> Option<Arity> 
 /// `None` where the effect is not local to the instruction: `Dip` and `Branch`
 /// depend on the sentences they call.
 ///
-/// This is the single source of truth for per-instruction stack effects, and it
-/// is deliberately public: anything reasoning about whether code may move past
-/// an instruction needs the same numbers. A second copy elsewhere would be a
-/// silent hazard rather than a duplication — an interchange law's side
-/// condition is computed from `m`, so one wrong entry permits an unsound
-/// rewrite with nothing to catch it.
+/// This is the one table of per-instruction stack effects, and it is public
+/// so that anything reasoning about whether code may move past an instruction
+/// reads the same numbers. A second copy elsewhere wants a test measuring it
+/// against this one — an interchange law's side condition is computed from
+/// `m`, so one wrong entry permits an unsound rewrite with nothing downstream
+/// to catch it, and a test is what turns that drift into a failure instead.
 pub fn op_arity(inst: &Instruction) -> Option<(i64, i64)> {
     Some(match inst {
         Instruction::Push(_) => (0, 1),
