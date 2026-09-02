@@ -744,11 +744,9 @@ impl Graph {
     /// order they were built in, which is what makes both equality and
     /// [`isomorphic`] a reading rather than a search.
     fn canon(&self) -> (Vec<(NodeKind, Vec<Source>)>, Vec<Source>) {
-        let mut place: HashMap<NodeId, usize> = HashMap::new();
-        let mut order: Vec<NodeId> = Vec::new();
-        for &out in &self.outputs {
-            self.walk_canon(out, &mut place, &mut order);
-        }
+        let order = self.canon_order();
+        let place: HashMap<NodeId, usize> =
+            order.iter().enumerate().map(|(i, &id)| (id, i)).collect();
         let named = |src: Source| match src {
             Source::Input(i) => Source::Input(i),
             Source::Port { node, port } => Source::Port {
@@ -767,6 +765,20 @@ impl Graph {
             })
             .collect();
         (nodes, self.outputs.iter().map(|&s| named(s)).collect())
+    }
+
+    /// The live boxes in the order the canonical walk visits them: the
+    /// boundary outputs in order, each one's producers before itself.
+    /// Position `i` here is what [`canon`](Graph::canon) renumbers the box
+    /// to, and two graphs that are `==` visit corresponding boxes at the
+    /// same positions, which is what [`align`] reads off.
+    fn canon_order(&self) -> Vec<NodeId> {
+        let mut place: HashMap<NodeId, usize> = HashMap::new();
+        let mut order: Vec<NodeId> = Vec::new();
+        for &out in &self.outputs {
+            self.walk_canon(out, &mut place, &mut order);
+        }
+        order
     }
 
     fn walk_canon(&self, src: Source, place: &mut HashMap<NodeId, usize>, order: &mut Vec<NodeId>) {
@@ -1077,6 +1089,32 @@ pub fn under(graph: &Graph, k: usize) -> Graph {
 /// which is what [`Graph::canon`] does, and what `==` is.
 pub fn isomorphic(a: &Graph, b: &Graph) -> bool {
     a == b
+}
+
+/// One graph's live boxes named in another's, when the two are the same
+/// program: `from`'s ids to `to`'s. `None` when they are not.
+///
+/// Read off the same walk `==` compares, so it costs no search: the walk
+/// reads only structure and visits corresponding boxes of two equal graphs
+/// at the same positions. A box the boundary does not reach is not part
+/// of the program and is not in the map.
+///
+/// What this is for: a run recorded against one graph — a derivation's
+/// [`Match`]es name that graph's ids — said again against another that is
+/// the same program, so a rewrite found on one side of a claim can be
+/// spent where the other side landed. The map is a reading and the
+/// rebased match is still a claim; [`Pair::apply`] checks it like any
+/// other.
+pub fn align(from: &Graph, to: &Graph) -> Option<HashMap<NodeId, NodeId>> {
+    if from != to {
+        return None;
+    }
+    Some(
+        from.canon_order()
+            .into_iter()
+            .zip(to.canon_order())
+            .collect(),
+    )
 }
 
 // ---- a graph that does not hold together -----------------------------------------
@@ -1953,6 +1991,49 @@ impl fmt::Display for Graph {
 mod tests {
     use super::*;
     use crate::kernel::tests::built;
+
+    /// [`align`] names one graph's boxes in another that is the same
+    /// program, however the two were numbered, and refuses two that are
+    /// not.
+    #[test]
+    fn the_same_program_aligns_box_for_box() {
+        // The sum, built as the whole of a program: three boxes, ids 0..3.
+        let (_t, whole) = built("push 1 push 2 add");
+        // The same sum as the tail of a longer one, re-closed to answer
+        // only the sum: the ids are shifted by one, and the leading
+        // literal is a box the boundary no longer reaches.
+        let (_t, mut tail) = built("push 3 push 1 push 2 add");
+        let sum = tail.outputs()[1];
+        tail.close(vec![sum]);
+        assert!(isomorphic(&whole, &tail));
+
+        let map = align(&tail, &whole).expect("one program");
+        assert_eq!(
+            map.len(),
+            whole.live_count(),
+            "every live box, and only those"
+        );
+        for (&from, &to) in &map {
+            assert_ne!(from, to, "the numbering moved");
+            assert_eq!(tail.kind(from), whole.kind(to));
+        }
+        // And the map is a reading of the program, not of the arena: the
+        // sources one box reads correspond too.
+        let (add_from, add_to) = map
+            .iter()
+            .find(|(from, _)| matches!(tail.kind(**from), NodeKind::Op(Prim::Add)))
+            .map(|(&f, &t)| (f, t))
+            .expect("the sum");
+        for (a, b) in tail.sources(add_from).iter().zip(whole.sources(add_to)) {
+            let (Source::Port { node: a, .. }, Source::Port { node: b, .. }) = (a, b) else {
+                panic!("the sum reads literals")
+            };
+            assert_eq!(map[a], *b);
+        }
+
+        let (_t, other) = built("push 1 push 3 add");
+        assert!(align(&tail, &other).is_none(), "a different program");
+    }
 
     #[test]
     fn padding_slides_wires_underneath() {
