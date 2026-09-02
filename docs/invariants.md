@@ -34,8 +34,9 @@ family (`comm`, `idem`, `tested-bool`), which is the same discipline seen
 from the other end: the table asks the instruction set which instructions
 a law is about instead of naming them itself. `fold` executes its window on a scratch VM rather than
 reimplementing any operation. A law that turns on what the machine
-computes is tested against `vm`; only pure wiring laws may be judged by
-the opaque-operation oracle (`rules::is_wiring` is the split).
+computes is tested against `vm`. What holds the wiring laws is the corpus:
+`strategy`'s tests pin which of `hana`'s identities the bare table decides,
+so a law that stopped saying something true stops closing a claim.
 
 ## Side conditions are carried by interfaces, never tested
 

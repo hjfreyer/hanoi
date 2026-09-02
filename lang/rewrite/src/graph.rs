@@ -370,11 +370,10 @@ pub enum NodeKind {
     ///
     /// One answer, and that is the whole of the box. A source branch
     /// leaving `n` values is `n` of these reading one condition, because
-    /// that is what it *means*: [`meaning`](crate::diagram2) reads a branch
-    /// as a choice **per output**, so a box grouping `n` of them carried a
-    /// width the denotation does not have. Two graphs saying one thing
-    /// could then differ in how the answers were grouped, and no law
-    /// regrouped them — see [docs/rules.md](../../../docs/rules.md) on why
+    /// that is what it *means*: a branch is a choice **per output**, so a
+    /// box grouping `n` of them carried a width the denotation does not
+    /// have. Two graphs saying one thing could then differ in how the
+    /// answers were grouped, and no law regrouped them — see [docs/rules.md](../../../docs/rules.md) on why
     /// the slack is gone rather than quotiented.
     ///
     /// The arms are not in here. They are ordinary boxes upstream of the

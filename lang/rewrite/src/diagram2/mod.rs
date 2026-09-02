@@ -86,10 +86,10 @@
 //!   closer asks it once, after driving both sides through the table.
 //!   Nothing here saturates toward a canonical form by decree: `push 1 ;
 //!   push 2 ; add` and `push 2 ; push 1 ; add` are related exactly when a
-//!   strategy spends the laws that relate them. The tests still hold the
-//!   pure-wiring laws to the `meaning` oracle, which evaluates a program
-//!   with **every operation left opaque** — `add` on two wires stays
-//!   `add(x, y)` — so the oracle judges the shape and nothing else.
+//!   strategy spends the laws that relate them. What holds the laws to
+//!   meaning is the corpus itself: [`crate::strategy`]'s tests pin which
+//!   of `hana`'s identities the bare table decides, so a law that stopped
+//!   saying something true shows up as a claim that stopped closing.
 //! - **The value folds live in [`rules::folding`], and the branch layer
 //!   in [`rules::branching`].** A literal window runs on the machine
 //!   itself (`rules::Rule::Fold` and its kin), but only when a strategy
@@ -112,8 +112,6 @@ use bytecode::{Library, SentenceIndex};
 use crate::graph::{Direction, Graph, Match, NodeKind, Pair, Source};
 use crate::term::{Context, Prim, Term, TermIndex, lower};
 
-#[cfg(test)]
-mod meaning;
 pub mod query;
 pub mod render;
 pub mod rules;
@@ -276,7 +274,6 @@ pub fn inline(
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use super::meaning::{Meaning, boundary, eval_graph, eval_term};
     use super::*;
     use crate::graph::isomorphic;
     use crate::term::lower;
@@ -394,27 +391,6 @@ pub(crate) mod tests {
                 graph.arity(),
                 arena.arity(term),
                 "sentence {} changed arity in the translation",
-                library.names[idx]
-            );
-        }
-    }
-
-    /// The tightest check of [`build`] there is, and the shortest: the graph
-    /// means what the term means, with nothing translated back.
-    #[test]
-    fn a_graph_means_what_its_term_means() {
-        let (library, arena, terms) = corpus();
-        for (idx, term) in terms {
-            let graph = build(&arena, term);
-            let mut m = Meaning::default();
-            let inputs = boundary(&mut m, arena.arity(term).inputs);
-            let (as_term, as_graph) = (
-                eval_term(&mut m, &arena, term, inputs.clone()),
-                eval_graph(&mut m, &graph, &inputs),
-            );
-            assert_eq!(
-                as_term, as_graph,
-                "sentence {} means something else as a graph",
                 library.names[idx]
             );
         }

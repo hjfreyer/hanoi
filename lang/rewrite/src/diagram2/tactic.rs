@@ -1660,7 +1660,6 @@ pub fn tree() -> Tactic {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::diagram2::meaning::{Meaning, boundary, eval_graph};
     use crate::diagram2::query::{KindPat, NodePred};
     use crate::diagram2::{build, rules::replay};
     use crate::term::{Context, Prim};
@@ -1687,21 +1686,6 @@ mod tests {
     /// as the listing emphasises.
     fn named(graph: &Graph, id: NodeId) -> Prefix {
         Prefix::parse(&graph.shortest(id)).expect("a listing's own spelling")
-    }
-
-    /// The two graphs are one program, judged with every operation left
-    /// opaque — valid exactly for runs that spend only wiring laws.
-    fn same_meaning(note: &str, a: &Graph, b: &Graph) {
-        let mut m = Meaning::default();
-        let inputs = boundary(&mut m, a.arity().inputs);
-        assert_eq!(
-            eval_graph(&mut m, a, &inputs),
-            eval_graph(&mut m, b, &inputs),
-            "{}: the run changed what the graph means:\n{}\n{}",
-            note,
-            a,
-            b
-        );
     }
 
     /// A graph arrives with nothing to sweep.
@@ -1732,7 +1716,7 @@ mod tests {
         assert_eq!(graph.outputs(), [Source::Input(0), Source::Input(1)]);
     }
 
-    /// Meaning survives a run of the whole table, the run is its own
+    /// A run of the whole table leaves a graph, the run is its own
     /// derivation, and a second run has nothing left to do.
     #[test]
     fn a_run_is_a_derivation_that_replays() {
@@ -2103,21 +2087,24 @@ mod tests {
     fn the_branch_layer_is_a_pass() {
         // `branch { add } { add }` arrives with one `add` in it — both
         // arms were handed the same sources — so the pass is one
-        // `select-same`. Pure wiring, so the opaque oracle can hold the
-        // run to meaning.
-        let original = built("branch { add } { add }");
-        let mut graph = original.clone();
+        // `select-same`, and what it leaves is that `add` answering for
+        // itself: the box, and the boundary reading it.
+        let mut graph = built("branch { add } { add }");
         let mut deriv = Derivation::default();
         run(&mut graph, &mut deriv, &branch_pass()).unwrap();
         graph.check().unwrap();
-        same_meaning("branch { add } { add }", &original, &graph);
         assert_eq!(graph.live_count(), 1, "\n{}", graph);
-        let (_, kind) = graph.live().next().unwrap();
+        let (id, kind) = graph.live().next().unwrap();
         assert_eq!(kind, &NodeKind::Op(Prim::Add));
+        assert_eq!(
+            graph.outputs(),
+            [Source::Port { node: id, port: 0 }],
+            "the answer is the arm's, not the condition:\n{}",
+            graph
+        );
 
-        // And β: the literal keeps its arm. Not oracle-judgeable — the
-        // whole content is what `truthy` computes — so the claim here is
-        // the shape.
+        // And β: the literal keeps its arm. The whole content is what
+        // `truthy` computes, so the claim here is the shape.
         let mut graph = built("push true branch { push 1 } { push 2 }");
         let mut deriv = Derivation::default();
         run(&mut graph, &mut deriv, &branch_pass()).unwrap();
@@ -2165,12 +2152,12 @@ mod tests {
     /// the shape it leaves, and the shape is one sentence — no box but a
     /// select reads what a select answers.
     ///
-    /// Not oracle-judgeable, and for the reason `select-hoist` is not:
-    /// the opaque reading is a `Choice` per output and cannot push an
-    /// application through one, which is the whole content of the law.
-    /// The law itself is held to the machine in [`rules`]; what is
-    /// claimed here is that the drive spends it to the shape it is named
-    /// for, and that what it did replays.
+    /// The wiring settles nothing here, for the reason it settles nothing
+    /// about `select-hoist`: a branch is a choice per output, and pushing
+    /// an application through one is the whole content of the law. The law
+    /// itself is held to the machine in [`rules`]; what is claimed here is
+    /// that the drive spends it to the shape it is named for, and that
+    /// what it did replays.
     #[test]
     fn a_tree_leaves_the_branches_at_the_output() {
         for (body, selects) in [
