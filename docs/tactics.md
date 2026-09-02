@@ -8,8 +8,9 @@ and [`query.rs`](../lang/rewrite/src/diagram2/query.rs). A tactic
 orchestrates rewrites; it is entirely untrusted. Every firing lands
 through `Derivation::push` and is verified by `rules::apply`, so a buggy
 tactic produces a refused step, never a wrong graph — a tactic run *is*
-a derivation, replayable, and the addressing rules below all serve that
-property (see [docs/invariants.md](invariants.md)).
+a derivation, replayable, and the addressing rules below are how the
+current record keeps that property (see
+[docs/invariants.md](invariants.md)).
 
 ## The surface
 
@@ -361,12 +362,14 @@ is bound, the other side is restricted to that port's readers or source.
 A builder API — `Query::new().is("sel", …).feeds("lit", 0, "sel", 0)` —
 keeps authoring bearable.
 
-The rule that makes the whole thing hang together: **bindings never
-cross a rewrite**. A `Bindings` is consumed within one primitive step,
-before any `apply`; persistence across steps is the query's job — run it
-again. `NodeId`s shift meaning across rewrites, so the language never
-stores one across a step; it stores the *description*, which is exactly
-what "the copy feeding the add" is. (`at`'s aim is the one thing carried across steps today, and it is a name rather than an id — looked up against the
+The rule that makes the whole thing hang together today: **bindings do
+not cross a rewrite**. A `Bindings` is consumed within one primitive
+step, before any `apply`; persistence across steps is the query's job —
+run it again. `NodeId`s shift meaning across rewrites, so the language
+does not store one across a step; it stores the *description*, which is
+exactly what "the copy feeding the add" is. (A record that named boxes
+some other way could cache; this one re-runs, and search is cheap
+enough that nothing has wanted otherwise.) (`at`'s aim is the one thing carried across steps today, and it is a name rather than an id — looked up against the
 live graph at every entry rather than held. `selects-on` keeps a *list*
 of names across its own firings, for the reason above, and they are names
 too.)
@@ -535,9 +538,10 @@ that fails at its third step leaves the first two applied, on purpose.
 Primitives fail *before* mutating (`eval` and `resolve` are pure, and
 `apply` checks to completion before splicing).
 
-Backtracking is by **speculation on a clone**, never by `undo`: undoing
-puts boxes back with new ids, and a history that went forward, undid,
-and went forward again would stop being replayable. `Try` and each
+Backtracking is by **speculation on a clone** rather than by `undo`:
+undoing puts boxes back with new ids, and under the id-based record a
+history that went forward, undid, and went forward again would stop
+being replayable. `Try` and each
 `First` alternative run against a cloned graph and derivation; on
 failure the clones are dropped and nothing happened, on success the
 speculative suffix replays onto the real graph — ids are handed out in

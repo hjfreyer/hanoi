@@ -95,28 +95,17 @@ goes, and with it the whole model.
 No instruction may be added without revisiting the table against this
 list.
 
-## Derivations are forward-only and replayable
+## Derivations replay
 
-Node ids are handed out in order and never reused, and a box is named by
-what it computes and never edited, so a `NodeId` is stable for the life
-of a graph and a box's **address** — the digest of what it computes, in
-letters, which is what a report prints and a proof writes — is stable
-across graphs. A
-derivation replays from its original graph and lands identically —
-that is the property it exists to have — so:
-
-- `undo` is a valley-closer, never a backtracking stack: undoing mints
-  new ids, and a history that went forward, undid, and went forward again
-  would record matches against ids replay can never produce.
-- Speculation (a tactic's `try`, a failed alternative) runs on clones and
-  leaves no trace; the surviving suffix replays onto the real graph.
-- Bindings and matches never cross a rewrite. Persistence is running the
-  query again. Where a step does carry something across rewrites — today
-  only `at(#box, law)` — it carries a **name** and not an id: as much of
-  a box's address as tells it apart, looked up against the live graph at
-  every entry and failing by name when nothing answers to it or two
-  boxes do. Holding a name that way is what keeps replay honest; nothing
-  says `at` has to stay the only step that does.
+A derivation replays from its original graph and lands identically —
+that is the property it exists to have, and `Proof::check` is built on
+it. What that rests on in the representation: node ids are handed out in
+order and never reused, and a box is never edited or removed, so a
+`NodeId` names the same computation for the life of its graph and a
+recorded step means on replay what it meant when it landed. How the
+prover keeps a record replayable — what it holds across steps, how it
+speculates, how it names a box — is a set of choices about the record's
+format, listed below.
 
 ## A close is re-checked, fail closed
 
@@ -194,6 +183,34 @@ than becoming a no-op, so a proof that no longer matches its identity
 says so. All three are strictness settings: they make drift loud, and
 any of them could be relaxed to a warning if the noise ever outweighs
 the catch.
+
+### The record is id-based, and the rest follows
+
+A recorded match names boxes by `NodeId`. Everything below is how the
+prover keeps such a record replayable, and each would change with the
+record's format — one that recorded addresses or step recipes instead of
+ids could backtrack, cache, and speculate in place:
+
+- A box's **address** — the digest of what it computes, in letters,
+  which is what a report prints and a proof writes — is content and not
+  history, so it is the same in every graph that computes the box, the
+  goal's other side and the checker's replay included. A `.hant` proof
+  leans on this directly, which is what makes it more than a formatting
+  choice.
+- `undo` is a valley-closer today rather than a backtracking stack:
+  undoing mints new ids, and a history that went forward, undid, and
+  went forward again would record matches against ids replay never
+  produces.
+- Speculation (a tactic's `try`, a failed alternative) runs on clones and
+  leaves no trace; the surviving suffix replays onto the real graph.
+  This is the backtracking the id-based record allows.
+- Bindings and matches are not carried across a rewrite; persistence is
+  running the query again, which is cheap because search is untrusted.
+  Where a step does carry something — today only `at(#box, law)` — it
+  carries a **name** and not an id: as much of a box's address as tells
+  it apart, looked up against the live graph at every entry and failing
+  by name when nothing answers to it or two boxes do. Nothing says `at`
+  has to stay the only step that does.
 
 ### Search proposes no reader selection
 
