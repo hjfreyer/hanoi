@@ -87,12 +87,12 @@
 use std::collections::HashSet;
 use std::fmt;
 
-use super::query::{self, Bindings, Query, Var};
-use super::rules::{self, Derivation, Law, Rule, Step};
-use crate::graph::{
+use crate::kernel::graph::{
     Address, Direction, Graph, Lifted, Match, Named, NodeId, NodeKind, Prefix, Sink, Source,
     find_over, find_pinned, lift,
 };
+use crate::kernel::rules::{self, Derivation, Law, Rule, Step};
+use crate::query::{self, Bindings, Query, Var};
 
 // ---- what a step says ------------------------------------------------------------
 
@@ -1660,9 +1660,9 @@ pub fn tree() -> Tactic {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::diagram2::query::{KindPat, NodePred};
-    use crate::diagram2::{build, rules::replay};
-    use crate::term::{Context, Prim};
+    use crate::kernel::term::{Context, Prim};
+    use crate::kernel::{build, rules::replay};
+    use crate::query::{KindPat, NodePred};
     use bytecode::{Value, assemble};
     use std::collections::HashMap;
 
@@ -1676,7 +1676,7 @@ mod tests {
             .map(|(idx, _)| idx)
             .unwrap();
         let mut terms = Context::new();
-        let term = crate::term::lower(&mut terms, &library, idx).unwrap();
+        let term = crate::kernel::term::lower(&mut terms, &library, idx).unwrap();
         let graph = build(&terms, term);
         graph.check().unwrap();
         graph
@@ -2141,8 +2141,8 @@ mod tests {
             })
             .flat_map(|src| graph.sinks(src))
             .all(|sink| match sink {
-                crate::graph::Sink::Output(_) => true,
-                crate::graph::Sink::Port { node, .. } => {
+                crate::kernel::graph::Sink::Output(_) => true,
+                crate::kernel::graph::Sink::Port { node, .. } => {
                     matches!(graph.kind(node), NodeKind::Select)
                 }
             })
@@ -2825,7 +2825,7 @@ mod tests {
     /// `except(...)` is the same choice said from the other end.
     #[test]
     fn a_stated_introduction_can_be_for_some_readers_only() {
-        use crate::graph::isomorphic;
+        use crate::kernel::graph::isomorphic;
         // One wire, read by a `not` and an `is_bool`.
         let two_readers = || {
             let mut g = Graph::empty(1);

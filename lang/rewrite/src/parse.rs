@@ -1,6 +1,6 @@
 //! The term language, read back.
 //!
-//! [`Context`](crate::term::Context) writes a term; this reads one. The two
+//! [`Context`](crate::kernel::term::Context) writes a term; this reads one. The two
 //! are inverses, deliberately: a `via` waypoint is a term the author writes
 //! by hand, and it is written in the language the model prints rather than
 //! in Hana's. A proof used to say `pick 0 push t1 equal` where the term
@@ -23,7 +23,7 @@
 
 use bytecode::{Library, SentenceIndex, Value};
 
-use crate::term::{Context, Prim, TermIndex};
+use crate::kernel::term::{Context, Prim, TermIndex};
 
 /// What names a body may use: the library it is written against.
 pub struct Scope<'l> {
@@ -117,8 +117,8 @@ fn atom<'t>(
         "call" => {
             let (path, rest) = word(rest.trim_start());
             let target = sentence_named(scope.library, path)?;
-            let arity =
-                crate::term::call_arity(scope.library, target).map_err(|e| e.to_string())?;
+            let arity = crate::kernel::term::call_arity(scope.library, target)
+                .map_err(|e| e.to_string())?;
             Ok((ctx.call(target, arity), rest))
         }
         "push" => {
@@ -306,7 +306,7 @@ fn head_of(rest: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::term::{Arity, Term};
+    use crate::kernel::term::{Arity, Term};
     use bytecode::assemble;
 
     fn round_trip(library: &Library, text: &str) -> String {

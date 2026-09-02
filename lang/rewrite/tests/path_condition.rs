@@ -30,11 +30,12 @@
 //! wiring.
 
 use bytecode::assemble;
-use rewrite::diagram2::rules::Law;
-use rewrite::diagram2::{rules, tactic};
-use rewrite::goal::Goal;
-use rewrite::graph::{Graph, NodeKind, Source, isomorphic};
-use rewrite::term::{Context, Prim, TermIndex, lower};
+use rewrite::kernel::goal::Goal;
+use rewrite::kernel::graph::{Graph, NodeKind, Source, isomorphic};
+use rewrite::kernel::rules;
+use rewrite::kernel::rules::Law;
+use rewrite::kernel::term::{Context, Prim, TermIndex, lower};
+use rewrite::tactic;
 
 fn term_of(terms: &mut Context, body: &str) -> TermIndex {
     let code = format!("sentence probe {{ {} }}", body);

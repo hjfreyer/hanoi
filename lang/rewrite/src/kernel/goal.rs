@@ -1,8 +1,8 @@
 //! A goal is two graphs and the claim that they are the same program.
 //!
-//! The sides used to be terms; they are [`crate::diagram2`] graphs now, so
+//! The sides used to be terms; they are [graphs](crate::kernel::graph) now, so
 //! that a proof can *rewrite* them — the tactic language acts on a side in
-//! place, and equality-as-stated is [isomorphism](crate::graph::isomorphic)
+//! place, and equality-as-stated is [isomorphism](crate::kernel::graph::isomorphic)
 //! rather than one term twice. The terms are still where a goal comes from:
 //! an identity lowers, aligns, and **builds**.
 //!
@@ -10,16 +10,16 @@
 //! arity — `pick 1 ; drop` = ε is `(2 -> 2)` against `(0 -> 0)`, and every
 //! counit reads that way. That asymmetry still lives in exactly one place:
 //! here, where the narrower side is padded with
-//! [`under`](crate::term::Context::under) until the two arities agree,
+//! [`under`](crate::kernel::term::Context::under) until the two arities agree,
 //! before either side becomes a graph. Everything downstream is then
 //! arity-exact, which is what lets two graphs share one boundary.
 
 use bytecode::{IdentityIndex, Library, SentenceIndex};
 
-use crate::diagram2;
-use crate::diagram2::rules::{Step, replay};
-use crate::graph::{self, Direction, Graph, Match, NodeId, NodeKind, Pair, Source};
-use crate::term::{Context, Error, TermIndex, lower};
+use crate::kernel;
+use crate::kernel::graph::{self, Direction, Graph, Match, NodeId, NodeKind, Pair, Source};
+use crate::kernel::rules::{Step, replay};
+use crate::kernel::term::{Context, Error, TermIndex, lower};
 
 /// Two graphs of one arity, claimed to be the same program.
 #[derive(Debug, Clone, PartialEq)]
@@ -59,8 +59,8 @@ impl Goal {
             "an identity's sides differ by more than padding, which check_identities refuses"
         );
         Goal {
-            lhs: diagram2::build(ctx, lhs),
-            rhs: diagram2::build(ctx, rhs),
+            lhs: kernel::build(ctx, lhs),
+            rhs: kernel::build(ctx, rhs),
         }
     }
 }
@@ -108,7 +108,7 @@ fn met_in_the_middle(steps: usize) -> String {
 /// carries the very [`Step`]s that landed, each definitional variant
 /// carries what re-performs it, and [`Proof::check`] walks the tree
 /// against the goal as stated, holding every step to
-/// [`rules::apply`](crate::diagram2::rules::apply) again and every leaf to
+/// [`rules::apply`](crate::kernel::rules::apply) again and every leaf to
 /// [`isomorphic`](graph::isomorphic) again. Finding and checking are
 /// different jobs; this is the artifact that keeps them apart.
 ///
@@ -141,7 +141,7 @@ pub enum Proof {
     /// name and, per side, the [`Match`] saying where the cited claim's left
     /// side sat — enough for [`check`](Proof::check) to rebuild that claim's
     /// two graphs from the library, hold the match to
-    /// [`check_match`](crate::graph::check_match), and put the right side
+    /// [`check_match`](crate::kernel::graph::check_match), and put the right side
     /// down. What it does **not** do is ask whether the cited claim is true.
     /// That is the corpus's job, and the corpus does it: every identity is
     /// proved, the citation order is a DAG, and a claim that did not close
@@ -152,7 +152,7 @@ pub enum Proof {
     /// off exactly what that means for this one. The alternative — carrying
     /// the cited proof's steps at every use site and re-checking them there
     /// — is [`one_sided`](Proof::one_sided) and
-    /// [`transplant`](crate::diagram2::rules::transplant), which is what
+    /// [`transplant`](crate::kernel::rules::transplant), which is what
     /// discharges a citation when something asks.
     ///
     /// The pair is rebuilt from the name rather than recorded beside it, on
@@ -256,9 +256,9 @@ impl Proof {
                 }
             }
             Proof::Inlined { target, sub, .. } => {
-                diagram2::inline(&mut goal.lhs, ctx, library, *target)
+                kernel::inline(&mut goal.lhs, ctx, library, *target)
                     .map_err(|e| format!("the recorded inline does not re-open: {}", e))?;
-                diagram2::inline(&mut goal.rhs, ctx, library, *target)
+                kernel::inline(&mut goal.rhs, ctx, library, *target)
                     .map_err(|e| format!("the recorded inline does not re-open: {}", e))?;
                 sub.check(goal, ctx, library)
             }
@@ -345,7 +345,7 @@ impl Proof {
     /// The run this proof spends driving the claim's left side onto its
     /// right, or why it is not one.
     ///
-    /// What [`transplant`](crate::diagram2::rules::transplant) needs to
+    /// What [`transplant`](crate::kernel::rules::transplant) needs to
     /// carry a proved identity into another goal: a flat list of ordinary
     /// rewrites taking one side of the claim to the other. A proof that
     /// closes by driving the left onto the right is already that list, with
@@ -372,8 +372,8 @@ impl Proof {
     ///
     /// - **`inline`.** An open *is* a rewrite — one call's window against
     ///   its body's graph, which is exactly how
-    ///   [`inline`](crate::diagram2::inline) performs it. What it is not is
-    ///   a recorded [`Step`]: [`sides`](crate::diagram2::rules::sides) has
+    ///   [`inline`](crate::kernel::inline) performs it. What it is not is
+    ///   a recorded [`Step`]: [`sides`](crate::kernel::rules::sides) has
     ///   no library to build a body from, so nothing in the table can state
     ///   an open, and [`Proof::Inlined`] therefore records the *sentence*
     ///   and re-performs the open rather than carrying a transcript. So
@@ -530,11 +530,11 @@ pub(crate) fn against(ctx: &mut Context, side: &Graph, waypoint: TermIndex) -> (
     let (ga, wa) = (side.arity(), ctx.arity(waypoint));
     if wa.inputs < ga.inputs {
         let padded = ctx.under(waypoint, ga.inputs - wa.inputs);
-        (side.clone(), diagram2::build(ctx, padded))
+        (side.clone(), kernel::build(ctx, padded))
     } else {
         (
             graph::under(side, wa.inputs - ga.inputs),
-            diagram2::build(ctx, waypoint),
+            kernel::build(ctx, waypoint),
         )
     }
 }
@@ -604,7 +604,7 @@ pub struct Residual {
     /// The two sides as they stand, which is what the report *shows*: a
     /// graph is what the tactics act on, and a box in one has a name that
     /// survives a step, so two of these compare. See
-    /// [`render`](crate::diagram2::render).
+    /// [`render`](crate::render).
     pub lhs_graph: Graph,
     pub rhs_graph: Graph,
     /// How the report walked from the goal as stated to the one that stuck:
@@ -692,7 +692,7 @@ mod tests {
         // Nested, through the shapes that carry sub-proofs, and each named
         // once however often it is spent.
         let proof = Proof::Swapped(Box::new(Proof::Cut {
-            waypoint: crate::term::TermIndex::from(0),
+            waypoint: crate::kernel::term::TermIndex::from(0),
             left_sub: Box::new(cite(1, cite(2, Proof::Trivial))),
             right_sub: Box::new(cite(1, Proof::Trivial)),
         }));
@@ -761,8 +761,8 @@ mod tests {
     /// A step whose only job is to be counted — `one_sided` moves steps
     /// around and never reads inside one.
     fn countable() -> Step {
-        use crate::diagram2::rules::Rule;
-        use crate::graph::{Direction, Match};
+        use crate::kernel::graph::{Direction, Match};
+        use crate::kernel::rules::Rule;
         Step {
             rule: Rule::EqualRefl,
             dir: Direction::Forward,

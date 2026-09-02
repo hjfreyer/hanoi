@@ -1,7 +1,7 @@
 # The rules
 
 A reference for the law table in
-[`lang/rewrite/src/diagram2/rules.rs`](../lang/rewrite/src/diagram2/rules.rs).
+[`lang/rewrite/src/kernel/rules.rs`](../lang/rewrite/src/kernel/rules.rs).
 Every rewrite `bin/prove` makes is an instance of one of these rows: a law
 is a pair of open graphs built from a payload (`sides`), and every
 application is verified port by port (`apply`) before it lands. This page

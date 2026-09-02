@@ -2,13 +2,13 @@
 //! it reads, whether two graphs are the same program, and how an equation
 //! is spent against one.
 //!
-//! This is the layer [`crate::diagram2`] is an engine over, kept apart from
-//! it because the two are different things. A graph knows what a box takes
-//! and leaves, what reads what, whether it holds together, and whether
-//! another graph is the same program. It knows nothing about terms, laws,
-//! tactics or proofs; the traffic in that direction is all diagram2's,
-//! which [`build`](crate::diagram2::build)s one from a term and never turns
-//! one back.
+//! This is the layer the rest of the [kernel](crate::kernel) is built over,
+//! kept apart from it because the two are different things. A graph knows
+//! what a box takes and leaves, what reads what, whether it holds together,
+//! and whether another graph is the same program. It knows nothing about
+//! terms, laws, tactics or proofs; the traffic in that direction is all the
+//! kernel's, which [`build`](crate::kernel::build)s one from a term and
+//! never turns one back.
 //!
 //! ## A box is what it computes
 //!
@@ -108,7 +108,7 @@ use std::fmt;
 
 use bytecode::SentenceIndex;
 
-use crate::term::{Arity, Prim};
+use crate::kernel::term::{Arity, Prim};
 
 // ---- the graph ----------------------------------------------------------------
 
@@ -129,7 +129,7 @@ impl NodeId {
     }
 
     /// The id at a position, for anything that indexes a graph's boxes by
-    /// their own order — [`rules`](crate::diagram2::rules) does, since a
+    /// their own order — [`rules`](crate::kernel::rules) does, since a
     /// rule's side is built once and never rewritten.
     pub fn at(index: usize) -> NodeId {
         NodeId(u32::try_from(index).expect("a graph fits in u32"))
@@ -353,14 +353,14 @@ impl std::hash::Hasher for Digest {
 /// program showing through — a graph of values reads a wire twice by naming
 /// it twice, and drops one by naming it nowhere — and `Op(Prim::Swap)` went
 /// with them, since a crossing is two sources in the other order.
-/// [`build`](crate::diagram2::build) is where that translation happens, and
+/// [`build`](crate::kernel::build) is where that translation happens, and
 /// it is the only place that ever knew about the stack.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum NodeKind {
     /// One prim, `push` included.
     Op(Prim),
     /// A sentence called by name, left unopened; the arity is carried for
-    /// the same reason [`Term::Call`](crate::term::Term::Call) carries it.
+    /// the same reason [`Term::Call`](crate::kernel::term::Term::Call) carries it.
     Call { target: SentenceIndex, arity: Arity },
     /// `select`: the two blocks of **one** answer, and the condition that
     /// keeps one of them. A branch is this box and nothing else.
@@ -388,7 +388,7 @@ pub enum NodeKind {
 
 impl NodeKind {
     /// What this box takes and leaves — the same table
-    /// [`Context::arity`](crate::term::Context::arity) keeps for terms.
+    /// [`Context::arity`](crate::kernel::term::Context::arity) keeps for terms.
     pub fn arity(&self) -> Arity {
         match self {
             NodeKind::Op(prim) => prim.arity(),
@@ -938,7 +938,7 @@ impl Graph {
 
 /// Some of a graph's boxes, lifted out as a graph of their own — the body
 /// a region-carrying rule
-/// ([`SelectHoist`](crate::diagram2::rules::Rule)) puts in its payload.
+/// ([`SelectHoist`](crate::kernel::rules::Rule)) puts in its payload.
 ///
 /// A region is a **reading** of the host and never a choice, so everything
 /// here is said by the caller and nothing is inferred: `region` is which
@@ -1050,7 +1050,7 @@ pub(crate) fn lift(
 /// straight through beneath it.
 ///
 /// This is the graph-side spelling of
-/// [`Context::under`](crate::term::Context::under), and it exists for the
+/// [`Context::under`](crate::kernel::term::Context::under), and it exists for the
 /// same reason: a goal pads its narrower side until the arities agree, and
 /// once a side is a graph the padding has to be said on the graph. Every
 /// box is rebuilt, since a box that reads `Input(i)` is a different box
@@ -1168,7 +1168,7 @@ impl std::error::Error for Unpaired {}
 /// may stand in its place.
 ///
 /// Where the pair *came from* — which law it spells, whether anything
-/// proved the two sides equal — is [`crate::diagram2::rules`]'s business
+/// proved the two sides equal — is [`crate::kernel::rules`]'s business
 /// and none of this module's.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Pair {
@@ -1952,7 +1952,7 @@ impl fmt::Display for Graph {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::diagram2::tests::built;
+    use crate::kernel::tests::built;
 
     #[test]
     fn padding_slides_wires_underneath() {

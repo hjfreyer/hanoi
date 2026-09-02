@@ -10,7 +10,7 @@
 //! line reports the outcome.
 //!
 //! A goal that sticks prints its **residual**: the two sides as graphs —
-//! see `rewrite::diagram2::render` — which is what the tactics acted on and
+//! see `rewrite::render` — which is what the tactics acted on and
 //! what a next step would name. A box is named by what it computes, so it
 //! keeps that name across a step that leaves it alone, and two reports of
 //! one proof compare — which is what watching a proof means. On a
@@ -36,8 +36,8 @@ use std::process::ExitCode;
 
 use bytecode::IdentityIndex;
 use rewrite::corpus;
-use rewrite::diagram2::render;
-use rewrite::goal::{Goal, Outcome};
+use rewrite::kernel::goal::{Goal, Outcome};
+use rewrite::render;
 use rewrite::strategy::{Citing, Prover};
 
 struct Args {

@@ -8,7 +8,7 @@
 //! which is the cue to shorten the list. The list is empty today.
 
 use rewrite::corpus;
-use rewrite::goal::{Goal, Outcome};
+use rewrite::kernel::goal::{Goal, Outcome};
 use rewrite::strategy::{Citing, Prover};
 
 #[test]
