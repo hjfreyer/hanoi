@@ -43,23 +43,22 @@
 //!
 //! ## Citing one claim in another
 //!
-//! `lhs(by identities::a_lemma)` is how a proof uses a proof. It is one
-//! rewrite by the claim named — its two sides are a [`Pair`](crate::kernel::graph::Pair) like the
-//! table's own rows, the match is held to
-//! [`check_match`](crate::kernel::graph::check_match) like any other, and what the
-//! checker re-derives is the claim's two graphs, from the library, by name.
+//! `lhs(by identities::a_lemma)` is how a proof uses a proof. The
+//! identity named has a certified run of its own — the steps that take
+//! its left side onto its right — and a `by` **carries that run in**:
+//! the claim's left side is found here, and the run is re-applied through
+//! the embedding of that occurrence ([`transplant`](crate::kernel::rules::transplant)),
+//! step by step, in this goal's coordinates. What lands is a run of the
+//! same ordinary rewrites, and the kernel cannot tell a `by` from a
+//! `lhs(…)` that happened to spend the same steps.
 //!
-//! What it does **not** check is whether that claim is true. It is a
-//! *citation*: the corpus proves every identity it states, the citation
-//! order is a DAG or the corpus refuses to run, and a claim that did not
-//! close is never citable at all — so the argument is made once, where the
-//! claim is, rather than again at every use.
-//!
-//! That is a real change in what a single proof means. A `Proof` holding a
-//! citation stands **given the corpus** rather than on its own, and
-//! [`Proof::cites`](crate::kernel::goal::Proof::cites) is how a caller reads off
-//! exactly which claims that is. It is the ordinary bargain of a proof
-//! library, and it is worth naming rather than assuming.
+//! So a citation is not a shortcut, and nothing is taken on trust: what a
+//! citation *means* is what every use pays for. What it needs of the
+//! corpus is order — the claim has to be **proved before this one**,
+//! which the corpus arranges, and two claims that lean on each other are
+//! refused by name rather than ordered away. The first embedding is the
+//! one spent, in the sweep's own order — the same order `fire` takes its
+//! proposal in.
 //!
 //! ```text
 //! proof identities::a_double_negative_is_the_branch_it_makes =
@@ -69,28 +68,12 @@
 //!     lhs(by identities::a_double_negative_is_the_branch_it_makes);
 //! ```
 //!
-//! **Any closed claim may be cited** — however it closed. A lemma proved by
-//! a cut, by opening a call, or by driving both sides together is as
-//! citable as one driven from the left, because what is spent is the claim
-//! and not the argument.
-//!
-//! **And a citation can be cashed.** `prove --expand`
-//! ([`Citing::Expanded`](crate::strategy::Citing)) spends every `by` in
-//! full instead: the cited proof's own steps, carried into this goal
-//! through the embedding of its left side —
-//! [`transplant`](crate::kernel::rules::transplant) — and re-checked here
-//! as ordinary rewrites, with no citation left in the record. That is what
-//! a citation *means*, and running it is what says the shorthand was
-//! honest. It asks more of the cited proof than citing does: it has to be a
-//! run from one side of its claim to the other, which
-//! [`one_sided`](crate::kernel::goal::Proof::one_sided) judges and says no to in
-//! its own words. The corpus is held to closing both ways.
-//!
-//! The one thing a citation still needs of the corpus is order: the claim
-//! has to be **proved before this one**, which the corpus arranges, and two
-//! claims that lean on each other are refused by name rather than ordered
-//! away. The first embedding is the one spent, in the sweep's own order —
-//! the same order `fire` takes its proposal in.
+//! **Any closed claim may be cited** — however it closed. A lemma proved
+//! by a cut, by opening a call, by a `select-same`, or by driving both
+//! sides together is as citable as one driven from the left, because
+//! every close is a flat run by the time it is certified
+//! ([`crate::proof::flatten`]), and a flat run is what a citation
+//! carries.
 //!
 //! ## The tactic language, embedded
 //!
@@ -326,19 +309,16 @@ pub enum Step<V> {
     Rewrite { side: OnSide, tactic: Box<Tactic> },
     /// Spend another identity where it occurs: `lhs(by name)`.
     ///
-    /// Not a law and not an axiom. The identity named has a proof of its
-    /// own, and what happens here is that its proof's **steps** are carried
-    /// into this goal — [`transplant`](crate::kernel::rules::transplant)
+    /// Not a law and not an axiom. The identity named has a certified run
+    /// of its own, and what happens here is that the run's **steps** are
+    /// carried into this goal — [`transplant`](crate::kernel::rules::transplant)
     /// — so what lands is a run of the same ordinary rewrites, checked the
     /// same way, in this goal's coordinates. Nothing new is trusted: a
-    /// `by` records what a `lhs(…)` records and the checker cannot tell
+    /// `by` records what a `lhs(…)` records and the kernel cannot tell
     /// them apart.
     ///
     /// It needs the named identity proved before this one, which is why the
-    /// corpus proves in dependency order, and it needs that proof to drive
-    /// one side of its claim onto the other —
-    /// [`one_sided`](crate::kernel::goal::Proof::one_sided) is what says so when it
-    /// does not.
+    /// corpus proves in dependency order.
     By { side: OnSide, of: V },
     /// Open calls on both sides, in place in the graphs: every one, all
     /// the way down, or — with a label — only the calls to the sentence it

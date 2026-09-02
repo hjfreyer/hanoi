@@ -41,10 +41,11 @@ use bytecode::{IdentityIndex, Library};
 
 use crate::hant::{Body, OnSide, Step, Strategy, default_strategy};
 use crate::kernel;
-use crate::kernel::goal::{self, Goal, Outcome, Proof, Residual, against};
-use crate::kernel::graph::{self, Direction, Graph, Match, NodeId, Pair, Source};
+use crate::kernel::goal::{self, Goal};
+use crate::kernel::graph::{self, Graph, NodeId, Pair, Source};
 use crate::kernel::rules::{self, Derivation};
 use crate::kernel::term::{Context, Error, Prim};
+use crate::proof::{self, Outcome, Proof, Residual, against};
 use crate::tactic;
 use crate::tactic::{Region, Tactic};
 
@@ -55,29 +56,7 @@ type Pick = fn(&mut Goal) -> &mut Graph;
 /// pair a citation applies, and the run that would discharge that citation.
 struct Lemma {
     pair: Pair,
-    run: Result<Vec<kernel::rules::Step>, String>,
-}
-
-/// How a `by` spends the claim it names.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum Citing {
-    /// **One rewrite by the claim itself**, recorded as a
-    /// [`Cited`](Proof::Cited) node. The claim is taken on the corpus's
-    /// word — it closed, in this same run, before this proof began — and
-    /// what the checker re-derives is the claim's two sides, not the
-    /// argument behind them.
-    #[default]
-    OnTrust,
-    /// **The cited proof's own steps**, carried in and re-checked here —
-    /// [`transplant`](crate::kernel::rules::transplant). What a citation
-    /// *means*, spent in full at every use rather than once at the claim.
-    ///
-    /// Slower by exactly the amount the default saves, and it is the
-    /// question the default is an answer to: a citation is only honest if it
-    /// could have been discharged, and this is what discharges it. It works
-    /// on a claim whose proof is [`one_sided`](Proof::one_sided) and says so
-    /// on one that is not.
-    Expanded,
+    run: Vec<kernel::rules::Step>,
 }
 
 /// Proves goals against one library.
@@ -104,7 +83,17 @@ pub struct Prover<'l> {
     /// honest: a `by` can name nothing this prover has not already seen
     /// discharged.
     lemmas: HashMap<IdentityIndex, Lemma>,
-    citing: Citing,
+}
+
+/// What running a strategy over one goal wrote, before anything checked
+/// it: the draft, or where it stuck. [`Prover::prove`] is what turns a
+/// draft into an [`Outcome`], by flattening and certifying it.
+// A residual carries two graphs and a draft a tree; one of each per
+// goal, briefly, is not worth a box.
+#[allow(clippy::large_enum_variant)]
+enum Draft {
+    Closed(Proof),
+    Stuck(Residual),
 }
 
 impl<'l> Prover<'l> {
@@ -112,46 +101,46 @@ impl<'l> Prover<'l> {
         Prover {
             library,
             lemmas: HashMap::new(),
-            citing: Citing::default(),
         }
     }
 
     /// The same prover, spending every `by` in full rather than on trust.
-    pub fn citing(self, citing: Citing) -> Self {
-        Prover { citing, ..self }
-    }
-
     /// Records a closed identity so later proofs may cite it with `by`.
     ///
     /// `goal` is the claim **as stated** — before its own strategy touched
-    /// it — because that is the claim, and a `by` looks for its left side.
-    /// Nothing about *how* it closed is kept: a citation spends the claim,
-    /// not the proof behind it, so a claim proved by `via`, by `inline`, or
-    /// by driving both sides together is as citable as one driven from the
-    /// left. That is the whole difference from carrying a proof, and the
-    /// reason a citation is worth having.
+    /// it — because that is the claim, and a `by` looks for its left side —
+    /// beside the certified run that takes the one onto the other, which is
+    /// what a `by` carries in. Nothing about *how* the claim closed is
+    /// kept: every close is a flat run by the time it is certified, so a
+    /// claim proved by `via`, by `inline`, by `select-same` or by driving
+    /// both sides together is as citable as one driven from the left.
     ///
-    /// The run behind it is kept too, but only so [`Citing::Expanded`] can
-    /// spend it; the default never reads it, and a claim whose proof is not
-    /// a run is as citable as one whose proof is.
-    ///
-    /// Only ever called on a claim that closed. That is not this method's
-    /// to enforce — [`Proof::cites`] is what lets a caller check it after
-    /// the fact — but it is what the promise rests on.
-    pub fn learn(&mut self, idx: IdentityIndex, goal: &Goal, proof: &Proof) {
+    /// Remembers a claim that closed, as what a `by` spends: its two sides
+    /// as the goal built them, and the certified run that takes the one
+    /// onto the other. A citation carries that run in — every use pays for
+    /// the claim's own steps and nothing is taken on trust — so the run is
+    /// kept beside the pair.
+    pub fn learn(&mut self, idx: IdentityIndex, goal: &Goal, run: &[kernel::rules::Step]) {
         let pair = Pair::new(goal.lhs.clone(), goal.rhs.clone())
             .expect("a goal's sides are built, and aligned to one arity");
-        let run = proof.one_sided();
-        self.lemmas.insert(idx, Lemma { pair, run });
+        self.lemmas.insert(
+            idx,
+            Lemma {
+                pair,
+                run: run.to_vec(),
+            },
+        );
     }
 
-    /// Runs a strategy on a goal — the written one, or the default
-    /// `diagram` when the identity carries no proof — and **re-checks**
-    /// whatever proof comes back against the goal as stated, before
-    /// answering. A close is never this module's word: [`Proof::check`]
-    /// replays every recorded step through the table and asks every
-    /// isomorphism again, and a proof that does not check comes back
-    /// [`Outcome::Stuck`] — fail closed — naming the prover bug it is.
+    /// Runs a strategy over a goal and answers what became of it.
+    ///
+    /// The strategy writes a [`Proof`] — a draft, the tree of goals it
+    /// carved and the steps each spent — and nothing is believed of it.
+    /// [`proof::flatten`] reads the one run off the tree, and
+    /// [`certify`](goal::certify) replays that run against the goal as
+    /// stated. A draft that does not flatten, or a run that does not land,
+    /// is a prover bug and comes back [`Outcome::Stuck`] saying so rather
+    /// than closed on the prover's word.
     pub fn prove(
         &self,
         ctx: &mut Context,
@@ -161,35 +150,42 @@ impl<'l> Prover<'l> {
         let default = default_strategy();
         let strategy = strategy.unwrap_or(&default);
         let stated = goal.clone();
-        let outcome = self.run(ctx, strategy, goal)?;
-        if let Outcome::Closed(proof) = &outcome
-            && let Err(why) = proof.check(stated.clone(), ctx, self.library)
-        {
+        let draft = match self.run(ctx, strategy, goal)? {
+            Draft::Closed(draft) => draft,
+            Draft::Stuck(residual) => return Ok(Outcome::Stuck(residual)),
+        };
+        let run = match proof::flatten(&draft, &stated, ctx) {
+            Ok(run) => run,
+            Err(why) => {
+                let why = format!(
+                    "the draft does not flatten to a run — a prover bug, and the claim is not \
+                     accepted on its word: {}",
+                    why
+                );
+                return Ok(Outcome::Stuck(gave_up(&stated, &why)));
+            }
+        };
+        if let Err(why) = goal::certify(&stated, &run, ctx, self.library) {
             let why = format!(
-                "the proof did not re-check — a prover bug, and the claim is not \
-                 accepted on its word: {}",
+                "the run does not certify — a prover bug, and the claim is not accepted on \
+                 its word: {}",
                 why
             );
             return Ok(Outcome::Stuck(gave_up(&stated, &why)));
         }
-        Ok(outcome)
+        Ok(Outcome::Closed { draft, run })
     }
 
     /// One strategy on one goal. A goal whose sides are one graph —
     /// isomorphic — is closed before any step runs, at every level, so a
     /// cut's side that a manipulation made trivial needs no steps of its
     /// own.
-    fn run(
-        &self,
-        ctx: &mut Context,
-        strategy: &[Step<Body>],
-        goal: Goal,
-    ) -> Result<Outcome, Error> {
+    fn run(&self, ctx: &mut Context, strategy: &[Step<Body>], goal: Goal) -> Result<Draft, Error> {
         if graph::isomorphic(&goal.lhs, &goal.rhs) {
-            return Ok(Outcome::Closed(Proof::Trivial));
+            return Ok(Draft::Closed(Proof::Trivial));
         }
         let Some((head, rest)) = strategy.split_first() else {
-            return Ok(Outcome::Stuck(gave_up(
+            return Ok(Draft::Stuck(gave_up(
                 &goal,
                 "the strategy ended with the goal still open",
             )));
@@ -209,15 +205,15 @@ impl<'l> Prover<'l> {
                     let mut deriv = kernel::rules::Derivation::default();
                     if let Err(e) = tactic::run(pick(&mut goal), &mut deriv, &tactic::decide()) {
                         let why = format!("`diagram`'s drive failed: {}", e);
-                        return Ok(Outcome::Stuck(gave_up(&goal, &why)));
+                        return Ok(Draft::Stuck(gave_up(&goal, &why)));
                     }
                     *record = deriv.steps().cloned().collect();
                 }
                 if graph::isomorphic(&goal.lhs, &goal.rhs) {
                     let [lhs, rhs] = spent;
-                    return Ok(Outcome::Closed(Proof::Diagram { lhs, rhs }));
+                    return Ok(Draft::Closed(Proof::Diagram { lhs, rhs }));
                 }
-                Ok(Outcome::Stuck(gave_up(
+                Ok(Draft::Stuck(gave_up(
                     &goal,
                     "the two sides rewrite to different diagrams: the claim is \
                      false, or true only for reasons the table cannot yet say",
@@ -261,23 +257,23 @@ impl<'l> Prover<'l> {
                     else_arm,
                 ) {
                     Ok(counts) => counts,
-                    Err(residual) => return Ok(Outcome::Stuck(*residual)),
+                    Err(residual) => return Ok(Draft::Stuck(*residual)),
                 };
                 let [l, r] = derivs;
                 let (lhs, rhs) = (l.steps().cloned().collect(), r.steps().cloned().collect());
                 let arms = (then_arm.is_some() || else_arm.is_some())
                     .then_some((counts.then_steps, counts.else_steps));
                 Ok(match self.run(ctx, rest, goal)? {
-                    Outcome::Closed(sub) => Outcome::Closed(Proof::Cases {
+                    Draft::Closed(sub) => Draft::Closed(Proof::Cases {
                         lhs,
                         rhs,
                         splits: counts.splits,
                         arms,
                         sub: Box::new(sub),
                     }),
-                    Outcome::Stuck(mut residual) => {
+                    Draft::Stuck(mut residual) => {
                         residual.path.insert(0, "after the case split".to_string());
-                        Outcome::Stuck(residual)
+                        Draft::Stuck(residual)
                     }
                 })
             }
@@ -290,7 +286,7 @@ impl<'l> Prover<'l> {
             // for — `exact` alone shows the identity as built and aligned,
             // and after a manipulation it shows what the manipulation
             // left, box by box.
-            Step::Exact => Ok(Outcome::Stuck(gave_up(
+            Step::Exact => Ok(Draft::Stuck(gave_up(
                 &goal,
                 "`exact` claims the sides are one graph, and they are not",
             ))),
@@ -314,45 +310,39 @@ impl<'l> Prover<'l> {
                         Ok(_) => spent[at] = deriv.steps().cloned().collect(),
                         Err(e) => {
                             let why = format!("`{}(…)`: {}", side.word(), e);
-                            return Ok(Outcome::Stuck(gave_up(&goal, &why)));
+                            return Ok(Draft::Stuck(gave_up(&goal, &why)));
                         }
                     }
                 }
                 let [lhs, rhs] = spent;
                 Ok(match self.run(ctx, rest, goal)? {
-                    Outcome::Closed(sub) => Outcome::Closed(Proof::Rewrote {
+                    Draft::Closed(sub) => Draft::Closed(Proof::Rewrote {
                         side: side.word(),
                         lhs,
                         rhs,
                         sub: Box::new(sub),
                     }),
-                    Outcome::Stuck(mut residual) => {
+                    Draft::Stuck(mut residual) => {
                         residual
                             .path
                             .insert(0, format!("after rewriting {}", side.word()));
-                        Outcome::Stuck(residual)
+                        Draft::Stuck(residual)
                     }
                 })
             }
 
             // Another identity, cited where it occurs.
             //
-            // One rewrite by the claim itself: its two sides are a `Pair`
-            // like any other, the match is held to `check_match` like any
-            // other, and what lands is a graph the checker can re-derive
-            // from the library alone. What is *not* asked here — or by
-            // `Proof::check` later — is whether the cited claim is true.
-            // That is the corpus's, and it has already answered: only a
-            // claim that closed is in this table at all, and the citation
+            // Its left side is found here — the claim's two sides are a
+            // `Pair` like any other, and the match is held to `check_match`
+            // like any other — and the claim's own certified run is carried
+            // in through that embedding, so what lands is ordinary rewrites
+            // the kernel replays without knowing where they came from. Only
+            // a claim that closed is in the table at all, and the citation
             // order is a DAG or the corpus refused to run.
-            //
-            // The alternative is to carry the cited proof's own steps in and
-            // re-check them at every use site, which is `transplant`. It
-            // stays available and stays the *meaning* of a citation; it is
-            // just not what every use pays for.
             Step::By { side, of } => {
                 let Body::Lemma(idx) = *of else {
-                    return Ok(Outcome::Stuck(gave_up(
+                    return Ok(Draft::Stuck(gave_up(
                         &goal,
                         "`by` was handed something that is not an identity",
                     )));
@@ -365,30 +355,9 @@ impl<'l> Prover<'l> {
                         side.word(),
                         name
                     );
-                    return Ok(Outcome::Stuck(gave_up(&goal, &why)));
-                };
-                // Expanding costs the claim's own run at every use, and it
-                // needs one: a claim proved by meeting in the middle, or by a
-                // cut, is citable but not yet carryable. The default asks for
-                // neither.
-                let carried = match self.citing {
-                    Citing::OnTrust => None,
-                    Citing::Expanded => match &lemma.run {
-                        Ok(run) => Some(run),
-                        Err(why) => {
-                            let why = format!(
-                                "`{}(by {})`: asked to spend it in full, and its proof is \
-                                 not a run that can be carried — {}",
-                                side.word(),
-                                name,
-                                why
-                            );
-                            return Ok(Outcome::Stuck(gave_up(&goal, &why)));
-                        }
-                    },
+                    return Ok(Draft::Stuck(gave_up(&goal, &why)));
                 };
                 let mut goal = goal;
-                let mut found: [Option<Match>; 2] = [None, None];
                 let mut spent: [Vec<kernel::rules::Step>; 2] = [Vec::new(), Vec::new()];
                 let picks: &[(Pick, usize)] = match side {
                     OnSide::Lhs => &[(|g| &mut g.lhs, 0)],
@@ -407,52 +376,36 @@ impl<'l> Prover<'l> {
                             side.word(),
                             name
                         );
-                        return Ok(Outcome::Stuck(gave_up(&goal, &why)));
+                        return Ok(Draft::Stuck(gave_up(&goal, &why)));
                     };
-                    let outcome = match carried {
-                        None => lemma
-                            .pair
-                            .apply(host, Direction::Forward, &here)
-                            .map(|_| Vec::new())
-                            .map_err(|e| e.to_string()),
-                        Some(run) => rules::transplant(host, lemma.pair.lhs(), &here, run)
-                            .map(|ran| ran.steps().cloned().collect())
-                            .map_err(|e| e.to_string()),
-                    };
+                    // The cited claim's own run, carried in and re-applied
+                    // here: what a citation *means*, spent in full at every
+                    // use. Nothing is taken on trust, and the checker sees
+                    // ordinary rewrites without knowing where they came from.
+                    let outcome = rules::transplant(host, lemma.pair.lhs(), &here, &lemma.run)
+                        .map(|ran| ran.steps().cloned().collect::<Vec<_>>())
+                        .map_err(|e| e.to_string());
                     match outcome {
                         Ok(steps) => spent[at] = steps,
                         Err(e) => {
                             let why = format!("`{}(by {})`: {}", side.word(), name, e);
-                            return Ok(Outcome::Stuck(gave_up(&goal, &why)));
+                            return Ok(Draft::Stuck(gave_up(&goal, &why)));
                         }
                     }
-                    found[at] = Some(here);
                 }
-                let expanded = carried.is_some();
-                let [lhs_at, rhs_at] = found;
                 let [lhs, rhs] = spent;
                 Ok(match self.run(ctx, rest, goal)? {
-                    // Expanded, the citation is gone: what is left is the
-                    // cited proof's own rewrites, which the checker takes for
-                    // what they are without knowing where they came from.
-                    Outcome::Closed(sub) if expanded => Outcome::Closed(Proof::Rewrote {
+                    Draft::Closed(sub) => Draft::Closed(Proof::Rewrote {
                         side: side.word(),
                         lhs,
                         rhs,
                         sub: Box::new(sub),
                     }),
-                    Outcome::Closed(sub) => Outcome::Closed(Proof::Cited {
-                        of: idx,
-                        name,
-                        lhs: lhs_at,
-                        rhs: rhs_at,
-                        sub: Box::new(sub),
-                    }),
-                    Outcome::Stuck(mut residual) => {
+                    Draft::Stuck(mut residual) => {
                         residual
                             .path
                             .insert(0, format!("after citing {} on the {}", name, side.word()));
-                        Outcome::Stuck(residual)
+                        Draft::Stuck(residual)
                     }
                 })
             }
@@ -474,23 +427,35 @@ impl<'l> Prover<'l> {
                         ctx.arity(waypoint).net(),
                         goal.lhs.arity().net()
                     );
-                    return Ok(Outcome::Stuck(gave_up(&goal, &why)));
+                    return Ok(Draft::Stuck(gave_up(&goal, &why)));
                 }
                 // Two goals, fully independent from here: each side takes its
                 // own road, and proving both proves the whole by transitivity.
+                // A narrower waypoint is padded as a term before it builds;
+                // a wider one would pad the *goal*, which is not a step a
+                // run can carry, so a proof may not cut there.
+                if ctx.arity(waypoint).inputs > goal.lhs.arity().inputs {
+                    let why = format!(
+                        "the `via` waypoint takes {} input(s) and the goal {}: a waypoint may \
+                         be narrower than the goal, not wider",
+                        ctx.arity(waypoint).inputs,
+                        goal.lhs.arity().inputs
+                    );
+                    return Ok(Draft::Stuck(gave_up(&goal, &why)));
+                }
                 let (lhs, stone) = against(ctx, &goal.lhs, waypoint);
                 let sub = Goal { lhs, rhs: stone };
                 let left_sub = match self.side(ctx, "in the left half of the cut", left, sub)? {
                     Ok(p) => p,
-                    Err(residual) => return Ok(Outcome::Stuck(residual)),
+                    Err(residual) => return Ok(Draft::Stuck(residual)),
                 };
                 let (rhs, stone) = against(ctx, &goal.rhs, waypoint);
                 let sub = Goal { lhs: stone, rhs };
                 let right_sub = match self.side(ctx, "in the right half of the cut", right, sub)? {
                     Ok(p) => p,
-                    Err(residual) => return Ok(Outcome::Stuck(residual)),
+                    Err(residual) => return Ok(Draft::Stuck(residual)),
                 };
-                Ok(Outcome::Closed(Proof::Cut {
+                Ok(Draft::Closed(Proof::Cut {
                     waypoint,
                     left_sub,
                     right_sub,
@@ -512,8 +477,8 @@ impl<'l> Prover<'l> {
             // It reads the left side, so `symm` is how a proof says the
             // branch is on the other one.
             Step::SelectSame { then_arm, else_arm } => {
-                let Some((then, els)) = goal::blocks(&goal.lhs) else {
-                    return Ok(Outcome::Stuck(gave_up(
+                let Some((then, els)) = proof::blocks(&goal.lhs) else {
+                    return Ok(Draft::Stuck(gave_up(
                         &goal,
                         "`select-same` needs the left side to answer with one branch, and                          its last box is not a `select` the whole answer reads",
                     )));
@@ -524,7 +489,7 @@ impl<'l> Prover<'l> {
                 };
                 let then_sub = match self.side(ctx, "in the branch's then block", then_arm, sub)? {
                     Ok(p) => p,
-                    Err(residual) => return Ok(Outcome::Stuck(residual)),
+                    Err(residual) => return Ok(Draft::Stuck(residual)),
                 };
                 let sub = Goal {
                     lhs: els,
@@ -532,9 +497,9 @@ impl<'l> Prover<'l> {
                 };
                 let else_sub = match self.side(ctx, "in the branch's else block", else_arm, sub)? {
                     Ok(p) => p,
-                    Err(residual) => return Ok(Outcome::Stuck(residual)),
+                    Err(residual) => return Ok(Draft::Stuck(residual)),
                 };
-                Ok(Outcome::Closed(Proof::SelectSame { then_sub, else_sub }))
+                Ok(Draft::Closed(Proof::SelectSame { then_sub, else_sub }))
             }
 
             Step::Symm => {
@@ -547,12 +512,12 @@ impl<'l> Prover<'l> {
                     rhs: goal.lhs,
                 };
                 Ok(match self.run(ctx, rest, swapped)? {
-                    Outcome::Closed(sub) => Outcome::Closed(Proof::Swapped(Box::new(sub))),
-                    Outcome::Stuck(mut residual) => {
+                    Draft::Closed(sub) => Draft::Closed(Proof::Swapped(Box::new(sub))),
+                    Draft::Stuck(mut residual) => {
                         residual
                             .path
                             .insert(0, "with the sides swapped".to_string());
-                        Outcome::Stuck(residual)
+                        Draft::Stuck(residual)
                     }
                 })
             }
@@ -568,8 +533,8 @@ impl<'l> Prover<'l> {
                     Some(_) => unreachable!("the loader reads an inline label as a target"),
                 };
                 let mut goal = goal;
-                let lhs = kernel::inline(&mut goal.lhs, ctx, self.library, only)?;
-                let rhs = kernel::inline(&mut goal.rhs, ctx, self.library, only)?;
+                let lhs = proof::inline(&mut goal.lhs, ctx, self.library, only)?;
+                let rhs = proof::inline(&mut goal.rhs, ctx, self.library, only)?;
                 if lhs.is_empty() && rhs.is_empty() {
                     let why = match only {
                         None => "`inline` found no calls to open".to_string(),
@@ -578,11 +543,11 @@ impl<'l> Prover<'l> {
                             self.library.names[idx]
                         ),
                     };
-                    return Ok(Outcome::Stuck(gave_up(&goal, &why)));
+                    return Ok(Draft::Stuck(gave_up(&goal, &why)));
                 }
                 let name = only.map(|idx| self.library.names[idx].clone());
                 Ok(match self.run(ctx, rest, goal)? {
-                    Outcome::Closed(sub) => Outcome::Closed(Proof::Inlined {
+                    Draft::Closed(sub) => Draft::Closed(Proof::Inlined {
                         target: only,
                         name,
                         lhs,
@@ -607,8 +572,8 @@ impl<'l> Prover<'l> {
         let default = default_strategy();
         let strategy = strategy.as_ref().unwrap_or(&default);
         Ok(match self.run(ctx, strategy, sub)? {
-            Outcome::Closed(p) => Ok(Box::new(p)),
-            Outcome::Stuck(mut residual) => {
+            Draft::Closed(p) => Ok(Box::new(p)),
+            Draft::Stuck(mut residual) => {
                 residual.path.insert(0, label.to_string());
                 Err(residual)
             }
@@ -913,7 +878,7 @@ mod tests {
             "identity probe { drop 0 is_bool is_bool } = { drop 0 drop 0 push true };",
             "probe",
         );
-        let Outcome::Closed(proof) = outcome else {
+        let Outcome::Closed { draft: proof, .. } = outcome else {
             panic!("the sides are one diagram");
         };
         assert_eq!(proof.summary(), "the two sides are one diagram");
@@ -925,7 +890,7 @@ mod tests {
             "identity probe { branch { is_bool is_bool } { not } } = { branch { is_int is_bool } { not } };",
             "probe",
         );
-        assert!(matches!(outcome, Outcome::Closed(_)));
+        assert!(matches!(outcome, Outcome::Closed { .. }));
     }
 
     #[test]
@@ -939,7 +904,7 @@ mod tests {
         assert!(matches!(outcome, Outcome::Stuck(_)));
         // …a written proof does.
         let (_ctx, outcome) = prove_with(code, "probe", Some("inline diagram"));
-        let Outcome::Closed(proof) = outcome else {
+        let Outcome::Closed { draft: proof, .. } = outcome else {
             panic!("expected the opened goal to close");
         };
         assert_eq!(proof.summary(), "inline; the two sides are one diagram");
@@ -957,7 +922,7 @@ mod tests {
             "probe",
             Some("inline exact"),
         );
-        let Outcome::Closed(proof) = outcome else {
+        let Outcome::Closed { draft: proof, .. } = outcome else {
             panic!("the opened goal is one graph");
         };
         assert_eq!(proof.summary(), "inline; the two sides are one graph");
@@ -1007,7 +972,7 @@ mod tests {
             "probe",
             Some("inline(outer) via { call inner } (right: inline)"),
         );
-        let Outcome::Closed(proof) = outcome else {
+        let Outcome::Closed { draft: proof, .. } = outcome else {
             panic!("the opened goal is `call inner` against the claim");
         };
         assert_eq!(
@@ -1056,7 +1021,7 @@ mod tests {
             "probe",
             Some("lhs(fire(fold)) rhs(decide) exact"),
         );
-        let Outcome::Closed(proof) = outcome else {
+        let Outcome::Closed { draft: proof, .. } = outcome else {
             panic!("the two spellings settle together");
         };
         let summary = proof.summary();
@@ -1074,7 +1039,7 @@ mod tests {
             "probe",
             Some("both(saturate(not-not)) exact"),
         );
-        let Outcome::Closed(proof) = outcome else {
+        let Outcome::Closed { draft: proof, .. } = outcome else {
             panic!("the double negative is the coercion on both sides");
         };
         let summary = proof.summary();
@@ -1145,7 +1110,7 @@ mod tests {
         let code = "identity probe { swap swap } = { tuple 2 untuple 2 };";
         let (_ctx, outcome) =
             prove_with(code, "probe", Some("lhs(on(in0 in1, tuple-cancel)) exact"));
-        let Outcome::Closed(_) = outcome else {
+        let Outcome::Closed { .. } = outcome else {
             panic!("the stated pair meets the packed side: {:?}", outcome);
         };
 
@@ -1168,7 +1133,7 @@ mod tests {
             "probe",
             Some("via { drop(1) ; push true }"),
         );
-        let Outcome::Closed(proof) = outcome else {
+        let Outcome::Closed { draft: proof, .. } = outcome else {
             panic!("both halves close");
         };
         assert_eq!(
@@ -1189,7 +1154,7 @@ mod tests {
             "probe",
             Some("via { drop(1) ; push true } (right: inline diagram)"),
         );
-        let Outcome::Closed(proof) = outcome else {
+        let Outcome::Closed { draft: proof, .. } = outcome else {
             panic!("both halves close");
         };
         assert_eq!(
@@ -1278,10 +1243,10 @@ mod tests {
         );
     }
 
-    /// A proof answers for itself: `prove` re-checks every close against
-    /// the goal as stated before answering, and `Proof::check` refuses a
-    /// proof that lies — or one written for a different goal, whose
-    /// recorded steps name boxes this goal never had.
+    /// A proof answers for itself: `prove` flattens every close to a run and
+    /// certifies it against the goal as stated before answering. A draft
+    /// that lies does not flatten, and a run written for a different goal
+    /// does not certify, since its steps name boxes this goal never had.
     #[test]
     fn a_proof_that_lies_is_refused() {
         let false_lib = assemble("identity probe { push 1 } = { push 2 };").unwrap();
@@ -1289,14 +1254,12 @@ mod tests {
         let idx = false_lib.identity_by_name("probe").unwrap();
         let false_goal = Goal::of_identity(&mut ctx, &false_lib, idx).unwrap();
 
-        // Claimed trivial, and the sides are not one graph.
-        let err = crate::kernel::goal::Proof::Trivial
-            .check(false_goal.clone(), &mut ctx, &false_lib)
-            .unwrap_err();
+        // Claimed trivial, and the sides are not one graph: no run.
+        let err = proof::flatten(&Proof::Trivial, &false_goal, &mut ctx).unwrap_err();
         assert!(err.contains("not one graph"), "{}", err);
 
-        // An honest proof of a different claim does not transplant: its
-        // recorded drive re-applies against boxes this goal does not have.
+        // An honest run for a different claim does not certify this one:
+        // its steps name boxes this goal does not have.
         let true_lib = assemble("identity probe { push 1 push 2 add } = { push 3 };").unwrap();
         let mut true_ctx = Context::new();
         let idx = true_lib.identity_by_name("probe").unwrap();
@@ -1304,17 +1267,17 @@ mod tests {
         let outcome = Prover::new(&true_lib)
             .prove(&mut true_ctx, true_goal, None)
             .unwrap();
-        let Outcome::Closed(stolen) = outcome else {
+        let Outcome::Closed { run: stolen, .. } = outcome else {
             panic!("the sum folds");
         };
-        let err = stolen.check(false_goal, &mut ctx, &false_lib).unwrap_err();
-        assert!(err.contains("does not re-apply"), "{}", err);
+        let err = goal::certify(&false_goal, &stolen, &mut ctx, &false_lib).unwrap_err();
+        assert!(err.contains("does not apply"), "{}", err);
     }
 
     /// A structured `cases` closes what the flat one does, with each arm's
-    /// work scoped to its side of the split — and the close re-checks,
+    /// work scoped to its side of the split — and the close certifies,
     /// which is the load-bearing assertion: the arm steps appended to the
-    /// split's record replay blind through `Proof::check`.
+    /// split's record replay blind through the kernel.
     #[test]
     fn a_structured_case_split_scopes_its_arms() {
         let code = "identity probe \
@@ -1325,7 +1288,7 @@ mod tests {
             "probe",
             Some("both(decide) cases(equal) (true: both(decide), false: both(decide)) diagram"),
         );
-        let Outcome::Closed(proof) = outcome else {
+        let Outcome::Closed { draft: proof, .. } = outcome else {
             panic!("the structured split closes what the flat one does");
         };
         let summary = proof.summary();
@@ -1375,7 +1338,7 @@ mod tests {
             "probe",
             Some("cases(is_bool) (true: both(decide), false: both(decide)) diagram"),
         );
-        let Outcome::Closed(proof) = outcome else {
+        let Outcome::Closed { draft: proof, .. } = outcome else {
             panic!("the right side has no test, and the left's split closes");
         };
         let summary = proof.summary();
@@ -1409,8 +1372,8 @@ mod tests {
         let mut closed = Vec::new();
         for (idx, identity) in library.identities.iter_enumerated() {
             let mut goal = Goal::of_identity(terms, library, idx).unwrap();
-            kernel::inline(&mut goal.lhs, terms, library, None).unwrap();
-            kernel::inline(&mut goal.rhs, terms, library, None).unwrap();
+            proof::inline(&mut goal.lhs, terms, library, None).unwrap();
+            proof::inline(&mut goal.rhs, terms, library, None).unwrap();
             for side in [&mut goal.lhs, &mut goal.rhs] {
                 let mut deriv = kernel::rules::Derivation::default();
                 tactic::run(side, &mut deriv, &tactic::decide()).unwrap();
@@ -1505,7 +1468,7 @@ mod tests {
                 "probe",
                 Some(&format!("lhs(at({}, fold)) diagram", written)),
             );
-            let Outcome::Closed(proof) = outcome else {
+            let Outcome::Closed { draft: proof, .. } = outcome else {
                 panic!("the named box is a fold the machine can work out");
             };
             assert!(
@@ -1563,7 +1526,7 @@ mod tests {
         // Split, and each block takes its own road — the false one needing
         // no steps at all, since it is already what the right side says.
         let (_ctx, outcome) = prove_with(code, "probe", Some("select-same (then: inline diagram)"));
-        let Outcome::Closed(proof) = outcome else {
+        let Outcome::Closed { draft: proof, .. } = outcome else {
             panic!("both blocks answer to the right side");
         };
         assert_eq!(
@@ -1614,7 +1577,7 @@ mod tests {
 
         // Turned round, the same claim splits.
         let (_ctx, outcome) = prove_with(code, "probe", Some("symm select-same"));
-        assert!(matches!(outcome, Outcome::Closed(_)));
+        assert!(matches!(outcome, Outcome::Closed { .. }));
 
         // And the checker asks the same question the step did, rather than
         // taking a proof's word that a split happened: it carves the two
@@ -1624,12 +1587,11 @@ mod tests {
         let mut ctx = Context::new();
         let idx = library.identity_by_name("probe").unwrap();
         let goal = Goal::of_identity(&mut ctx, &library, idx).unwrap();
-        let err = Proof::SelectSame {
+        let draft = Proof::SelectSame {
             then_sub: Box::new(Proof::Trivial),
             else_sub: Box::new(Proof::Trivial),
-        }
-        .check(goal, &mut ctx, &library)
-        .unwrap_err();
+        };
+        let err = proof::flatten(&draft, &goal, &mut ctx).unwrap_err();
         assert!(err.contains("does not answer with one branch"), "{}", err);
     }
 

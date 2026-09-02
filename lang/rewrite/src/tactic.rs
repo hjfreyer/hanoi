@@ -1124,6 +1124,7 @@ impl Runner<'_> {
                         nodes,
                         inputs,
                         sel: None,
+                        follow: None,
                     },
                 }])
             }
@@ -1492,6 +1493,7 @@ fn resolve(graph: &Graph, b: &Bindings, spec: &MatchSpec) -> Result<Match, Tacti
         nodes,
         inputs,
         sel: None,
+        follow: None,
     })
 }
 

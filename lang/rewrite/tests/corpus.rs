@@ -8,8 +8,9 @@
 //! which is the cue to shorten the list. The list is empty today.
 
 use rewrite::corpus;
-use rewrite::kernel::goal::{Goal, Outcome};
-use rewrite::strategy::{Citing, Prover};
+use rewrite::kernel::goal::Goal;
+use rewrite::proof::Outcome;
+use rewrite::strategy::Prover;
 
 #[test]
 fn the_corpus_identities_close() {
@@ -29,23 +30,17 @@ fn the_corpus_identities_close() {
 
     // Dependency order: a proof that spends another identity with `by` needs
     // that one closed first, and a cycle is a load-time refusal.
-    for citing in [Citing::OnTrust, Citing::Expanded] {
-        prove_them(&mut corpus, citing, &expected_stragglers);
-    }
+    prove_them(&mut corpus, &expected_stragglers);
 }
 
-/// Every identity proved once through, with `by` spending its claim the way
-/// `citing` says.
-///
-/// Both ways, and that is the point: on trust, a citation is one rewrite by
-/// a claim the corpus proved elsewhere; expanded, it is that claim's own
-/// steps carried in and re-checked here. The second is what says the first
-/// was honest, so the corpus is held to closing either way.
-fn prove_them(corpus: &mut corpus::Corpus, citing: Citing, expected: &[&str]) {
+/// Every identity proved once through, in dependency order, each `by`
+/// carrying the cited claim's own certified run in: nothing a proof leans
+/// on is taken on trust, so the corpus adds up to exactly what each proof
+/// says.
+fn prove_them(corpus: &mut corpus::Corpus, expected: &[&str]) {
     let order = corpus.proving_order().unwrap();
     assert_eq!(order.len(), corpus.library.identities.len());
-    let mut prover = Prover::new(&corpus.library).citing(citing);
-    let mut closed = std::collections::HashSet::new();
+    let mut prover = Prover::new(&corpus.library);
     let mut stragglers = Vec::new();
     for idx in order {
         let name = corpus.library.identities[idx].name.clone();
@@ -55,29 +50,16 @@ fn prove_them(corpus: &mut corpus::Corpus, citing: Citing, expected: &[&str]) {
             .prove(&mut corpus.terms, goal, corpus.proofs.get(&idx))
             .unwrap()
         {
-            Outcome::Closed(proof) => {
-                // Nothing a proof leans on may be unproved: a citation is
-                // only as good as the claim behind it.
-                let mut leans_on = Vec::new();
-                proof.cites(&mut leans_on);
-                for needed in leans_on {
-                    assert!(
-                        closed.contains(&needed),
-                        "{} was accepted citing {}, which did not close",
-                        name,
-                        corpus.library.identities[needed].name
-                    );
-                }
-                closed.insert(idx);
-                prover.learn(idx, &stated, &proof);
+            Outcome::Closed { run, .. } => prover.learn(idx, &stated, &run),
+            Outcome::Stuck(residual) => {
+                eprintln!("{} stuck: {}", name, residual.stopped);
+                stragglers.push(name)
             }
-            Outcome::Stuck(_) => stragglers.push(name),
         }
     }
     stragglers.sort();
     assert_eq!(
         stragglers, expected,
-        "the set of unproved identities moved ({:?}); if one now closes, take it off the list",
-        citing
+        "the set of unproved identities moved; if one now closes, take it off the list"
     );
 }

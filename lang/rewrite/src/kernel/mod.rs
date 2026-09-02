@@ -2,8 +2,8 @@
 //!
 //! The line drawn around this module is what a bug would cost. A bug in
 //! here could let a false identity through; a bug anywhere else in the
-//! crate seeds a step [`rules::apply`] refuses or a proof
-//! [`Proof::check`](goal::Proof::check) fails, never a wrong graph. So what
+//! crate seeds a step [`rules::apply`] refuses or a run
+//! [`certify`](goal::certify) will not replay, never a wrong graph. So what
 //! lives here is exactly the set of things that have to be right, and
 //! nothing that only has to be found:
 //!
@@ -11,23 +11,28 @@
 //!   bytecode that says what a sentence *means*.
 //! - [`graph`] — what a claim is carried in: boxes, the links between
 //!   them, well-formedness, whether two graphs are the same diagram, and
-//!   the one rewriting operation there is, a [`Pair`] put down where a
-//!   [`Match`] says, checked port by port before anything moves.
-//! - [`build`] and [`inline`], below — a term translated *literally* into
-//!   a graph, and a call opened in place by definition.
+//!   the one rewriting operation there is, a [`Pair`](graph::Pair) put down
+//!   where a [`Match`](graph::Match) says, checked port by port before
+//!   anything moves.
+//! - [`build`], below — a term translated *literally* into a graph.
 //! - [`rules`] — the table, every law a pair of graphs, and
-//!   [`rules::apply`], the one way a graph is ever rewritten.
-//! - [`goal`] — a claim, and the [`Proof`](goal::Proof) that re-performs
-//!   every step of its discharge against the claim as stated.
+//!   [`rules::apply`], the one way a graph is ever rewritten. One row,
+//!   [`rules::Rule::Open`], is a fact of the library rather than of the
+//!   table: a call is its body.
+//! - [`goal`] — a claim, and [`certify`](goal::certify), the one judgement
+//!   the kernel makes of a proof: a flat run of steps, replayed on the
+//!   claim's left side, lands on its right.
 //!
 //! Searching is not here. Which law, where, in what order — the tactics of
 //! [`crate::tactic`], the queries of [`crate::query`], the strategies of
 //! [`crate::hant`] run by [`crate::strategy`] — is untrusted convenience,
-//! and every step it takes comes back through [`rules::apply`]. The one
-//! thing the kernel takes on someone else's word is a citation:
-//! [`Proof::Cited`](goal::Proof::Cited) holds the cited claim's *use* to
-//! account and leaves its *truth* to the corpus, which proves every
-//! identity and refuses a cycle.
+//! and every step it takes comes back through [`rules::apply`]. Nor is
+//! the shape of an argument: the tree of goals a strategy carves, what met
+//! in the middle, what was cited, is [`crate::proof`]'s *draft*, and what
+//! the kernel is handed is the run [`crate::proof::flatten`] reads off it.
+//! The kernel takes nothing on anyone's word: a cited claim arrives as its
+//! own steps, and a body a call is opened to is rebuilt from the library
+//! before it is spent.
 //!
 //! ## A term, literally
 //!
@@ -81,11 +86,11 @@
 //!
 //! So a graph out of [`build`] is the translation and stays that way
 //! until something applies a rule to it. [`rules`] is where that happens:
-//! [`rules::sides`] turns a payload into the [`Pair`] of graphs it
+//! [`rules::sides`] turns a payload into the [`Pair`](graph::Pair) of graphs it
 //! states, [`find`](graph::find) and [`rules::propose`] say where a
 //! law could fire, [`rules::apply`] fires one and hands back its inverse,
 //! and [`rules::replay`] runs a list of them. Only the first of those is
-//! the table's own work — the rest is [`Pair::apply`] wearing a law's
+//! the table's own work — the rest is [`Pair::apply`](graph::Pair::apply) wearing a law's
 //! name.
 //!
 //! **A box reads; nothing records being read.** An input port names the
@@ -126,11 +131,8 @@
 //! other work, so anything reimposing a stack would answer with both arms
 //! run flat and a choice at the end.
 
-use bytecode::{Library, SentenceIndex};
-
-use crate::kernel::graph::{Direction, Graph, Match, NodeKind, Source};
-use crate::kernel::rules::{Rule, Step};
-use crate::kernel::term::{Context, Prim, Term, TermIndex, lower};
+use crate::kernel::graph::{Graph, NodeKind, Source};
+use crate::kernel::term::{Context, Prim, Term, TermIndex};
 
 pub mod goal;
 pub mod graph;
@@ -228,76 +230,9 @@ fn emit(graph: &mut Graph, terms: &Context, term: TermIndex, inputs: Vec<Source>
     }
 }
 
-/// Opens calls in place: every [`NodeKind::Call`] — or, with `only`, every
-/// call to that one sentence — replaced by the graph of its body, its
-/// readers re-pointed at what the body leaves.
-///
-/// Definitional unfolding, not a law: this is [`build`]'s work continued —
-/// the same [`build`], spliced in where the call was — and it changes what
-/// is provable exactly the way the term version did, which is why it is a
-/// proof step and never a rewrite the table proposes. Unlabelled, it opens
-/// all the way down (recursion is forbidden, so the walk drains); labelled,
-/// one pass, and the opened body's own calls stay shut.
-///
-/// Every open is a [`Step`] by [`Rule::Open`] like any other rewrite, and
-/// that is the point: the pair is the call's own one-box window against
-/// the body's graph — equal by definition rather than by any law — and the
-/// [`Match`] is read straight off the call, since a window of one box that
-/// exports every port has nothing left to choose. What makes the splice
-/// safe is what makes every splice safe, so nothing here re-points a link
-/// by hand.
-///
-/// Answers the steps it spent, in order, so a proof can carry them: replayed
-/// on the graph as it was, they open the same calls. Empty is the caller's
-/// business to refuse.
-pub fn inline(
-    graph: &mut Graph,
-    terms: &mut Context,
-    library: &Library,
-    only: Option<SentenceIndex>,
-) -> Result<Vec<Step>, crate::kernel::term::Error> {
-    let mut opened = Vec::new();
-    // One at a time, asked again each time round. A rewrite rebuilds
-    // everything downstream of what it replaced, so a call that sat under
-    // an opened one is a *new* box afterwards and the id that named it is
-    // stale — which is why the calls are looked for rather than listed.
-    //
-    // Draining is one pass either way: a sentence may not reach itself, so
-    // a call to `target` never appears inside `target`'s own body, and
-    // `only` opening until none is left opens exactly the ones that were
-    // there.
-    loop {
-        let call = graph.live().find_map(|(id, kind)| match kind {
-            NodeKind::Call { target, .. } if only.is_none_or(|t| t == *target) => {
-                Some((id, *target))
-            }
-            _ => None,
-        });
-        let Some((id, target)) = call else {
-            return Ok(opened);
-        };
-        let body = lower(terms, library, target)?;
-        let step = Step {
-            rule: Rule::Open {
-                target,
-                body: build(terms, body),
-            },
-            dir: Direction::Forward,
-            at: Match {
-                nodes: vec![id],
-                inputs: graph.sources(id).to_vec(),
-                sel: None,
-            },
-        };
-        rules::apply(graph, &step).expect("a call is the window its own box fills");
-        opened.push(step);
-    }
-}
-
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use crate::kernel::graph::isomorphic;
     use crate::kernel::term::lower;
     use bytecode::{Library, SentenceIndex, assemble};
 
@@ -416,62 +351,5 @@ pub(crate) mod tests {
                 library.names[idx]
             );
         }
-    }
-
-    // ---- opening a call ----
-
-    /// A call opened in place is the body's boxes on the call's wires —
-    /// the same graph building the opened term would have made.
-    #[test]
-    fn a_call_opens_in_place() {
-        let code = r#"
-            #[arity(1,1)] sentence inner { not not }
-            #[arity(1,1)] sentence outer { jump crate::inner }
-            sentence probe { jump crate::outer }
-        "#;
-        let library = assemble(code).unwrap();
-        let named = |name: &str| {
-            library
-                .names
-                .iter_enumerated()
-                .find(|(_, n)| *n == name)
-                .map(|(idx, _)| idx)
-                .unwrap()
-        };
-        let mut terms = Context::new();
-        let term = lower(&mut terms, &library, named("probe")).unwrap();
-        let mut graph = build(&terms, term);
-
-        // A labelled inline opens that sentence and leaves what it calls
-        // shut.
-        let mut labelled = graph.clone();
-        let opened = inline(&mut labelled, &mut terms, &library, Some(named("outer"))).unwrap();
-        assert_eq!(opened.len(), 1);
-        labelled.check().unwrap();
-        assert!(matches!(
-            labelled.live().next().map(|(_, k)| k),
-            Some(NodeKind::Call { target, .. }) if *target == named("inner")
-        ));
-
-        // Unlabelled opens all the way down, and lands on the graph the
-        // opened term builds.
-        let before = graph.clone();
-        let opened = inline(&mut graph, &mut terms, &library, None).unwrap();
-        assert_eq!(opened.len(), 2);
-        graph.check().unwrap();
-        let (_t, flat) = built("not not");
-        assert!(isomorphic(&graph, &flat), "\n{}\n{}", graph, flat);
-        assert!(
-            inline(&mut graph, &mut terms, &library, None)
-                .unwrap()
-                .is_empty()
-        );
-
-        // The opens are ordinary steps: replayed on the graph as it was,
-        // they land on the same program, which is what lets a proof carry
-        // an `inline` as the rewrites it is.
-        let mut again = before;
-        rules::replay(&mut again, &opened).unwrap();
-        assert!(isomorphic(&again, &graph), "\n{}\n{}", again, graph);
     }
 }
