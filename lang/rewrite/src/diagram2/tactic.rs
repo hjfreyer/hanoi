@@ -41,7 +41,7 @@
 //!
 //! ## Addresses are queries, choices are stated
 //!
-//! A binding never crosses a rewrite. The interpreter re-runs every query
+//! A binding does not cross a rewrite. The interpreter re-runs every query
 //! against the graph as it stands — after every single application, in
 //! [`Pick::Each`] and [`Tactic::Repeat`] alike — so there is no stale
 //! [`Match`] to hold and no incremental index to maintain; search is cheap
@@ -75,10 +75,10 @@
 //!
 //! That rollback is **speculation on a clone**, not [`Derivation::undo`],
 //! and the difference is worth recording. Undoing puts boxes *back*, and a
-//! box put back is a new box with a new [`NodeId`] — a history that went
-//! forward, undid, and went forward again records later matches against
-//! ids that never exist when the derivation replays from the original
-//! graph. So a speculative branch runs against a cloned graph, and on
+//! box put back is a new box with a new [`NodeId`] — so under a record
+//! that names boxes by id, a history that went forward, undid, and went
+//! forward again records later matches against ids that never exist when
+//! the derivation replays from the original graph. So a speculative branch runs against a cloned graph, and on
 //! success its steps replay onto the real one — which sits in exactly the
 //! state the clone started from, and ids are handed out in order, so they
 //! land identically. The derivation only ever grows, and stays what it is
