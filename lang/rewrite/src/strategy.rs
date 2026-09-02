@@ -240,7 +240,7 @@ impl<'l> Prover<'l> {
             // sub-strategies scoped to the fresh branch — the hypothesis
             // spent as structure — landing their steps in the same
             // per-side records as the split, so the proof object and its
-            // checker never learn a hypothesis existed.
+            // checker do not learn a hypothesis existed.
             Step::Cases {
                 prim,
                 literal,
@@ -1473,7 +1473,7 @@ mod tests {
 
         let code = "identity probe { push 1 push 2 add } = { push 3 };";
 
-        // `exact` fails on purpose — the report is its whole job.
+        // A reached `exact` fails — the report is its whole job.
         let (_ctx, outcome) = prove_with(code, "probe", Some("exact"));
         let Outcome::Stuck(residual) = outcome else {
             panic!("the sides are not one diagram yet");

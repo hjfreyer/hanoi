@@ -150,8 +150,8 @@ pub enum SrcExpr {
     Input(usize),
     /// Output `port` of the box the written address names — the wire
     /// spelling of [`Tactic::At`]'s box name, under the same discipline:
-    /// looked up live at every firing, never held, failing by name the
-    /// moment nothing answers to it or two boxes do.
+    /// looked up live at every firing rather than held, failing by name
+    /// the moment nothing answers to it or two boxes do.
     Addressed(Prefix, usize),
 }
 
@@ -168,7 +168,7 @@ pub enum Wire {
     /// Boundary input `i` of the side.
     Input(usize),
     /// Output `port` of the box the written address names, under
-    /// [`Tactic::At`]'s discipline: looked up live, never held.
+    /// [`Tactic::At`]'s discipline: looked up live rather than held.
     Port(Prefix, usize),
 }
 
@@ -217,7 +217,7 @@ impl fmt::Display for Aim {
 /// A reader of a wire, named the way a listing prints one: a box by
 /// address, or a boundary output by index. What a [`Readers`] clause is
 /// written in, under [`Tactic::At`]'s discipline — looked up live at
-/// every firing, never held.
+/// every firing rather than held.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Reader {
     /// The box the written address names — every port of it that reads a
@@ -711,7 +711,7 @@ impl Runner<'_> {
     ///
     /// The set is read once, at entry, and kept as **addresses** rather
     /// than ids — the discipline every other address here is under, and
-    /// here it is load-bearing twice over. A firing rebuilds boxes, so an
+    /// here it matters twice over. A firing rebuilds boxes, so an
     /// id would go stale; and `select-hoist` puts down fresh selects on the
     /// very same condition, so re-reading the set between firings would
     /// find the step's own answers and never finish. What the step means is
@@ -1231,12 +1231,12 @@ fn upstream(graph: &Graph, node: NodeId) -> HashSet<NodeId> {
 ///
 /// Membership is the arm's **cone**, computed fresh at every asking:
 /// everything upstream of this side's blocks, minus everything upstream
-/// of the condition — the decided test's own making is exactly what an
-/// arm must not touch again, and it is the one exclusion that matters,
+/// of the condition — the decided test's own making is what an arm is
+/// scoped away from, and it is the one exclusion that matters,
 /// since an enclosing split's condition feeds nothing but its own select
 /// and so is never in a deeper arm's cone. The other side's boxes are out
 /// by the same reading (nothing here reads them); **shared context is
-/// deliberately in**: a split duplicates only what lies downstream of its
+/// in**: a split duplicates only what lies downstream of its
 /// wire, so the very tests a nested split must reach — the hypothesis's
 /// remaining unknowns — sit upstream, shared between the copies, and a
 /// region that evicted what both arms read would make an arm that can

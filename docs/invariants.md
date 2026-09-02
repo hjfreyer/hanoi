@@ -4,7 +4,9 @@ The commitments everything else is built on. The other pages say how to
 use the prover ([docs/proving.md](proving.md)), what the laws mean
 ([docs/rules.md](rules.md)), and how to drive them
 ([docs/tactics.md](tactics.md)); this page is the short list of
-properties that must survive any refactor, each with where it lives.
+properties that must survive any refactor, each with where it lives —
+and, after it, a second list of choices that hold today for reasons
+given, which a refactor is free to revisit.
 
 ## The trust boundary
 
@@ -52,15 +54,16 @@ it, so a reader the window never mentioned is not a loose end: `not-not`
 fires on a first `not` somebody else reads, and that somebody goes on
 reading the box it always read.
 
-A match never *has* to say which readers belong to the window — search
-yields choice-free matches, always — but a proof *may* state which
-readers follow: a `Match` carries an optional reader selection (`sel`,
-the surface's `for`/`except`), and the substitution then re-points
-exactly the named sinks, every other reader keeping the box it always
-read. Nothing is destroyed either way, which is why the selection costs
-pointwise checks — each named sink reads the very port it is named
-for — and nothing global. The choice is a stated payload of the step,
-carried by its interface, and never a question a match could answer.
+A match never *has* to say which readers belong to the window, but a
+proof *may* state which readers follow: a `Match` carries an optional
+reader selection (`sel`, the surface's `for`/`except`), and the
+substitution then re-points exactly the named sinks, every other reader
+keeping the box it always read. Nothing is destroyed either way, which
+is why the selection costs pointwise checks — each named sink reads the
+very port it is named for — and nothing global. What the discipline asks
+is only that the choice be a stated payload of the step, carried by its
+interface, rather than a question a match answers by testing; where the
+choice comes from is open (today, only from a proof — see below).
 
 ## Totality, purity and determinism are load-bearing
 
@@ -98,10 +101,12 @@ that is the property it exists to have — so:
 - Speculation (a tactic's `try`, a failed alternative) runs on clones and
   leaves no trace; the surviving suffix replays onto the real graph.
 - Bindings and matches never cross a rewrite. Persistence is running the
-  query again; the one exception, `at(#box, law)`, holds a **name** and
-  not an id — as much of a box's address as tells it apart — looked up
-  against the live graph at every entry and failing by name when nothing
-  answers to it or two boxes do.
+  query again. Where a step does carry something across rewrites — today
+  only `at(#box, law)` — it carries a **name** and not an id: as much of
+  a box's address as tells it apart, looked up against the live graph at
+  every entry and failing by name when nothing answers to it or two
+  boxes do. Holding a name that way is what keeps replay honest; nothing
+  says `at` has to stay the only step that does.
 
 ## A close is re-checked, fail closed
 
@@ -120,45 +125,70 @@ DAG or the corpus refuses to run, an unproved claim is never citable, and
 `prove --expand` cashes every citation into the cited proof's own steps —
 the check that the shorthand was honest.
 
-## The driver never decides what is provable
+## Choices that hold today
 
-No driver opens a call or invents a case analysis: `inline` and `cases`
-are a proof's decisions, stated in the `.hant`. Rows that grow a graph —
-the two hoists, the two unpackings — are on no driven list; a strategy
-names them, and a driver run to fixpoint spends only rows that shrink.
-A case split is three of them in a row (`rules::case_split`), which is
-why it is a strategy's act and not a law of its own.
+Everything below is how the prover stands, with the reason it stands
+that way. None of it is load-bearing for the list above: each was the
+simplest thing that worked, and reworking one is a design decision to
+take on its merits rather than a broken commitment.
 
-## Hypotheses are structure, and only guard-shaped ones exist
+### The driver decides nothing about what is provable
 
-The checker has no turnstile and is not getting one. "Assume the
-condition holds" is the branch itself: a case split introduces it, the
-specializing rows spend it (anchored on the select, which holds both the
-condition and the discard that licenses reasoning from it),
-`select-same` discharges it — as a row the branch layer drives, and as
-the proof step of that name, which spends a branch the goal already holds
-by asking each block to answer for itself — and `Proof::check` replays
-the chain with no idea a case analysis happened. Only guard-shaped hypotheses compile away this way —
+No driver opens a call or invents a case analysis today: `inline` and
+`cases` are a proof's decisions, stated in the `.hant`. Rows that grow a
+graph — the two hoists, the two unpackings — are on no driven list; a
+strategy names them, and a driver run to fixpoint spends only rows that
+shrink, which is what makes the fixpoint cheap to reach. A case split is
+three of them in a row (`rules::case_split`), which is why it is a
+strategy's act and not a law of its own. A driver that did open calls or
+lay out cases would still land nothing but checked steps, so the trust
+boundary is indifferent; what would change is what a close costs and how
+much of a proof gets written down.
+
+### Hypotheses are structure
+
+The checker has no turnstile today. "Assume the condition holds" is the
+branch itself: a case split introduces it, the specializing rows spend it
+(anchored on the select, which holds both the condition and the discard
+that licenses reasoning from it), `select-same` discharges it — as a row
+the branch layer drives, and as the proof step of that name, which
+spends a branch the goal already holds by asking each block to answer
+for itself — and `Proof::check` replays the chain with no idea a case
+analysis happened. Only guard-shaped hypotheses compile away this way —
 "this wire's answer is `true`" for a wire the instruction set promises is
-a bool. That boundary is a theorem (hypothesis elimination, in the
-Kleene-algebra-with-tests literature), not an implementation gap: an
-arbitrary semantic fact with no wire to branch on cannot be spent by a
-split. The honest seam for such a fact is a custom equation admitted with
-a warrant — a `Rule::Lemma { lhs, rhs, warrant }` whose stored derivation
-checks — and until that exists, nothing may admit an unvalidated equation
-pair.
+a bool — and that boundary is a theorem (hypothesis elimination, in the
+Kleene-algebra-with-tests literature): an arbitrary semantic fact with no
+wire to branch on cannot be spent by a split. A checker that wants such a
+fact needs a second mechanism — a hypothesis context the checker
+carries, or a custom equation admitted with a warrant, the
+`Rule::Lemma { lhs, rhs, warrant }` seam whose stored derivation checks.
+Neither exists yet and nothing admits an equation pair today; which
+comes first is open, with the re-check property above the thing to keep
+whichever way it goes.
 
-## One place pays the arity asymmetry
+### One place pays the arity asymmetry
 
 An identity equates **net** stack change, not arity. `Goal::aligned` pads
-the narrower side once, when the goal is built; every downstream question
-is arity-exact. Nothing else pads, anywhere — a `.hant` waypoint whose
-halves do not meet is an error where it is written.
+the narrower side once, when the goal is built, and every downstream
+question is arity-exact; nothing else pads, and a `.hant` waypoint whose
+halves do not meet is an error where it is written. Paying once at the
+top is what lets every law be stated arity-exact, which is a convenience
+rather than a necessity.
 
-## Proofs attach both ways
+### Proofs attach both ways
 
-A `.hant` entry naming no stated identity is an error — a renamed
-identity must not silently shed its proof — and a claim discharged twice
-was discharged once too often. A step that finds nothing to do fails
-loudly rather than becoming a no-op, so a proof that no longer matches
-its identity says so.
+A `.hant` entry naming no stated identity is reported as a problem —
+a renamed identity would otherwise silently shed its proof — and so is a
+claim discharged twice. A step that finds nothing to do fails rather
+than becoming a no-op, so a proof that no longer matches its identity
+says so. All three are strictness settings: they make drift loud, and
+any of them could be relaxed to a warning if the noise ever outweighs
+the catch.
+
+### Search proposes no reader selection
+
+`sel: None` is all that `find` and `propose` yield: a substitution
+re-points every reader, and a found match has no split of a port's
+readers to decide. A selection is a proof's stated choice today because
+no search has needed to make one; a search that did would carry it as
+the same payload, checked the same pointwise way.
