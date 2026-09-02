@@ -98,8 +98,7 @@ list.
 ## Derivations replay
 
 A derivation replays from its original graph and lands identically —
-that is the property it exists to have, and `Proof::check` is built on
-it. What that rests on in the representation: node ids are handed out in
+that is the property it exists to have, and `certify` is built on it. What that rests on in the representation: node ids are handed out in
 order and never reused, and a box is never edited or removed, so a
 `NodeId` names the same computation for the life of its graph and a
 recorded step means on replay what it meant when it landed. How the
@@ -107,22 +106,23 @@ prover keeps a record replayable — what it holds across steps, how it
 speculates, how it names a box — is a set of choices about the record's
 format, listed below.
 
-## A close is re-checked, fail closed
+## A close is certified, fail closed
 
-A `Proof` carries its full record — every step each drive landed, the
-inline's target, the cut's waypoint — and `Prover::prove` re-checks the
-whole tree against the goal *as stated* before answering. Where a node
-records nothing, it is because the move is a function of the goal and the
-checker re-performs it: `inline` re-opens, and a `select-same` split
-re-carves the two blocks off the left side's own `select`, refusing a
-proof whose left side does not answer with one. The checking is the same
-either way: every step
-replayed through the table, every isomorphism asked again. A proof that
-does not re-check comes back stuck, named as the prover bug it is. A
-citation (`by name`) stands **given the corpus**: the citation order is a
-DAG or the corpus refuses to run, an unproved claim is never citable, and
-`prove --expand` cashes every citation into the cited proof's own steps —
-the check that the shorthand was honest.
+What a strategy writes is a **draft**: the tree of goals it carved — a
+rewrite here, a swap there, a cut at a waypoint, a branch proved block by
+block — and the steps each spent. Nothing trusts the draft. `flatten`
+turns it into one flat run of steps from the goal's left side to its
+right, saying as steps everything the tree said as structure: a valley's
+right-side steps are inverted and aligned onto where the left landed, a
+cut's second half is aligned onto the first, a branch's blocks are
+spliced back into the whole with each step narrowed to that block's own
+readers, and an `inline` is the `open` steps it spent. `certify` then
+replays the run against the goal *as stated* — every step through the
+table, and one isomorphism at the end — and never learns a split
+happened. A draft that does not flatten, or a run that does not land,
+comes back stuck, named as the prover bug it is. A citation (`by name`)
+carries the cited claim's own certified run in, so nothing stands on the
+corpus's word; the citation order is a DAG or the corpus refuses to run.
 
 ## Choices that hold today
 
@@ -152,7 +152,7 @@ branch itself: a case split introduces it, the specializing rows spend it
 that licenses reasoning from it), `select-same` discharges it — as a row
 the branch layer drives, and as the proof step of that name, which
 spends a branch the goal already holds by asking each block to answer
-for itself — and `Proof::check` replays the chain with no idea a case
+for itself — and `certify` replays the chain with no idea a case
 analysis happened. Only guard-shaped hypotheses compile away this way —
 "this wire's answer is `true`" for a wire the instruction set promises is
 a bool — and that boundary is a theorem (hypothesis elimination, in the
@@ -162,7 +162,7 @@ fact needs a second mechanism — a hypothesis context the checker
 carries, or a custom equation admitted with a warrant, the
 `Rule::Lemma { lhs, rhs, warrant }` seam whose stored derivation checks.
 Neither exists yet and nothing admits an equation pair today; which
-comes first is open, with the re-check property above the thing to keep
+comes first is open, with the certify property above the thing to keep
 whichever way it goes.
 
 ### One place pays the arity asymmetry

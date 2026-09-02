@@ -387,7 +387,11 @@ reader-split for the host to settle. Where a proof *wants* a split, it
 states one: a `for(…)`/`except(…)` clause on an `at` or an `on` resolves
 to the match's `sel` — which readers of what the law leaves follow it —
 and the checker holds that selection reader by reader, like the rest of
-the claim.
+the claim. A match carries one more choice, `follow`: the region within
+which a box rebuilt on the way takes its readers with it. No tactic
+states one; `flatten` does, when it splices one block's run back into
+the branch it was carved from, so that a box the blocks share is rebuilt
+for that block's readers and no other.
 
 A stated step is what is read, and nothing else:
 

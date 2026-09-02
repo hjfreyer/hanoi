@@ -875,7 +875,7 @@ pub enum Rule {
     /// equation — which is why the kernel's judgement,
     /// [`certify`](crate::kernel::goal::certify), holds every `Open` it
     /// replays to the body the library lowers before spending it. Nothing
-    /// proposes one: [`read_off`] has no library to read a body from, and
+    /// proposes one: `read_off` has no library to read a body from, and
     /// opening calls is a proof step (`inline`) rather than a law a
     /// strategy drives.
     Open { target: SentenceIndex, body: Graph },
@@ -2674,6 +2674,7 @@ pub(crate) mod tests {
             nodes: (0..g.live_count()).map(NodeId::at).collect(),
             inputs: (0..g.arity().inputs).map(Source::Input).collect(),
             sel: None,
+            follow: None,
         }
     }
 
@@ -4304,6 +4305,7 @@ pub(crate) mod tests {
                 nodes: vec![negate, not],
                 inputs: vec![Source::Input(0)],
                 sel: None,
+                follow: None,
             },
         };
         assert_eq!(refuse(&mut graph, &step), Mismatch::Kind(negate));
@@ -4316,6 +4318,7 @@ pub(crate) mod tests {
                 nodes: vec![not, not],
                 inputs: vec![Source::Input(0)],
                 sel: None,
+                follow: None,
             },
         };
         assert_eq!(
@@ -4331,6 +4334,7 @@ pub(crate) mod tests {
                 nodes: vec![not],
                 inputs: vec![Source::Input(0)],
                 sel: None,
+                follow: None,
             },
         };
         assert_eq!(refuse(&mut graph, &step), Mismatch::Shape);
@@ -4404,6 +4408,7 @@ pub(crate) mod tests {
                 nodes: vec![made],
                 inputs: vec![Source::Input(0)],
                 sel: None,
+                follow: None,
             },
         };
         apply(&mut alone, &second).unwrap();
@@ -4481,6 +4486,7 @@ pub(crate) mod tests {
             nodes: vec![boxes[1], boxes[0]],
             inputs: vec![Source::Input(0)],
             sel: None,
+            follow: None,
         };
         let mut there = host.clone();
         assert!(matches!(

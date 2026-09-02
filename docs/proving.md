@@ -35,7 +35,6 @@ identity result: ok. 25 passed; 0 failed; 0 problem(s); 0 filtered out
 
 Exit codes: `0` every identity proved, `1` a claim unproved or a hint
 orphaned, `2` the corpus would not build or the arguments were wrong.
-`--expand` additionally cashes every citation (see below).
 
 A stuck goal's residual emphasises the telling prefix of each address in
 bold, which only a terminal shows: piped, the escapes would land in a log
@@ -55,8 +54,8 @@ produces a step the kernel refuses or a proof that fails to check.
 | layer | module | what it does |
 |---|---|---|
 | proofs | `hant.rs`, `corpus.rs`, `parse.rs` | the strategy language a proof is written in, the loader that attaches each `.hant` entry to the identity it names — ordering them, since `by name` cites another identity and needs it proved first — and the reader that turns a waypoint's text into a term |
-| driving | `strategy.rs`, `tactic.rs`, `query.rs`, `render.rs` | the interpreter that runs a strategy over a goal, the tactic language that drives the table (see [docs/tactics.md](tactics.md)), the queries a tactic points with, and the listing a stuck graph is read as |
-| kernel | `kernel/goal.rs`, `kernel/mod.rs`, `kernel/rules.rs` | a goal is two [graphs](../lang/rewrite/src/kernel/graph.rs), lowered and padded to one arity before they build, and a proof is the checked record of how it closed; `mod.rs` is the literal translation of a term into a graph and the opening of a call in place; `rules.rs` is the law table, and `apply` the one way a graph is rewritten |
+| driving | `strategy.rs`, `proof.rs`, `tactic.rs`, `query.rs`, `render.rs` | the interpreter that runs a strategy over a goal and writes a *draft* of the proof; `flatten`, which reads the one run the kernel is handed off that draft; the tactic language that drives the table (see [docs/tactics.md](tactics.md)); the queries a tactic points with; and the listing a stuck graph is read as |
+| kernel | `kernel/goal.rs`, `kernel/mod.rs`, `kernel/rules.rs` | a goal is two [graphs](../lang/rewrite/src/kernel/graph.rs), lowered and padded to one arity before they build, and `certify` is the one judgement of a proof: a flat run of steps, replayed on the left side, lands on the right; `mod.rs` is the literal translation of a term into a graph; `rules.rs` is the law table, and `apply` the one way a graph is rewritten |
 | graphs | `kernel/graph.rs`, `kernel/term.rs` | boxes and the links between them, well-formedness, the isomorphism that says two graphs are one diagram, and the rewrite itself — a `Pair` of graphs spliced in at a checked `Match`; and the term model a claim is stated over |
 
 A program in the engine is a **literal** graph: one box per term leaf —
@@ -237,9 +236,10 @@ come to mean two boxes, and it says which two.
 
 ## Citing one claim in another
 
-`lhs(by identities::a_lemma)` is how a proof uses a proof: one rewrite by
-the claim named, its two sides a pair like the table's own rows, the
-match checked like any other.
+`lhs(by identities::a_lemma)` is how a proof uses a proof: the claim
+named has a certified run of its own — the steps that take its left side
+onto its right — and a `by` carries that run in, re-applied through the
+embedding of the claim's left side where it occurs here.
 
 ```text
 proof identities::a_double_negative_is_the_branch_it_makes =
@@ -249,19 +249,13 @@ proof identities::three_negatives_are_a_branch_and_a_negative =
     lhs(by identities::a_double_negative_is_the_branch_it_makes);
 ```
 
-What a citation does **not** check is whether the claim is true — that
-argument is made once, where the claim is. The corpus proves every
-identity it states, the citation order is a DAG or the corpus refuses to
-run, and a claim that did not close is never citable. A `Proof` holding a
-citation therefore stands *given the corpus*, and `Proof::cites` reads
-off exactly which claims that is.
-
-Any closed claim may be cited, however it closed. And a citation can be
-cashed: `prove --expand` spends every `by` in full — the cited proof's
-own steps carried into this goal and re-checked as ordinary rewrites,
-with no citation left in the record. Expanding asks more of the cited
-proof than citing does: it must be a run from one side of its claim to
-the other, and the corpus is held to closing both ways.
+What lands is a run of ordinary rewrites, and the kernel cannot tell a
+`by` from a `lhs(…)` that spent the same steps: nothing is taken on the
+corpus's word, and what a citation *means* is what every use pays for.
+What a citation needs of the corpus is order — the claim has to be proved
+before this one, which the corpus arranges, and two claims that lean on
+each other are refused by name. Any closed claim may be cited, however it
+closed: every close is a flat run by the time it is certified.
 
 ## `cases`: proving what depends on a value
 
@@ -453,22 +447,26 @@ written by hand off the boxes the listing names.
 
 ## Trust, in one paragraph
 
-`sides` and `apply` are the whole of it — plus the machine itself, where
-a law is *about* what an operation computes. Search, drivers, tactics and
-the `cases` step's wire-picking are all untrusted: every step they
-produce goes through `apply`, a wrong one is refused, and a close is the
-isomorphism check on what the checked steps left. A close is also not the
-prover's word: a `Proof` carries its full record, and `Prover::prove`
-re-checks the whole tree against the goal as stated before answering —
-fail closed. [docs/invariants.md](invariants.md) is the full statement.
+`sides`, `apply` and `certify` are the whole of it — plus the machine
+itself, where a law is *about* what an operation computes. Search,
+drivers, tactics, the `cases` step's wire-picking and the shape of the
+argument itself are all untrusted: a strategy writes a *draft* — the tree
+of goals it carved and the steps each spent — and `flatten` turns the
+draft into one flat run of steps from the goal's left side to its right,
+which is the only thing the kernel is handed. `certify` replays that run
+through `apply`, a wrong step is refused, and the close is the
+isomorphism check on what the replayed steps left. A draft that does not
+flatten, or a run that does not land, comes back stuck as the prover bug
+it is — fail closed. [docs/invariants.md](invariants.md) is the full
+statement.
 
 ## What is not here yet
 
-- **The proof object lives in memory only.** Every close carries its full
-  record and is re-checked before it is reported — but nothing yet
-  *persists* a `Proof` to disk, so re-checking without re-proving means
-  serializing the artifact beside the corpus. The shape is ready; the
-  file format is not chosen.
+- **The run lives in memory only.** Every close is a flat list of steps
+  the kernel certified before it was reported — but nothing yet
+  *persists* a run to disk, so re-checking without re-proving means
+  serializing the list beside the corpus. The shape is ready; the file
+  format is not chosen.
 - **Reach.** The list of true equations that were not rows yet — commutative
   operand sorting and coercion idempotence among them — is empty:
   [docs/rules.md](rules.md) says where each landed. A claim that needs a

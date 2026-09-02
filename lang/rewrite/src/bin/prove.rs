@@ -19,35 +19,28 @@
 //! `--color` says to emphasise anyway, for a pipe that ends at a reader —
 //! `prove ../hana --color | less -R`.
 //!
-//! `--expand` spends every `by` in full: instead of citing a claim and
-//! taking the corpus's word for it, the cited proof's own steps are carried
-//! into this goal and re-checked here. Slower by exactly what citing saves,
-//! and it is the question citing is an answer to — a citation is only honest
-//! if it could have been discharged, and this is what discharges it.
+//! Every close is certified before it is reported: the strategy's draft
+//! is flattened to one run of rewrites, and the kernel replays that run
+//! against the identity as stated. A `by` carries the cited claim's own
+//! certified run in, so nothing is taken on the corpus's word.
 //!
 //! Exit codes: `0` every identity proved, `1` a claim is unproved or a
 //! proof entry could not attach, `2` the corpus would not build or the
 //! arguments were wrong.
 
-use std::collections::{HashMap, HashSet};
 use std::io::IsTerminal;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use bytecode::IdentityIndex;
 use rewrite::corpus;
-use rewrite::kernel::goal::{Goal, Outcome};
+use rewrite::kernel::goal::Goal;
+use rewrite::proof::Outcome;
 use rewrite::render;
-use rewrite::strategy::{Citing, Prover};
+use rewrite::strategy::Prover;
 
 struct Args {
     root: PathBuf,
     filter: Option<String>,
-    /// Show `id` and `copy` rather than reading through them.
-    /// Spend every `by` in full — the cited proof's own steps, carried in
-    /// and re-checked here — rather than citing the claim on the corpus's
-    /// word.
-    expand: bool,
     /// Emphasise addresses whether or not stdout is a terminal, for a pipe
     /// that ends at a reader rather than a log — `| less -R`.
     color: bool,
@@ -58,7 +51,7 @@ fn main() -> ExitCode {
         Ok(args) => args,
         Err(message) => {
             eprintln!("error: {}", message);
-            eprintln!("usage: prove <root> [--filter <substr>] [--expand] [--color]");
+            eprintln!("usage: prove <root> [--filter <substr>] [--color]");
             return ExitCode::from(2);
         }
     };
@@ -75,13 +68,11 @@ fn main() -> ExitCode {
 fn parse_args() -> Result<Args, String> {
     let mut root = None;
     let mut filter = None;
-    let mut expand = false;
     let mut color = false;
     let mut argv = std::env::args().skip(1);
     while let Some(arg) = argv.next() {
         match arg.as_str() {
             "--filter" => filter = Some(argv.next().ok_or("--filter needs a value")?),
-            "--expand" => expand = true,
             "--color" => color = true,
             other if root.is_none() && !other.starts_with('-') => root = Some(PathBuf::from(other)),
             other => return Err(format!("unrecognized argument: {}", other)),
@@ -90,7 +81,6 @@ fn parse_args() -> Result<Args, String> {
     Ok(Args {
         root: root.ok_or("no corpus root given")?,
         filter,
-        expand,
         color,
     })
 }
@@ -134,18 +124,7 @@ fn run(args: &Args) -> Result<bool, String> {
     // the report that is filtered, since a lemma nobody asked to see is not a
     // reason for the claim that needs it to fail.
     let order = corpus.proving_order()?;
-    let mut prover = Prover::new(&corpus.library).citing(if args.expand {
-        Citing::Expanded
-    } else {
-        Citing::OnTrust
-    });
-    // A proof that cites another claim stands given that claim, so the run
-    // owes a last question that no single proof can answer: was everything
-    // leaned on actually discharged? A `by` can only name what has already
-    // closed, so this cannot fail today — which is exactly why it is cheap to
-    // ask, and worth asking where the promise is made rather than assumed.
-    let mut closed: HashSet<IdentityIndex> = HashSet::new();
-    let mut cited: HashMap<IdentityIndex, Vec<IdentityIndex>> = HashMap::new();
+    let mut prover = Prover::new(&corpus.library);
     let (mut passed, mut failed, mut filtered) = (0usize, 0usize, 0usize);
     for idx in order {
         let identity = &corpus.library.identities[idx];
@@ -168,15 +147,13 @@ fn run(args: &Args) -> Result<bool, String> {
             .prove(&mut corpus.terms, goal, strategy)
             .map_err(|e| e.to_string())?
         {
-            Outcome::Closed(proof) => {
-                proof.cites(cited.entry(idx).or_default());
-                closed.insert(idx);
-                prover.learn(idx, &stated, &proof);
+            Outcome::Closed { draft, run } => {
+                prover.learn(idx, &stated, &run);
                 if !shown {
                     continue;
                 }
                 passed += 1;
-                println!("identity {} ... ok ({})", name, proof.summary());
+                println!("identity {} ... ok ({})", name, draft.summary());
             }
             Outcome::Stuck(residual) => {
                 if !shown {
@@ -202,22 +179,7 @@ fn run(args: &Args) -> Result<bool, String> {
         }
     }
 
-    let mut leaning = Vec::new();
-    for (at, on) in &cited {
-        for needed in on {
-            if !closed.contains(needed) {
-                leaning.push(format!(
-                    "{} was accepted citing {}, which did not close",
-                    corpus.library.identities[*at].name, corpus.library.identities[*needed].name
-                ));
-            }
-        }
-    }
-    for complaint in &leaning {
-        println!("{}", complaint);
-    }
-
-    let ok = failed == 0 && corpus.problems.is_empty() && leaning.is_empty();
+    let ok = failed == 0 && corpus.problems.is_empty();
     println!();
     println!(
         "identity result: {}. {} passed; {} failed; {} problem(s); {} filtered out",

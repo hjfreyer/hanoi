@@ -1,10 +1,11 @@
-//! A goal is two graphs and the claim that they are the same program.
+//! A goal is two graphs and the claim that they are the same program, and
+//! the kernel's one judgement of a proof of it.
 //!
-//! The sides used to be terms; they are [graphs](crate::kernel::graph) now, so
-//! that a proof can *rewrite* them — the tactic language acts on a side in
-//! place, and equality-as-stated is [isomorphism](crate::kernel::graph::isomorphic)
-//! rather than one term twice. The terms are still where a goal comes from:
-//! an identity lowers, aligns, and **builds**.
+//! The sides are [graphs](crate::kernel::graph), so that a proof can
+//! *rewrite* them, and equality-as-stated is
+//! [isomorphism](crate::kernel::graph::isomorphic) rather than one term
+//! twice. The terms are still where a goal comes from: an identity lowers,
+//! aligns, and **builds**.
 //!
 //! The compiler holds an identity to equal **net** change rather than equal
 //! arity — `pick 1 ; drop` = ε is `(2 -> 2)` against `(0 -> 0)`, and every
@@ -13,12 +14,18 @@
 //! [`under`](crate::kernel::term::Context::under) until the two arities agree,
 //! before either side becomes a graph. Everything downstream is then
 //! arity-exact, which is what lets two graphs share one boundary.
+//!
+//! A proof, to the kernel, is a **run**: a flat list of [`Step`]s, and
+//! [`certify`] is the whole of what is asked of one — replay it on the left
+//! side, and ask whether it landed on the right. How the run was found —
+//! the tree of goals a strategy carved, what met in the middle, what was
+//! cited — is [`crate::proof`]'s account and the kernel never hears it.
 
-use bytecode::{IdentityIndex, Library, SentenceIndex};
+use bytecode::{IdentityIndex, Library};
 
 use crate::kernel;
-use crate::kernel::graph::{self, Direction, Graph, Match, NodeId, NodeKind, Pair, Source};
-use crate::kernel::rules::{Step, replay};
+use crate::kernel::graph::{self, Graph};
+use crate::kernel::rules::{self, Rule, Step};
 use crate::kernel::term::{Context, Error, TermIndex, lower};
 
 /// Two graphs of one arity, claimed to be the same program.
@@ -65,722 +72,52 @@ impl Goal {
     }
 }
 
-/// Which side of the *goal* a claim's left side currently is.
+/// Whether `run` takes the goal's left side onto its right.
 ///
-/// A goal's sides swap under `symm` and the claim's do not, so a traversal
-/// looking for the run that drives the left onto the right has to carry
-/// which is which. Nothing but [`Proof::Swapped`] moves it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Side {
-    Left,
-    Right,
-}
-
-impl Side {
-    /// The run being driven, and the one that must be empty for it to be a
-    /// run at all.
-    fn of<'p>(self, lhs: &'p [Step], rhs: &'p [Step]) -> (&'p [Step], &'p [Step]) {
-        match self {
-            Side::Left => (lhs, rhs),
-            Side::Right => (rhs, lhs),
-        }
-    }
-
-    fn flipped(self) -> Side {
-        match self {
-            Side::Left => Side::Right,
-            Side::Right => Side::Left,
-        }
-    }
-}
-
-/// Why a proof that drives both sides cannot be carried anywhere.
-fn met_in_the_middle(steps: usize) -> String {
-    format!(
-        "it spends {} step(s) on the side it is not driving, so it takes the two together \
-         rather than one onto the other",
-        steps
-    )
-}
-
-/// How a goal was discharged — and **everything needed to check that it
-/// was**. A proof is not the prover's word for it: each rewriting variant
-/// carries the very [`Step`]s that landed, each definitional variant
-/// carries what re-performs it, and [`Proof::check`] walks the tree
-/// against the goal as stated, holding every step to
-/// [`rules::apply`](crate::kernel::rules::apply) again and every leaf to
-/// [`isomorphic`](graph::isomorphic) again. Finding and checking are
-/// different jobs; this is the artifact that keeps them apart.
+/// This is the kernel's judgement, and all of it. Every step re-applies
+/// through [`rules::apply`] — its match re-verified port by port, its two
+/// sides rebuilt from its payload — against the left side as the steps
+/// before it left it, and the graph that leaves is held to the right side
+/// by [`isomorphic`](graph::isomorphic), asked fresh. `Ok(())` means the
+/// claim closes by exactly these steps; an `Err` says where it does not,
+/// and whoever produced the run has a bug.
 ///
-/// [`summary`][Proof::summary] prints it one-line for the per-identity
-/// report.
-#[derive(Debug)]
-pub enum Proof {
-    /// The two sides are one graph — isomorphic as they stand.
-    Trivial,
-    /// A `lhs(…)`, `rhs(…)` or `both(…)` ran a graph tactic; the rewritten
-    /// goal closed. The steps each side spent are the record.
-    Rewrote {
-        side: &'static str,
-        lhs: Vec<Step>,
-        rhs: Vec<Step>,
-        sub: Box<Proof>,
-    },
-    /// An `inline` opened calls — every one, or the one sentence `target`
-    /// names — and the opened goal closed. Deterministic given the target,
-    /// so the checker re-performs it rather than trusting a transcript.
-    Inlined {
-        target: Option<SentenceIndex>,
-        name: Option<String>,
-        /// The opens each side spent, as the [`Rule::Open`](crate::kernel::rules::Rule::Open)
-        /// steps they are, so a proof can be carried as its rewrites.
-        lhs: Vec<Step>,
-        rhs: Vec<Step>,
-        sub: Box<Proof>,
-    },
-    /// A `by` **cited** another identity where its left side occurred, and
-    /// the goal that citation left closed.
-    ///
-    /// The one node whose claim this proof does not discharge. It records a
-    /// name and, per side, the [`Match`] saying where the cited claim's left
-    /// side sat — enough for [`check`](Proof::check) to rebuild that claim's
-    /// two graphs from the library, hold the match to
-    /// [`check_match`](crate::kernel::graph::check_match), and put the right side
-    /// down. What it does **not** do is ask whether the cited claim is true.
-    /// That is the corpus's job, and the corpus does it: every identity is
-    /// proved, the citation order is a DAG, and a claim that did not close
-    /// is never citable in the first place.
-    ///
-    /// So a `Proof` holding one of these stands **given the corpus** rather
-    /// than on its own, and [`cites`](Proof::cites) is how a caller reads
-    /// off exactly what that means for this one. The alternative — carrying
-    /// the cited proof's steps at every use site and re-checking them there
-    /// — is [`one_sided`](Proof::one_sided) and
-    /// [`transplant`](crate::kernel::rules::transplant), which is what
-    /// discharges a citation when something asks.
-    ///
-    /// The pair is rebuilt from the name rather than recorded beside it, on
-    /// purpose: a claim's sides are the library's to say, and a proof that
-    /// carried its own copy could carry a copy of something else. The
-    /// checker holds the library already — [`Proof::Inlined`] needs it too —
-    /// so there is nothing to gain by writing them down twice.
-    Cited {
-        of: IdentityIndex,
-        /// The name as written, for the report; the index is what is read.
-        name: String,
-        /// Where the cited claim's left side sat on the goal's left, if it
-        /// was spent there.
-        lhs: Option<Match>,
-        /// The same on the right.
-        rhs: Option<Match>,
-        sub: Box<Proof>,
-    },
-    /// A `symm` swapped the sides, and the swapped goal closed. It records
-    /// nothing but itself: the claim either way is the same one.
-    Swapped(Box<Proof>),
-    /// A `via` cut the goal at the waypoint; each half closed
-    /// independently, and the checker rebuilds both halves from the
-    /// waypoint the same way the prover did.
-    Cut {
-        waypoint: TermIndex,
-        left_sub: Box<Proof>,
-        right_sub: Box<Proof>,
-    },
-    /// A `select-same` split the goal at the branch its left side answers
-    /// with: `select(c, T, E) = B` became `T = B` and `E = B`, each closed
-    /// independently, and the law of the same name is what puts the two
-    /// back together — a branch both of whose blocks are `B` *is* `B`.
-    ///
-    /// Like [`Cut`](Proof::Cut), it records the two sub-proofs and nothing
-    /// else: the halves are [`blocks`]'s to rebuild, from the goal, the
-    /// same way the prover carved them, so the two cannot disagree about
-    /// what the split meant. A left side that no longer answers with one
-    /// `select` fails the check rather than being taken on the prover's
-    /// word.
-    SelectSame {
-        then_sub: Box<Proof>,
-        else_sub: Box<Proof>,
-    },
-    /// A `cases` expanded a boolean-valued wire — η, spent as the three
-    /// table rows it is — on each side that held one, and the expanded goal
-    /// closed. The per-side records hold the split(s) and, when the step
-    /// carried per-case sub-strategies, every step those landed inside the
-    /// arms, in order — all ordinary rewrites, replayed blind by the
-    /// checker. `splits` and `arms` are presentation only: how many
-    /// expansions fired, and how many rewrites each case's sub-strategy
-    /// spent (both sides summed), when arms were written.
-    Cases {
-        lhs: Vec<Step>,
-        rhs: Vec<Step>,
-        splits: usize,
-        arms: Option<(usize, usize)>,
-        sub: Box<Proof>,
-    },
-    /// A `diagram` drove both sides to fixpoint and they were one diagram.
-    /// The two drives are the record, and the isomorphism is asked again.
-    Diagram { lhs: Vec<Step>, rhs: Vec<Step> },
-}
-
-impl Proof {
-    /// Re-checks the whole proof against the goal it claims to close.
-    ///
-    /// Nothing here trusts the prover: recorded steps re-apply through
-    /// [`replay`] — every match re-verified port by port — definitional
-    /// moves (`inline`, the cut's alignment, the swap) are re-performed
-    /// from what the proof names, and every branch of the tree ends in an
-    /// [`isomorphic`](graph::isomorphic) that is asked fresh. `Ok(())`
-    /// means the claim closes by exactly what the proof says; an `Err`
-    /// says where it does not, and a prover that produced one has a bug.
-    pub fn check(&self, goal: Goal, ctx: &mut Context, library: &Library) -> Result<(), String> {
-        let mut goal = goal;
-        match self {
-            Proof::Trivial => {
-                if graph::isomorphic(&goal.lhs, &goal.rhs) {
-                    Ok(())
-                } else {
-                    Err("claimed trivial, and the sides are not one graph".to_string())
-                }
-            }
-            Proof::Rewrote { lhs, rhs, sub, .. } | Proof::Cases { lhs, rhs, sub, .. } => {
-                replay(&mut goal.lhs, lhs)
-                    .map_err(|e| format!("a recorded left step does not re-apply: {}", e))?;
-                replay(&mut goal.rhs, rhs)
-                    .map_err(|e| format!("a recorded right step does not re-apply: {}", e))?;
-                sub.check(goal, ctx, library)
-            }
-            Proof::Diagram { lhs, rhs } => {
-                replay(&mut goal.lhs, lhs)
-                    .map_err(|e| format!("a recorded left step does not re-apply: {}", e))?;
-                replay(&mut goal.rhs, rhs)
-                    .map_err(|e| format!("a recorded right step does not re-apply: {}", e))?;
-                if graph::isomorphic(&goal.lhs, &goal.rhs) {
-                    Ok(())
-                } else {
-                    Err("the recorded drives do not land on one diagram".to_string())
-                }
-            }
-            Proof::Inlined { target, sub, .. } => {
-                // Re-performed from the sentence rather than replayed from
-                // the record: an `Open` step's body is a payload, and a
-                // payload is what the library says it is, not what a
-                // proof says.
-                kernel::inline(&mut goal.lhs, ctx, library, *target)
-                    .map_err(|e| format!("the recorded inline does not re-open: {}", e))?;
-                kernel::inline(&mut goal.rhs, ctx, library, *target)
-                    .map_err(|e| format!("the recorded inline does not re-open: {}", e))?;
-                sub.check(goal, ctx, library)
-            }
-            Proof::Cited {
-                of,
-                name,
-                lhs,
-                rhs,
-                sub,
-            } => {
-                // Rebuilt, not read off the proof: what a name means is the
-                // library's to say.
-                let cited = Goal::of_identity(ctx, library, *of)
-                    .map_err(|e| format!("the cited identity {} does not build: {}", name, e))?;
-                let pair = Pair::new(cited.lhs, cited.rhs)
-                    .map_err(|e| format!("the cited identity {} is no pair: {}", name, e))?;
-                for (at, side) in [(lhs, true), (rhs, false)] {
-                    let Some(at) = at else { continue };
-                    let host = if side { &mut goal.lhs } else { &mut goal.rhs };
-                    pair.apply(host, Direction::Forward, at).map_err(|e| {
-                        format!(
-                            "the recorded citation of {} does not apply to the {}: {}",
-                            name,
-                            if side { "left" } else { "right" },
-                            e
-                        )
-                    })?;
-                }
-                sub.check(goal, ctx, library)
-            }
-            Proof::Swapped(sub) => {
-                let swapped = Goal {
-                    lhs: goal.rhs,
-                    rhs: goal.lhs,
-                };
-                sub.check(swapped, ctx, library)
-            }
-            Proof::Cut {
-                waypoint,
-                left_sub,
-                right_sub,
-            } => {
-                let (lhs, stone) = against(ctx, &goal.lhs, *waypoint);
-                left_sub
-                    .check(Goal { lhs, rhs: stone }, ctx, library)
-                    .map_err(|e| format!("in the left half of the cut: {}", e))?;
-                let (rhs, stone) = against(ctx, &goal.rhs, *waypoint);
-                right_sub
-                    .check(Goal { lhs: stone, rhs }, ctx, library)
-                    .map_err(|e| format!("in the right half of the cut: {}", e))
-            }
-            Proof::SelectSame { then_sub, else_sub } => {
-                let Some((then, els)) = blocks(&goal.lhs) else {
-                    return Err(
-                        "claimed a `select-same` split, and the left side does not answer \
-                         with one branch"
-                            .to_string(),
-                    );
-                };
-                then_sub
-                    .check(
-                        Goal {
-                            lhs: then,
-                            rhs: goal.rhs.clone(),
-                        },
-                        ctx,
-                        library,
-                    )
-                    .map_err(|e| format!("in the branch's then block: {}", e))?;
-                else_sub
-                    .check(
-                        Goal {
-                            lhs: els,
-                            rhs: goal.rhs,
-                        },
-                        ctx,
-                        library,
-                    )
-                    .map_err(|e| format!("in the branch's else block: {}", e))
+/// One payload is held to something beyond its own shape. A
+/// [`Rule::Open`] carries the body it opens a call to, and a body is what
+/// the library says it is: each one is rebuilt from the sentence it names
+/// and must be that program, or the step is refused before it is spent.
+/// Nothing else in a run refers to anything outside the run.
+pub fn certify(
+    goal: &Goal,
+    run: &[Step],
+    ctx: &mut Context,
+    library: &Library,
+) -> Result<(), String> {
+    let mut lhs = goal.lhs.clone();
+    for (i, step) in run.iter().enumerate() {
+        if let Rule::Open { target, body } = &step.rule {
+            let sentence = lower(ctx, library, *target).map_err(|e| {
+                format!(
+                    "step {}: {} does not lower: {}",
+                    i + 1,
+                    library.names[*target],
+                    e
+                )
+            })?;
+            if *body != kernel::build(ctx, sentence) {
+                return Err(format!(
+                    "step {}: opens {} to a body that is not its own",
+                    i + 1,
+                    library.names[*target]
+                ));
             }
         }
+        rules::apply(&mut lhs, step)
+            .map_err(|e| format!("step {} does not apply: {}", i + 1, e))?;
     }
-
-    /// The run this proof spends driving the claim's left side onto its
-    /// right, or why it is not one.
-    ///
-    /// What [`transplant`](crate::kernel::rules::transplant) needs to
-    /// carry a proved identity into another goal: a flat list of ordinary
-    /// rewrites taking one side of the claim to the other. A proof that
-    /// closes by driving the left onto the right is already that list, with
-    /// the tree flattened away.
-    ///
-    /// A `symm` costs nothing here. It swaps which side of the *goal* the
-    /// steps after it act on, and the claim is untouched — so what a run
-    /// looks for swaps with it, and `symm rhs(…) rhs(…)` is the same run
-    /// spelled from the other end.
-    ///
-    /// Two shapes still refuse, and both refuse for want of one thing —
-    /// a **join**, the isomorphism between what one run landed on and where
-    /// the next was written to start:
-    ///
-    /// - **A step on the other side.** The runs are `A ⟶ M` and `B ⟶ M'`
-    ///   meeting in the middle, so `A ⟶ B` is the first, then the second
-    ///   backwards, rebased through `M ≅ M'`.
-    /// - **`via`.** The halves really do compose — `A ⟶ C` then `C ⟶ B` —
-    ///   but the waypoint is *rebuilt* for each half, so what the left run
-    ///   lands on is only isomorphic to the graph the right run names. Same
-    ///   join, no inversion.
-    ///
-    /// And one refuses for a different reason:
-    ///
-    /// - **`inline`.** An open *is* a rewrite — one call's window against
-    ///   its body's graph, which is exactly how
-    ///   [`inline`](crate::kernel::inline) performs it. What it is not is
-    ///   a recorded [`Step`]: [`sides`](crate::kernel::rules::sides) has
-    ///   no library to build a body from, so nothing in the table can state
-    ///   an open, and [`Proof::Inlined`] therefore records the *sentence*
-    ///   and re-performs the open rather than carrying a transcript. So
-    ///   what there is to carry is a whole-graph operation rather than a
-    ///   window's worth of steps, and the honest fix today is to state the
-    ///   opened form as its own identity.
-    pub fn one_sided(&self) -> Result<Vec<Step>, String> {
-        self.run_on(Side::Left)
-    }
-
-    /// [`one_sided`](Proof::one_sided), tracking which side of the *goal*
-    /// the claim's left has become. Every `symm` flips it, and nothing else
-    /// touches it.
-    fn run_on(&self, side: Side) -> Result<Vec<Step>, String> {
-        match self {
-            Proof::Trivial => Ok(Vec::new()),
-            Proof::Rewrote { lhs, rhs, sub, .. } | Proof::Cases { lhs, rhs, sub, .. } => {
-                let (driven, other) = side.of(lhs, rhs);
-                if !other.is_empty() {
-                    return Err(met_in_the_middle(other.len()));
-                }
-                let mut run = driven.to_vec();
-                run.extend(sub.run_on(side)?);
-                Ok(run)
-            }
-            Proof::Diagram { lhs, rhs } => {
-                let (driven, other) = side.of(lhs, rhs);
-                if !other.is_empty() {
-                    return Err(met_in_the_middle(other.len()));
-                }
-                Ok(driven.to_vec())
-            }
-            // The claim is the same claim either way round; what moved is
-            // which side of the goal it is written on.
-            Proof::Swapped(sub) => sub.run_on(side.flipped()),
-            Proof::Cited { name, .. } => Err(format!(
-                "it cites {}, and a citation is one rewrite by that claim rather than the \
-                 steps behind it: expand it first, or carry it as the citation it is",
-                name
-            )),
-            Proof::Inlined { .. } => Err(
-                "it opens calls across the whole graph rather than inside a window, and \
-                 records the sentence rather than the steps, so there is nothing localized \
-                 to carry: state the opened form as its own identity and prove that"
-                    .to_string(),
-            ),
-            Proof::Cut { .. } => Err(
-                "it cuts at a waypoint, and the waypoint is rebuilt for each half, so the two \
-                 halves do not meet on the nose"
-                    .to_string(),
-            ),
-            Proof::SelectSame { .. } => Err(
-                "it splits the branch its left side answers with, and the two blocks' runs \
-                 sit under a `select` rather than one after the other, so there is no single \
-                 run to carry"
-                    .to_string(),
-            ),
-        }
-    }
-
-    /// Every identity this proof **leans on** rather than discharges.
-    ///
-    /// A [`Cited`](Proof::Cited) node is checked against the claim it names
-    /// without asking whether that claim holds, so a proof holding one is
-    /// conditional. This is the condition, read off the tree — what a corpus
-    /// needs in order to say that a run of proofs adds up to more than each
-    /// of them separately.
-    pub fn cites(&self, out: &mut Vec<IdentityIndex>) {
-        match self {
-            Proof::Trivial | Proof::Diagram { .. } => {}
-            Proof::Cited { of, sub, .. } => {
-                if !out.contains(of) {
-                    out.push(*of);
-                }
-                sub.cites(out);
-            }
-            Proof::Rewrote { sub, .. } | Proof::Cases { sub, .. } | Proof::Inlined { sub, .. } => {
-                sub.cites(out)
-            }
-            Proof::Swapped(sub) => sub.cites(out),
-            Proof::Cut {
-                left_sub,
-                right_sub,
-                ..
-            } => {
-                left_sub.cites(out);
-                right_sub.cites(out);
-            }
-            Proof::SelectSame { then_sub, else_sub } => {
-                then_sub.cites(out);
-                else_sub.cites(out);
-            }
-        }
-    }
-
-    /// One line saying how the goal closed, for the per-identity report.
-    pub fn summary(&self) -> String {
-        match self {
-            Proof::Trivial => "the two sides are one graph".to_string(),
-            Proof::Rewrote {
-                side,
-                lhs,
-                rhs,
-                sub,
-            } => format!(
-                "{}: {} rewrite(s); {}",
-                side,
-                lhs.len() + rhs.len(),
-                sub.summary()
-            ),
-            Proof::Inlined { name, sub, .. } => match name {
-                None => format!("inline; {}", sub.summary()),
-                Some(name) => format!("inline {}; {}", name, sub.summary()),
-            },
-            Proof::Cited { name, sub, .. } => format!("by {}; {}", name, sub.summary()),
-            Proof::Swapped(sub) => format!("symm; {}", sub.summary()),
-            Proof::Cut {
-                left_sub,
-                right_sub,
-                ..
-            } => format!(
-                "cut (left: {}; right: {})",
-                left_sub.summary(),
-                right_sub.summary()
-            ),
-            Proof::SelectSame { then_sub, else_sub } => format!(
-                "select-same (then: {}; else: {})",
-                then_sub.summary(),
-                else_sub.summary()
-            ),
-            Proof::Cases {
-                splits, arms, sub, ..
-            } => match arms {
-                None => format!("cases: {} split(s); {}", splits, sub.summary()),
-                Some((t, e)) => format!(
-                    "cases: {} split(s) (true: {} rewrite(s); false: {} rewrite(s)); {}",
-                    splits,
-                    t,
-                    e,
-                    sub.summary()
-                ),
-            },
-            Proof::Diagram { .. } => "the two sides are one diagram".to_string(),
-        }
-    }
-}
-
-/// A goal's side and a waypoint, brought to one arity: the narrower is
-/// padded — the term with [`Context::under`] before it builds, the graph
-/// with [`graph::under`] — and the waypoint comes back as a graph. Both
-/// the prover's `via` and the checker's re-walk of a [`Proof::Cut`] build
-/// their halves here, so the two cannot disagree about what a cut means.
-pub(crate) fn against(ctx: &mut Context, side: &Graph, waypoint: TermIndex) -> (Graph, Graph) {
-    let (ga, wa) = (side.arity(), ctx.arity(waypoint));
-    if wa.inputs < ga.inputs {
-        let padded = ctx.under(waypoint, ga.inputs - wa.inputs);
-        (side.clone(), kernel::build(ctx, padded))
+    if graph::isomorphic(&lhs, &goal.rhs) {
+        Ok(())
     } else {
-        (
-            graph::under(side, wa.inputs - ga.inputs),
-            kernel::build(ctx, waypoint),
-        )
-    }
-}
-
-/// The two graphs a side that **answers with one branch** is: the same
-/// side reading the `select`s' `then` blocks for its outputs, and the same
-/// side reading their `else` blocks.
-///
-/// A branch is a `select` per answer, so a side answering with one is a
-/// `select` per boundary output, every one of them turning on the same
-/// wire. That is what this asks for, and `None` where it does not hold: an
-/// output that is not a select's answer, or a select turning on some other
-/// condition, is a side answering with something besides the branch, and
-/// the law has nothing to say about it.
-///
-/// Nothing is deleted to carve a block out: closing the graph on the
-/// blocks' sources leaves the condition — and the other blocks — boxes no
-/// boundary output reaches, which is the whole of what discarding means
-/// here. Both the prover's `select-same` step and the checker's re-walk of
-/// a [`Proof::SelectSame`] carve their halves here, so the two cannot
-/// disagree about what the split meant.
-pub(crate) fn blocks(side: &Graph) -> Option<(Graph, Graph)> {
-    let outputs = side.outputs().to_vec();
-    if outputs.is_empty() {
-        return None;
-    }
-    let mut selects: Vec<NodeId> = Vec::with_capacity(outputs.len());
-    let mut cond: Option<Source> = None;
-    for out in outputs {
-        let Source::Port { node, port: 0 } = out else {
-            return None;
-        };
-        if !matches!(side.kind(node), NodeKind::Select) {
-            return None;
-        }
-        // One branch, not several: every answer turns on the one wire.
-        let turns_on = side.sources(node)[0];
-        if *cond.get_or_insert(turns_on) != turns_on {
-            return None;
-        }
-        selects.push(node);
-    }
-    // Input 0 is the condition, 1 the `then` block and 2 the `else` — the
-    // wiring [`NodeKind::Select`] states.
-    let block =
-        |which: usize| -> Vec<Source> { selects.iter().map(|&n| side.sources(n)[which]).collect() };
-    let mut then = side.clone();
-    then.close(block(1));
-    let mut els = side.clone();
-    els.close(block(2));
-    Some((then, els))
-}
-
-/// What is left when a goal did not close: what each side became, as the
-/// graphs the tactics left.
-///
-/// A graph is what there is to read: it is what a step acted on, it carries
-/// the boxes a next step would name, and a box's id is stable across a step
-/// so two reports of one proof can be compared. There is no term here — the
-/// translation runs one way, and a graph is answered by naming its boxes,
-/// not by being spelled back out.
-///
-/// This output is the deliverable of a failed run — it is what says what to
-/// try next, so it is kept as data rather than printed on the spot.
-#[derive(Debug)]
-pub struct Residual {
-    /// The two sides as they stand, which is what the report *shows*: a
-    /// graph is what the tactics act on, and a box in one has a name that
-    /// survives a step, so two of these compare. See
-    /// [`render`](crate::render).
-    pub lhs_graph: Graph,
-    pub rhs_graph: Graph,
-    /// How the report walked from the goal as stated to the one that stuck:
-    /// each step of the strategy that holds it, outermost first.
-    pub path: Vec<String>,
-    /// Why the step gave up.
-    pub stopped: String,
-}
-
-/// The answer for one goal.
-#[derive(Debug)]
-pub enum Outcome {
-    Closed(Proof),
-    Stuck(Residual),
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// What a lemma has to be for [`Proof::one_sided`] to answer, and what
-    /// each refusal says.
-    #[test]
-    fn only_a_run_from_one_side_to_the_other_can_be_carried() {
-        // Nothing to do at all is a run of no steps.
-        assert_eq!(Proof::Trivial.one_sided(), Ok(Vec::new()));
-
-        // The other side untouched is the shape a lemma is written in, and
-        // the tree flattens to the steps the driven side spent, in order.
-        let left_only = Proof::Rewrote {
-            side: "lhs",
-            lhs: vec![countable()],
-            rhs: Vec::new(),
-            sub: Box::new(Proof::Diagram {
-                lhs: vec![countable()],
-                rhs: Vec::new(),
-            }),
-        };
-        assert_eq!(left_only.one_sided().map(|run| run.len()), Ok(2));
-
-        // A drive that met in the middle is two runs, not one.
-        let met = Proof::Diagram {
-            lhs: Vec::new(),
-            rhs: vec![countable()],
-        };
-        let why = met.one_sided().unwrap_err();
-        assert!(
-            why.contains("1 step(s) on the side it is not driving"),
-            "{}",
-            why
-        );
-
-        // Neither an `inline` nor a `via` leaves steps that compose.
-        let opened = Proof::Inlined {
-            target: None,
-            name: None,
-            lhs: Vec::new(),
-            rhs: Vec::new(),
-            sub: Box::new(Proof::Trivial),
-        };
-        assert!(
-            opened
-                .one_sided()
-                .unwrap_err()
-                .contains("nothing localized to carry")
-        );
-    }
-
-    /// A citation is the one thing a proof leans on rather than discharges,
-    /// so it is the one thing a caller has to be able to read off the tree.
-    #[test]
-    fn what_a_proof_leans_on_is_readable_from_it() {
-        let cite = |of: usize, sub| Proof::Cited {
-            of: IdentityIndex::from(of),
-            name: format!("#{}", of),
-            lhs: None,
-            rhs: None,
-            sub: Box::new(sub),
-        };
-        let mut leans_on = Vec::new();
-        Proof::Trivial.cites(&mut leans_on);
-        assert!(
-            leans_on.is_empty(),
-            "a proof that cites nothing leans on nothing"
-        );
-
-        // Nested, through the shapes that carry sub-proofs, and each named
-        // once however often it is spent.
-        let proof = Proof::Swapped(Box::new(Proof::Cut {
-            waypoint: crate::kernel::term::TermIndex::from(0),
-            left_sub: Box::new(cite(1, cite(2, Proof::Trivial))),
-            right_sub: Box::new(cite(1, Proof::Trivial)),
-        }));
-        let mut leans_on = Vec::new();
-        proof.cites(&mut leans_on);
-        assert_eq!(
-            leans_on,
-            vec![IdentityIndex::from(1), IdentityIndex::from(2)]
-        );
-
-        // And a citation is not a run: spending one is a rewrite by the
-        // claim, not the argument behind it.
-        assert!(
-            cite(1, Proof::Trivial)
-                .one_sided()
-                .unwrap_err()
-                .contains("citation is one rewrite by that claim")
-        );
-    }
-
-    /// A `symm` moves which side of the goal the claim's left side is, and
-    /// costs the run nothing: the same proof written from the other end is
-    /// the same run.
-    #[test]
-    fn a_swap_is_free() {
-        let forwards = Proof::Rewrote {
-            side: "lhs",
-            lhs: vec![countable()],
-            rhs: Vec::new(),
-            sub: Box::new(Proof::Trivial),
-        };
-        let backwards = Proof::Swapped(Box::new(Proof::Rewrote {
-            side: "rhs",
-            lhs: Vec::new(),
-            rhs: vec![countable()],
-            sub: Box::new(Proof::Trivial),
-        }));
-        assert_eq!(forwards.one_sided(), backwards.one_sided());
-        assert_eq!(backwards.one_sided().map(|run| run.len()), Ok(1));
-
-        // And it is the *swap* that moves, not the reading: under one
-        // `symm`, steps on the goal's left are steps on the claim's right.
-        let wrong_end = Proof::Swapped(Box::new(Proof::Rewrote {
-            side: "lhs",
-            lhs: vec![countable()],
-            rhs: Vec::new(),
-            sub: Box::new(Proof::Trivial),
-        }));
-        assert!(
-            wrong_end
-                .one_sided()
-                .unwrap_err()
-                .contains("side it is not driving")
-        );
-
-        // Two swaps are the identity on the reading, as they are on the goal.
-        let twice = Proof::Swapped(Box::new(Proof::Swapped(Box::new(Proof::Rewrote {
-            side: "lhs",
-            lhs: vec![countable()],
-            rhs: Vec::new(),
-            sub: Box::new(Proof::Trivial),
-        }))));
-        assert_eq!(twice.one_sided().map(|run| run.len()), Ok(1));
-    }
-
-    /// A step whose only job is to be counted — `one_sided` moves steps
-    /// around and never reads inside one.
-    fn countable() -> Step {
-        use crate::kernel::graph::{Direction, Match};
-        use crate::kernel::rules::Rule;
-        Step {
-            rule: Rule::EqualRefl,
-            dir: Direction::Forward,
-            at: Match {
-                nodes: Vec::new(),
-                inputs: Vec::new(),
-                sel: None,
-            },
-        }
+        Err("the run does not land on the right side".to_string())
     }
 }

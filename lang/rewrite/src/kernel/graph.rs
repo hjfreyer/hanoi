@@ -897,9 +897,14 @@ impl Graph {
         &mut self,
         sigma: &HashMap<Source, Source>,
         over: &HashMap<Sink, Source>,
+        follow: Option<&HashSet<Sink>>,
     ) -> HashMap<NodeId, NodeId> {
         let mut map = sigma.clone();
         let mut moved: HashMap<NodeId, NodeId> = HashMap::new();
+        // A reading follows a rebuilt box only inside the stated region;
+        // `over` says its piece regardless, since that is the reader the
+        // step itself named.
+        let follows = |sink: Sink| follow.is_none_or(|region| region.contains(&sink));
         // `live` is already id order, which is producers first.
         let here: Vec<NodeId> = self.live().map(|(id, _)| id).collect();
         for id in here {
@@ -909,8 +914,9 @@ impl Graph {
                 .iter()
                 .enumerate()
                 .map(|(port, src)| {
-                    over.get(&Sink::Port { node: id, port })
-                        .or_else(|| map.get(src))
+                    let sink = Sink::Port { node: id, port };
+                    over.get(&sink)
+                        .or_else(|| follows(sink).then(|| map.get(src)).flatten())
                         .copied()
                         .unwrap_or(*src)
                 })
@@ -936,7 +942,7 @@ impl Graph {
             .enumerate()
             .map(|(i, src)| {
                 over.get(&Sink::Output(i))
-                    .or_else(|| map.get(src))
+                    .or_else(|| follows(Sink::Output(i)).then(|| map.get(src)).flatten())
                     .copied()
                     .unwrap_or(*src)
             })
@@ -1319,13 +1325,24 @@ impl Pair {
         // or, under a selection, this reader of it and no other.
         let mut sigma: HashMap<Source, Source> = HashMap::new();
         let mut over: HashMap<Sink, Source> = HashMap::new();
+        // Who is moved, written down before anything moves: under a
+        // selection, exactly the readers it names; without one, every
+        // reader the value has now. This is what the way back re-points,
+        // and it is stated rather than left to "every reader" because a
+        // value can have readers the rewrite never touched — the readers
+        // the *replacement* already had, when it stood in the graph before
+        // — and an undo that swept those up too would land somewhere the
+        // step never started from.
+        let mut taken: Vec<Vec<Sink>> = Vec::with_capacity(pattern.outputs.len());
         match &at.sel {
             None => {
                 for (j, &src) in pattern.outputs.iter().enumerate() {
                     let key = image(src);
                     if key == leaves[j] {
+                        taken.push(Vec::new());
                         continue;
                     }
+                    taken.push(graph.sinks(key));
                     match sigma.insert(key, leaves[j]) {
                         Some(other) if other != leaves[j] => return Err(Mismatch::Conflict(key)),
                         _ => {}
@@ -1336,8 +1353,10 @@ impl Pair {
                 for (j, &src) in pattern.outputs.iter().enumerate() {
                     let key = image(src);
                     if key == leaves[j] {
+                        taken.push(Vec::new());
                         continue;
                     }
+                    taken.push(sel[j].clone());
                     for &sink in &sel[j] {
                         match over.insert(sink, leaves[j]) {
                             Some(other) if other != leaves[j] => return Err(Mismatch::Torn(sink)),
@@ -1347,29 +1366,37 @@ impl Pair {
                 }
             }
         }
-        let moved = graph.substitute(&sigma, &over);
+        let follow: Option<HashSet<Sink>> = at
+            .follow
+            .as_ref()
+            .map(|region| region.iter().copied().collect());
+        let moved = graph.substitute(&sigma, &over, follow.as_ref());
+        let rebuilt = |sink: Sink| match sink {
+            Sink::Port { node, port } => Sink::Port {
+                node: moved.get(&node).copied().unwrap_or(node),
+                port,
+            },
+            boundary => boundary,
+        };
 
         Ok(Match {
             nodes: fresh,
             inputs: at.inputs.clone(),
             // The way back re-points the same readers, found where the
-            // sweep rebuilt them.
-            sel: at.sel.as_ref().map(|sel| {
-                sel.iter()
-                    .map(|sinks| {
-                        sinks
-                            .iter()
-                            .map(|&sink| match sink {
-                                Sink::Port { node, port } => Sink::Port {
-                                    node: moved.get(&node).copied().unwrap_or(node),
-                                    port,
-                                },
-                                boundary => boundary,
-                            })
-                            .collect()
-                    })
-                    .collect()
-            }),
+            // sweep rebuilt them — and no other, so that applying it is
+            // exactly undoing.
+            sel: Some(
+                taken
+                    .iter()
+                    .map(|sinks| sinks.iter().map(|&sink| rebuilt(sink)).collect())
+                    .collect(),
+            ),
+            // The same region, found where the sweep rebuilt it, so the
+            // way back propagates exactly as far as the way there did.
+            follow: at
+                .follow
+                .as_ref()
+                .map(|region| region.iter().map(|&sink| rebuilt(sink)).collect()),
         })
     }
 }
@@ -1410,6 +1437,17 @@ pub struct Match {
     /// a stated choice, checked reader by reader: each named sink must
     /// read the very port the selection says it leaves.
     pub sel: Option<Vec<Vec<Sink>>>,
+    /// Which readings **follow** a box rebuilt on the way. A rewrite
+    /// re-points the readers of the value it replaces, and every box
+    /// rebuilt to read the new value is a new box, whose own readers are
+    /// rebuilt in turn: `None` lets that run to every reader, which is
+    /// what a substitution always meant. `Some` is a stated region — a
+    /// reading not in it keeps the box it read, even when that box was
+    /// rebuilt for a reading that is in it. What lets two blocks of one
+    /// branch each rewrite a box they share for itself: the box is one
+    /// value in the graph only because it is named by what it computes,
+    /// and each block's readers may come to read a different one.
+    pub follow: Option<Vec<Sink>>,
 }
 
 impl Match {
@@ -1443,6 +1481,18 @@ impl Match {
                                 boundary => boundary,
                             })
                             .collect()
+                    })
+                    .collect()
+            }),
+            follow: self.follow.as_ref().map(|follow| {
+                follow
+                    .iter()
+                    .map(|&sink| match sink {
+                        Sink::Port { node, port } => Sink::Port {
+                            node: now(node),
+                            port,
+                        },
+                        boundary => boundary,
                     })
                     .collect()
             }),
@@ -1521,6 +1571,10 @@ impl Embedding {
                         .map(|sinks| sinks.iter().map(|&s| sink(s)).collect::<Option<_>>())
                         .collect::<Option<_>>()?,
                 ),
+            },
+            follow: match &at.follow {
+                None => None,
+                Some(follow) => Some(follow.iter().map(|&s| sink(s)).collect::<Option<_>>()?),
             },
         })
     }
@@ -1903,6 +1957,7 @@ impl Search<'_> {
             nodes,
             inputs,
             sel: None,
+            follow: None,
         };
         if check_match(self.graph, self.pattern, &found).is_ok() && !self.found.contains(&found) {
             self.found.push(found);
@@ -2033,6 +2088,36 @@ mod tests {
 
         let (_t, other) = built("push 1 push 3 add");
         assert!(align(&tail, &other).is_none(), "a different program");
+    }
+
+    /// The step [`Pair::apply`] hands back undoes exactly what it did — and
+    /// no more. The trap: a replacement that *already stood* in the graph,
+    /// with readers of its own. Undoing by "every reader of the value"
+    /// would sweep those readers up too and land somewhere the step never
+    /// started from; the way back names the readers it moved instead.
+    #[test]
+    fn the_way_back_moves_only_what_went() {
+        // `as_bool x` stands, read by output 0; `not not x` is output 1.
+        // `not-not` rewrites the latter *onto* the former, so afterwards
+        // one box answers both outputs.
+        let (_t, before) = built("pick 0 as_bool swap not not");
+        let pair = crate::kernel::rules::sides(&crate::kernel::rules::Rule::NotNot).unwrap();
+        let found = pair.find(&before, Direction::Forward);
+        assert_eq!(found.len(), 1);
+        let mut host = before.clone();
+        let back = pair
+            .apply(&mut host, Direction::Forward, &found[0])
+            .unwrap();
+        assert_eq!(host.outputs()[0], host.outputs()[1], "one box, two outputs");
+        assert_eq!(
+            back.sel.as_deref(),
+            Some(&[vec![Sink::Output(1)]][..]),
+            "the way back names the one reader that moved"
+        );
+
+        // Undone, output 1 reads `not not` again and output 0 is untouched.
+        pair.apply(&mut host, Direction::Backward, &back).unwrap();
+        assert!(isomorphic(&host, &before), "\n{}\n{}", host, before);
     }
 
     #[test]
@@ -2275,6 +2360,7 @@ mod tests {
             nodes: vec![push],
             inputs: host.sources(add).to_vec(),
             sel: None,
+            follow: None,
         };
         let mut spoiled = host.clone();
         assert_eq!(
@@ -2288,6 +2374,7 @@ mod tests {
             nodes: vec![add, add],
             inputs: host.sources(add).to_vec(),
             sel: None,
+            follow: None,
         };
         let mut spoiled = host.clone();
         assert_eq!(
@@ -2335,6 +2422,7 @@ mod tests {
             ],
             inputs: vec![Source::Input(0)],
             sel: None,
+            follow: None,
         };
         let back = pair
             .apply(&mut host, Direction::Forward, &at)
@@ -2393,6 +2481,7 @@ mod tests {
             nodes: Vec::new(),
             inputs: vec![Source::Input(0), Source::Input(1)],
             sel: None,
+            follow: None,
         };
         let back = pair
             .apply(&mut host, Direction::Backward, &at)
@@ -2459,6 +2548,7 @@ mod tests {
                 node: reader,
                 port: 0,
             }]]),
+            follow: None,
         };
         let back = pair
             .apply(&mut host, Direction::Forward, &at)
@@ -2502,6 +2592,7 @@ mod tests {
             nodes: Vec::new(),
             inputs: vec![Source::Input(0)],
             sel: Some(vec![vec![Sink::Output(1)]]),
+            follow: None,
         };
         let back = pair
             .apply(&mut host, Direction::Forward, &at)
@@ -2549,6 +2640,7 @@ mod tests {
                 nodes: Vec::new(),
                 inputs: vec![Source::Input(0)],
                 sel: Some(sel),
+                follow: None,
             };
             assert_eq!(pair.apply(&mut spoiled, Direction::Forward, &at), Err(why));
             assert_eq!(spoiled, host, "a refusal changes nothing");
@@ -2600,6 +2692,7 @@ mod tests {
             nodes: Vec::new(),
             inputs: vec![Source::Input(0)],
             sel: Some(vec![vec![torn], vec![torn]]),
+            follow: None,
         };
         assert_eq!(
             split.apply(&mut spoiled, Direction::Forward, &at),
@@ -2651,6 +2744,7 @@ mod tests {
             nodes: vec![NodeId::at(7)],
             inputs: vec![Source::Input(3)],
             sel: None,
+            follow: None,
         });
         assert_eq!(carried.node(NodeId::at(0)), Some(NodeId::at(7)));
         assert_eq!(carried.node(NodeId::at(1)), None);
@@ -2659,6 +2753,7 @@ mod tests {
             nodes: vec![NodeId::at(1)],
             inputs: vec![Source::Input(0)],
             sel: None,
+            follow: None,
         };
         assert_eq!(carried.carry(&stranger), None, "box 1 is not covered");
     }
