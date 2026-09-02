@@ -23,8 +23,8 @@ use std::path::Path;
 use bytecode::{IdentityIndex, Library, SourceMap, assemble_source};
 
 use crate::hant::{Body, ProofEntry, Step, Strategy, parse_hant};
+use crate::kernel::term::Context;
 use crate::parse::{Scope, parse_term, sentence_named};
-use crate::term::Context;
 
 /// A loaded corpus: the compiled library, the arena its waypoints were read
 /// into, the proofs that attached, and the entries that could not attach.

@@ -46,14 +46,18 @@ from a log file, so `--color | less -R` is how a long residual is read.
 
 ## The pieces
 
-Four layers, in `lang/rewrite/src/`:
+Four layers, in `lang/rewrite/src/`. The line between the first two and
+the last two is the **trust boundary**: everything under `kernel/` is
+what a proof's truth rests on, so a bug there could let a false identity
+through; everything outside it only ever finds a step, and a bug there
+produces a step the kernel refuses or a proof that fails to check.
 
 | layer | module | what it does |
 |---|---|---|
 | proofs | `hant.rs`, `corpus.rs`, `parse.rs` | the strategy language a proof is written in, the loader that attaches each `.hant` entry to the identity it names — ordering them, since `by name` cites another identity and needs it proved first — and the reader that turns a waypoint's text into a term |
-| goals | `goal.rs`, `strategy.rs` | a goal is two [graphs](../lang/rewrite/src/graph.rs), lowered and padded to one arity before they build; the interpreter runs a strategy over one |
-| engine | `diagram2/` | the literal translation of a term into a graph, the law table (`rules.rs`), the tactic language that drives it (`tactic.rs`, see [docs/tactics.md](tactics.md)), and the listing a stuck graph is read as (`render.rs`) |
-| graphs | `graph.rs` | boxes and the links between them, well-formedness, the isomorphism that says two graphs are one diagram, and the rewrite itself — a `Pair` of graphs spliced in at a checked `Match` |
+| driving | `strategy.rs`, `tactic.rs`, `query.rs`, `render.rs` | the interpreter that runs a strategy over a goal, the tactic language that drives the table (see [docs/tactics.md](tactics.md)), the queries a tactic points with, and the listing a stuck graph is read as |
+| kernel | `kernel/goal.rs`, `kernel/mod.rs`, `kernel/rules.rs` | a goal is two [graphs](../lang/rewrite/src/kernel/graph.rs), lowered and padded to one arity before they build, and a proof is the checked record of how it closed; `mod.rs` is the literal translation of a term into a graph and the opening of a call in place; `rules.rs` is the law table, and `apply` the one way a graph is rewritten |
+| graphs | `kernel/graph.rs`, `kernel/term.rs` | boxes and the links between them, well-formedness, the isomorphism that says two graphs are one diagram, and the rewrite itself — a `Pair` of graphs spliced in at a checked `Match`; and the term model a claim is stated over |
 
 A program in the engine is a **literal** graph: one box per term leaf —
 `id`, `swap`, `copy` and `drop` included — and a branch as a `select`
@@ -432,7 +436,7 @@ is named by what it computes, so two reports of one proof compare, which is what
 proof means. On a terminal each line's address is printed with its
 shortest telling prefix in bold, and every reference to a box is that
 prefix; a piped run gets the letters and no escapes. Three things keep a large listing legible, each stated in
-`lang/rewrite/src/diagram2/render.rs`: branch membership is *computed*
+`lang/rewrite/src/render.rs`: branch membership is *computed*
 (upstream of the select's blocks, less what feeds its condition, less
 whatever something outside reads) rather than guessed from what sits
 between two lines; the order stays inside a branch once it

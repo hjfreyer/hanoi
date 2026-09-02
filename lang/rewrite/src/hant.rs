@@ -11,7 +11,7 @@
 //! ```
 //!
 //! A strategy is a run of steps, juxtaposed, acting on **one goal** — two
-//! [graphs](crate::diagram2) of one arity, claimed to be the same program.
+//! [graphs](crate::kernel::graph) of one arity, claimed to be the same program.
 //! The manipulations transform it; a splitter replaces it with independent
 //! subgoals, each carrying its own strategy; `diagram` closes it, and a
 //! goal whose sides have become one diagram — isomorphic — closes on its
@@ -44,9 +44,9 @@
 //! ## Citing one claim in another
 //!
 //! `lhs(by identities::a_lemma)` is how a proof uses a proof. It is one
-//! rewrite by the claim named — its two sides are a [`Pair`](crate::graph::Pair) like the
+//! rewrite by the claim named — its two sides are a [`Pair`](crate::kernel::graph::Pair) like the
 //! table's own rows, the match is held to
-//! [`check_match`](crate::graph::check_match) like any other, and what the
+//! [`check_match`](crate::kernel::graph::check_match) like any other, and what the
 //! checker re-derives is the claim's two graphs, from the library, by name.
 //!
 //! What it does **not** check is whether that claim is true. It is a
@@ -57,7 +57,7 @@
 //!
 //! That is a real change in what a single proof means. A `Proof` holding a
 //! citation stands **given the corpus** rather than on its own, and
-//! [`Proof::cites`](crate::goal::Proof::cites) is how a caller reads off
+//! [`Proof::cites`](crate::kernel::goal::Proof::cites) is how a caller reads off
 //! exactly which claims that is. It is the ordinary bargain of a proof
 //! library, and it is worth naming rather than assuming.
 //!
@@ -78,12 +78,12 @@
 //! ([`Citing::Expanded`](crate::strategy::Citing)) spends every `by` in
 //! full instead: the cited proof's own steps, carried into this goal
 //! through the embedding of its left side —
-//! [`transplant`](crate::diagram2::rules::transplant) — and re-checked here
+//! [`transplant`](crate::kernel::rules::transplant) — and re-checked here
 //! as ordinary rewrites, with no citation left in the record. That is what
 //! a citation *means*, and running it is what says the shorthand was
 //! honest. It asks more of the cited proof than citing does: it has to be a
 //! run from one side of its claim to the other, which
-//! [`one_sided`](crate::goal::Proof::one_sided) judges and says no to in
+//! [`one_sided`](crate::kernel::goal::Proof::one_sided) judges and says no to in
 //! its own words. The corpus is held to closing both ways.
 //!
 //! The one thing a citation still needs of the corpus is order: the claim
@@ -95,7 +95,7 @@
 //! ## The tactic language, embedded
 //!
 //! Inside `lhs(…)`, `rhs(…)` and `both(…)` is the rewrite language of
-//! [`crate::diagram2::tactic`], juxtaposed like steps are:
+//! [`crate::tactic`], juxtaposed like steps are:
 //!
 //! | tactic | is |
 //! |---|---|
@@ -114,7 +114,7 @@
 //!
 //! A law is named as the docs name it — `fold`, `select-same`,
 //! `not-not`, the spellings [`Law::name`] holds — and `branching` names
-//! the one driven list of [`crate::diagram2::rules`] with a name of its
+//! the one driven list of [`crate::kernel::rules`] with a name of its
 //! own. This
 //! surface is smaller than the language underneath today: queries and
 //! stated backward steps exist as data first, and grow a spelling here
@@ -268,7 +268,7 @@
 //! discharged twice was discharged once too often.
 //!
 //! A body — a `via` waypoint — is a **term**, in the language
-//! [`crate::term`] prints and [`crate::parse`] reads, rather than in
+//! [`crate::kernel::term`] prints and [`crate::parse`] reads, rather than in
 //! Hana's: it says what it means, and a residual's boxes are written in
 //! the same vocabulary. `call name` names a sentence, and
 //! nothing pads — `id(k) * A` is written where a Hana sentence would have
@@ -278,11 +278,11 @@ use std::fmt;
 
 use bytecode::{IdentityIndex, SentenceIndex};
 
-use crate::diagram2::query::Query;
-use crate::diagram2::rules::{self, Law};
-use crate::diagram2::tactic::{self, Aim, MatchSpec, Pick, Reader, Readers, SrcExpr, Tactic, Wire};
-use crate::graph::{Direction, Prefix};
-use crate::term::TermIndex;
+use crate::kernel::graph::{Direction, Prefix};
+use crate::kernel::rules::{self, Law};
+use crate::kernel::term::TermIndex;
+use crate::query::Query;
+use crate::tactic::{self, Aim, MatchSpec, Pick, Reader, Readers, SrcExpr, Tactic, Wire};
 
 /// Which side of the goal a graph tactic acts on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -312,12 +312,12 @@ pub enum Step<V> {
     /// Rewrite both sides by the whole table to fixpoint and ask whether
     /// they landed on one diagram — isomorphic. Closes the goal or fails
     /// with a residual; every rewrite on the way is an instance of a named
-    /// law checked by [`rules::apply`](crate::diagram2::rules::apply), so
+    /// law checked by [`rules::apply`](crate::kernel::rules::apply), so
     /// the verdict is a derivation's worth of checked steps and one final
     /// isomorphism.
     Diagram,
     /// Run a graph tactic on one side of the goal, or on each in turn —
-    /// the rewrite language of [`crate::diagram2::tactic`], embedded. A
+    /// the rewrite language of [`crate::tactic`], embedded. A
     /// manipulation, not a closer: what it leaves is a goal, and the
     /// auto-close is what notices the sides becoming one diagram. A tactic
     /// that fails leaves its side standing at the last step that landed,
@@ -328,7 +328,7 @@ pub enum Step<V> {
     ///
     /// Not a law and not an axiom. The identity named has a proof of its
     /// own, and what happens here is that its proof's **steps** are carried
-    /// into this goal — [`transplant`](crate::diagram2::rules::transplant)
+    /// into this goal — [`transplant`](crate::kernel::rules::transplant)
     /// — so what lands is a run of the same ordinary rewrites, checked the
     /// same way, in this goal's coordinates. Nothing new is trusted: a
     /// `by` records what a `lhs(…)` records and the checker cannot tell
@@ -337,7 +337,7 @@ pub enum Step<V> {
     /// It needs the named identity proved before this one, which is why the
     /// corpus proves in dependency order, and it needs that proof to drive
     /// one side of its claim onto the other —
-    /// [`one_sided`](crate::goal::Proof::one_sided) is what says so when it
+    /// [`one_sided`](crate::kernel::goal::Proof::one_sided) is what says so when it
     /// does not.
     By { side: OnSide, of: V },
     /// Open calls on both sides, in place in the graphs: every one, all
@@ -372,10 +372,10 @@ pub enum Step<V> {
     /// literal. That replacement is three ordinary equations (the
     /// promise written down, the coercion unpacked, and the branch grown
     /// forward over the region — see
-    /// [`case_split`](crate::diagram2::rules::case_split)), and this step
+    /// [`case_split`](crate::kernel::rules::case_split)), and this step
     /// spends them once per side that computes the operation, at the
     /// earliest such answer — each rewrite an
-    /// [`apply`](crate::diagram2::rules::apply)-checked rewrite like any
+    /// [`apply`](crate::kernel::rules::apply)-checked rewrite like any
     /// other, so the step itself is untrusted convenience that only picks
     /// where. The ordinary laws then simplify each copy under its
     /// assumption, and when both come out alike the introduced branch
@@ -400,7 +400,7 @@ pub enum Step<V> {
     /// holds several tests of one operation splits on the one the proof
     /// means, not on whichever happens to sit outermost.
     Cases {
-        prim: crate::term::Prim,
+        prim: crate::kernel::term::Prim,
         literal: Option<String>,
         then_arm: Option<Strategy<V>>,
         else_arm: Option<Strategy<V>>,
@@ -680,8 +680,8 @@ fn parse_step(input: &str) -> Result<(Step<String>, &str), String> {
 /// The operations a `cases` may split on: one answer, and the instruction
 /// set's promise that the answer is a bool — which is what makes the two
 /// cases everything.
-fn testing_prim(name: &str) -> Result<crate::term::Prim, String> {
-    use crate::term::Prim;
+fn testing_prim(name: &str) -> Result<crate::kernel::term::Prim, String> {
+    use crate::kernel::term::Prim;
     // `is_tuple` is the one test with an operand, and it is written here
     // the way the instruction writes it: bare, it asks whether a value is a
     // tuple at all; `is_tuple n`, whether it is one of exactly that width.
@@ -1412,7 +1412,7 @@ mod tests {
 
     #[test]
     fn a_tactic_block_reads_as_the_language_it_embeds() {
-        use crate::diagram2::tactic::{Pick, RuleSpec, Tactic};
+        use crate::tactic::{Pick, RuleSpec, Tactic};
 
         let entries = parse_hant("proof p = lhs(saturate(not-not)) exact;").unwrap();
         let [Step::Rewrite { side, tactic }, Step::Exact] = &entries[0].strategy[..] else {
@@ -1462,7 +1462,7 @@ mod tests {
 
     #[test]
     fn a_case_split_parses_and_polices_its_operation() {
-        use crate::term::Prim;
+        use crate::kernel::term::Prim;
         // A manipulation now, not a closer: the split lands inside the
         // graph, and the strategy carries on.
         let entries = parse_hant("proof p = inline cases(equal) cases(is_bool) diagram;").unwrap();
@@ -1512,7 +1512,7 @@ mod tests {
 
     #[test]
     fn a_structured_case_split_parses_its_arms() {
-        use crate::term::Prim;
+        use crate::kernel::term::Prim;
         // The arms ride `via`'s spelling: parenthesized, labelled, either
         // omissible — and an arm may split again, which is how a proof
         // writes a decision tree.
@@ -1569,7 +1569,7 @@ mod tests {
 
     #[test]
     fn a_case_split_may_name_the_literal_it_tests() {
-        use crate::term::Prim;
+        use crate::kernel::term::Prim;
         // The wire, addressed by what it tests: the outermost `equal`
         // against that pushed value, not whichever sits outermost.
         let entries =

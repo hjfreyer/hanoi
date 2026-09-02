@@ -1,8 +1,8 @@
 //! A graph written for someone reading a proof.
 //!
-//! [`Display for Graph`](super::Graph) is the other listing, and it is for a
+//! [`Display for Graph`](crate::kernel::graph::Graph) is the other listing, and it is for a
 //! different reader: it dumps the links in id order so that a broken one can
-//! be found, which is what [`Graph::check`](super::Graph::check) wants when
+//! be found, which is what [`Graph::check`](crate::kernel::graph::Graph::check) wants when
 //! it panics. This one is for a goal that did not close. It says the same
 //! facts and orders them so a person can follow the program, which is a
 //! different job and is worth its own code.
@@ -52,7 +52,7 @@
 //!
 //! The condition is named on all three lines, so a block deep in a nest
 //! says which wire it turns on without a reader counting bars. The `endif`
-//! is the [`Select`](super::NodeKind::Select), so it keeps its name and
+//! is the [`Select`](crate::kernel::graph::NodeKind::Select), so it keeps its name and
 //! its links: the right-hand columns still say what the box reads and who
 //! reads it, which is what a next proof step names. The `if` and the
 //! `else` are lines the listing draws rather than boxes, and their
@@ -60,7 +60,7 @@
 //!
 //! ## A branch is several boxes, and one bracket
 //!
-//! A [`Select`](super::NodeKind::Select) carries one answer, so a source
+//! A [`Select`](crate::kernel::graph::NodeKind::Select) carries one answer, so a source
 //! `branch` leaving `n` values is `n` of them reading one condition. A
 //! reader wants the one bracket back, and [`grouping`] is where it comes
 //! from: peers on one condition are one branch, and one `if` is closed by
@@ -96,7 +96,7 @@
 //! Five decisions, and the listing is a wall without any of them.
 //!
 //! **Branch membership is computed.** A node is inside a branch when the
-//! [`Select`](super::NodeKind::Select)'s blocks reach it and nothing
+//! [`Select`](crate::kernel::graph::NodeKind::Select)'s blocks reach it and nothing
 //! outside the region does — a backward reach from the blocks, less what
 //! also feeds the condition, shrunk until no box in it is read from
 //! outside. So the indentation is a fact about the graph rather than a
@@ -165,7 +165,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::fmt;
 
-use crate::graph::{Address, Graph, NodeId, NodeKind, Sink, Source};
+use crate::kernel::graph::{Address, Graph, NodeId, NodeKind, Sink, Source};
 
 /// One side of a goal, written out. Build it with [`listing`].
 pub struct Listing<'g> {
@@ -533,10 +533,10 @@ fn arms_of(graph: &Graph, selects: &[NodeId]) -> HashSet<NodeId> {
 /// `else`, and it is why the split is a **reading** rather than a choice.
 ///
 /// It does not split cleanly on its own, because a box can be read from
-/// both sides. [`Law::SelectHoist`](crate::diagram2::rules::Law) grows a
+/// both sides. [`Law::SelectHoist`](crate::kernel::rules::Law) grows a
 /// branch *forwards* over the work after it, and the two copies it leaves
 /// read whatever that work read from outside — one wire, a reader in each
-/// arm. ([`Law::CondHoist`](crate::diagram2::rules::Law) leaves the same
+/// arm. ([`Law::CondHoist`](crate::kernel::rules::Law) leaves the same
 /// shape, its two copies reading the blocks of the branch that moved.) Such a box is upstream of both block lists, and if it reads
 /// nothing itself then [`nesting`]'s intersection puts it inside the
 /// branch, since every reader agrees on the branch and the intersection
@@ -1367,8 +1367,8 @@ impl fmt::Display for Listing<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::diagram2::{build, tests::term_of};
-    use crate::term::Context;
+    use crate::kernel::term::Context;
+    use crate::kernel::{build, tests::term_of};
 
     /// A branch grown **forwards** over the work after it, and the operand
     /// that work read from outside — now read by a copy in each arm.
@@ -1377,8 +1377,8 @@ mod tests {
     /// here — and it is the shape both the arm reading and the
     /// writing-at-each-use rest on.
     fn grown() -> (Graph, NodeId) {
-        use crate::diagram2::rules::{Law, apply, propose};
-        use crate::term::Prim;
+        use crate::kernel::rules::{Law, apply, propose};
+        use crate::kernel::term::Prim;
 
         let mut graph = built("branch { push 1 } { push 2 } push 10 add");
         let select = graph

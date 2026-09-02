@@ -8,22 +8,22 @@
 //! — and the description is re-run against the graph as it now stands,
 //! rather than a name held across a step. That is the one rule this module
 //! is built around: a [`Bindings`] never crosses a rewrite. Whatever
-//! consumes one does so before the next [`rules::apply`](super::rules), and
+//! consumes one does so before the next [`rules::apply`](crate::kernel::rules), and
 //! asks again after.
 //!
 //! A query is a conjunction of [`Atom`]s over named [`Var`]s: what kind of
 //! box a variable is, who feeds whom at which port, what reads the
 //! boundary, what nothing reads at all. It deliberately does **not** match
-//! subgraphs. [`find_at`](crate::graph::find_at) is the one
+//! subgraphs. [`find_at`](crate::kernel::graph::find_at) is the one
 //! embedding-finder there is, and a second would be a second copy of the
 //! search, free to drift from the table; a query narrows to the box a rule
 //! is anchored at — *where*, not *what shape* — and payload blanks like
 //! [`KindPat::AnyPush`] are resolved by reading the concrete payload off
 //! the bound node, so nothing wild ever reaches
-//! [`rules::sides`](super::rules::sides).
+//! [`rules::sides`](crate::kernel::rules::sides).
 //!
 //! This is search, untrusted the way the matcher is untrusted: a query
-//! that answers wrong seeds a step [`rules::apply`](super::rules::apply)
+//! that answers wrong seeds a step [`rules::apply`](crate::kernel::rules::apply)
 //! refuses, never a wrong graph.
 //!
 //! [`eval`] answers in a **canonical order** — bindings sorted by the
@@ -36,9 +36,9 @@ use std::collections::{HashMap, HashSet};
 
 use bytecode::{SentenceIndex, Value};
 
-use crate::term::Prim;
+use crate::kernel::term::Prim;
 
-use crate::graph::{Graph, NodeId, NodeKind, Sink, Source};
+use crate::kernel::graph::{Graph, NodeId, NodeKind, Sink, Source};
 
 /// A named hole in a query. The name is the identity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -422,8 +422,8 @@ impl Eval<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::diagram2::build;
-    use crate::term::Context;
+    use crate::kernel::build;
+    use crate::kernel::term::Context;
     use bytecode::assemble;
 
     /// The graph a body builds — the same probe the rules tests use.
@@ -437,7 +437,7 @@ mod tests {
             .map(|(idx, _)| idx)
             .unwrap();
         let mut terms = Context::new();
-        let term = crate::term::lower(&mut terms, &library, idx).unwrap();
+        let term = crate::kernel::term::lower(&mut terms, &library, idx).unwrap();
         let graph = build(&terms, term);
         graph.check().unwrap();
         graph

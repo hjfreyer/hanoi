@@ -1,7 +1,7 @@
 //! The interpreter for the strategy language of [`crate::hant`].
 //!
 //! A proof mirrors a tree of goals, and a goal is two
-//! [graphs](crate::diagram2). A strategy acts on one: manipulations
+//! [graphs](crate::kernel::graph). A strategy acts on one: manipulations
 //! transform it — the tactic steps rewrite a side in place, `inline` opens
 //! calls, `symm` turns it — a splitter (`via`, `select-same`) replaces it
 //! with independent subgoals each carrying its own strategy, and
@@ -11,7 +11,7 @@
 //! identity with no written proof gets — is `diagram` alone.
 //!
 //! The closer **is** the table now: `diagram` rewrites both sides by
-//! [`tactic::decide`](crate::diagram2::tactic::decide) — every driven
+//! [`tactic::decide`](crate::tactic::decide) — every driven
 //! law, to fixpoint — and asks whether they landed on
 //! one diagram, by isomorphism. Every rewrite on the way is an instance of
 //! a named law checked by
@@ -23,7 +23,7 @@
 //! result that can only be `true` or `false`, done as the table's own
 //! expansion rewrite and spent deliberately the way `inline` spends a
 //! definition. Nothing in this module touches a graph except through
-//! [`Derivation::push`](crate::diagram2::rules::Derivation::push): the
+//! [`Derivation::push`](crate::kernel::rules::Derivation::push): the
 //! whole file is untrusted convenience over the table.
 //!
 //! A stuck goal's residual is **both sides as graphs**, plus the steps of
@@ -39,13 +39,14 @@ use std::collections::HashMap;
 
 use bytecode::{IdentityIndex, Library};
 
-use crate::diagram2::rules::{self, Derivation};
-use crate::diagram2::tactic::{Region, Tactic};
-use crate::diagram2::{self, tactic};
-use crate::goal::{self, Goal, Outcome, Proof, Residual, against};
-use crate::graph::{self, Direction, Graph, Match, NodeId, Pair, Source};
 use crate::hant::{Body, OnSide, Step, Strategy, default_strategy};
-use crate::term::{Context, Error, Prim};
+use crate::kernel;
+use crate::kernel::goal::{self, Goal, Outcome, Proof, Residual, against};
+use crate::kernel::graph::{self, Direction, Graph, Match, NodeId, Pair, Source};
+use crate::kernel::rules::{self, Derivation};
+use crate::kernel::term::{Context, Error, Prim};
+use crate::tactic;
+use crate::tactic::{Region, Tactic};
 
 /// One side of a goal, picked out for a mutation that borrows it alone.
 type Pick = fn(&mut Goal) -> &mut Graph;
@@ -54,7 +55,7 @@ type Pick = fn(&mut Goal) -> &mut Graph;
 /// pair a citation applies, and the run that would discharge that citation.
 struct Lemma {
     pair: Pair,
-    run: Result<Vec<diagram2::rules::Step>, String>,
+    run: Result<Vec<kernel::rules::Step>, String>,
 }
 
 /// How a `by` spends the claim it names.
@@ -68,7 +69,7 @@ pub enum Citing {
     #[default]
     OnTrust,
     /// **The cited proof's own steps**, carried in and re-checked here —
-    /// [`transplant`](crate::diagram2::rules::transplant). What a citation
+    /// [`transplant`](crate::kernel::rules::transplant). What a citation
     /// *means*, spent in full at every use rather than once at the claim.
     ///
     /// Slower by exactly the amount the default saves, and it is the
@@ -202,10 +203,10 @@ impl<'l> Prover<'l> {
             // what each side became.
             Step::Diagram => {
                 let mut goal = goal;
-                let mut spent: [Vec<diagram2::rules::Step>; 2] = [Vec::new(), Vec::new()];
+                let mut spent: [Vec<kernel::rules::Step>; 2] = [Vec::new(), Vec::new()];
                 let picks: [Pick; 2] = [|g| &mut g.lhs, |g| &mut g.rhs];
                 for (pick, record) in picks.into_iter().zip(&mut spent) {
-                    let mut deriv = diagram2::rules::Derivation::default();
+                    let mut deriv = kernel::rules::Derivation::default();
                     if let Err(e) = tactic::run(pick(&mut goal), &mut deriv, &tactic::decide()) {
                         let why = format!("`diagram`'s drive failed: {}", e);
                         return Ok(Outcome::Stuck(gave_up(&goal, &why)));
@@ -301,14 +302,14 @@ impl<'l> Prover<'l> {
             // state a person would want to look at.
             Step::Rewrite { side, tactic } => {
                 let mut goal = goal;
-                let mut spent: [Vec<diagram2::rules::Step>; 2] = [Vec::new(), Vec::new()];
+                let mut spent: [Vec<kernel::rules::Step>; 2] = [Vec::new(), Vec::new()];
                 let picks: &[(Pick, usize)] = match side {
                     OnSide::Lhs => &[(|g| &mut g.lhs, 0)],
                     OnSide::Rhs => &[(|g| &mut g.rhs, 1)],
                     OnSide::Both => &[(|g| &mut g.lhs, 0), (|g| &mut g.rhs, 1)],
                 };
                 for &(pick, at) in picks {
-                    let mut deriv = diagram2::rules::Derivation::default();
+                    let mut deriv = kernel::rules::Derivation::default();
                     match tactic::run(pick(&mut goal), &mut deriv, tactic) {
                         Ok(_) => spent[at] = deriv.steps().cloned().collect(),
                         Err(e) => {
@@ -388,7 +389,7 @@ impl<'l> Prover<'l> {
                 };
                 let mut goal = goal;
                 let mut found: [Option<Match>; 2] = [None, None];
-                let mut spent: [Vec<diagram2::rules::Step>; 2] = [Vec::new(), Vec::new()];
+                let mut spent: [Vec<kernel::rules::Step>; 2] = [Vec::new(), Vec::new()];
                 let picks: &[(Pick, usize)] = match side {
                     OnSide::Lhs => &[(|g| &mut g.lhs, 0)],
                     OnSide::Rhs => &[(|g| &mut g.rhs, 1)],
@@ -567,8 +568,8 @@ impl<'l> Prover<'l> {
                     Some(_) => unreachable!("the loader reads an inline label as a target"),
                 };
                 let mut goal = goal;
-                let opened = diagram2::inline(&mut goal.lhs, ctx, self.library, only)?
-                    + diagram2::inline(&mut goal.rhs, ctx, self.library, only)?;
+                let opened = kernel::inline(&mut goal.lhs, ctx, self.library, only)?
+                    + kernel::inline(&mut goal.rhs, ctx, self.library, only)?;
                 if opened == 0 {
                     let why = match only {
                         None => "`inline` found no calls to open".to_string(),
@@ -650,7 +651,7 @@ impl<'l> Prover<'l> {
             // any others — and what the arms scope to is the wire the
             // branch they made turns on, which survives a rewrite that
             // puts a narrower select in its place.
-            let split = match diagram2::rules::case_split(side, &mut derivs[i], wire) {
+            let split = match kernel::rules::case_split(side, &mut derivs[i], wire) {
                 Ok(split) => split,
                 Err(e) => {
                     let why = format!("`cases` proposed a split the checker refused: {}", e);
@@ -867,8 +868,8 @@ fn gave_up(goal: &Goal, why: &str) -> Residual {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::graph::NodeKind;
     use crate::hant::parse_hant;
+    use crate::kernel::graph::NodeKind;
     use bytecode::{Value, assemble};
 
     /// The live boxes of a graph, in id order: what a residual's side is,
@@ -1287,7 +1288,7 @@ mod tests {
         let false_goal = Goal::of_identity(&mut ctx, &false_lib, idx).unwrap();
 
         // Claimed trivial, and the sides are not one graph.
-        let err = crate::goal::Proof::Trivial
+        let err = crate::kernel::goal::Proof::Trivial
             .check(false_goal.clone(), &mut ctx, &false_lib)
             .unwrap_err();
         assert!(err.contains("not one graph"), "{}", err);
@@ -1406,10 +1407,10 @@ mod tests {
         let mut closed = Vec::new();
         for (idx, identity) in library.identities.iter_enumerated() {
             let mut goal = Goal::of_identity(terms, library, idx).unwrap();
-            diagram2::inline(&mut goal.lhs, terms, library, None).unwrap();
-            diagram2::inline(&mut goal.rhs, terms, library, None).unwrap();
+            kernel::inline(&mut goal.lhs, terms, library, None).unwrap();
+            kernel::inline(&mut goal.rhs, terms, library, None).unwrap();
             for side in [&mut goal.lhs, &mut goal.rhs] {
-                let mut deriv = diagram2::rules::Derivation::default();
+                let mut deriv = kernel::rules::Derivation::default();
                 tactic::run(side, &mut deriv, &tactic::decide()).unwrap();
             }
             if graph::isomorphic(&goal.lhs, &goal.rhs) {
@@ -1468,8 +1469,8 @@ mod tests {
     /// answers the report in the report's own words.
     #[test]
     fn a_proof_can_name_the_box_the_residual_printed() {
-        use crate::diagram2::render;
-        use crate::graph::NodeKind;
+        use crate::kernel::graph::NodeKind;
+        use crate::render;
 
         let code = "identity probe { push 1 push 2 add } = { push 3 };";
 

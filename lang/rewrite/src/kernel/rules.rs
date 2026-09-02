@@ -7,7 +7,7 @@
 //! rather than to the module the graph lives in. So what is here is the
 //! page — this module is the thing `rewrite/src/rules.rs` was for terms,
 //! over graphs instead — and the handful of operations a driver is built
-//! out of: [`sides`], [`find`](crate::graph::find), [`propose`],
+//! out of: [`sides`], [`find`](crate::kernel::graph::find), [`propose`],
 //! [`apply`], [`replay`]. A law is a row anyone can read, and adding one
 //! is not editing an engine.
 //!
@@ -235,15 +235,15 @@
 //! ## Where the trust sits
 //!
 //! [`sides`] is the whole of this module's share: it builds the table, and
-//! what it builds is a [`Pair`], which [`crate::graph`] holds to being
+//! what it builds is a [`Pair`], which [`crate::kernel::graph`] holds to being
 //! splice-able before anything is put down. The checking a rewrite needs —
 //! a claimed embedding held to agreeing at every port, then the re-pointing
 //! — is [`Pair::apply`], and [`apply`] is that with a law's name attached.
-//! [`find`](crate::graph::find) and [`propose`] are search, they are wrong
+//! [`find`](crate::kernel::graph::find) and [`propose`] are search, they are wrong
 //! the way a bad guess is wrong, and every answer they give goes through
 //! `apply` anyway.
 //!
-//! [`find`](crate::graph::find) is partial, in the two places a pattern does
+//! [`find`](crate::kernel::graph::find) is partial, in the two places a pattern does
 //! not pin its own match: a pattern with **no boxes** has nothing to anchor
 //! on (`tuple-cancel`'s right side, say, which is `id(n)` outright), and a
 //! pattern with a boundary input **nothing in it reads** cannot say which
@@ -254,13 +254,13 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 
-use crate::graph::{
+use crate::kernel::graph::{
     Direction, Embedding, Graph, Match, Mismatch, NodeId, NodeKind, Pair, Sink, Source, Unpaired,
     check_match, find_at, lift,
 };
 use bytecode::{Instruction, Library, Value};
 
-use crate::term::{Arity, Prim};
+use crate::kernel::term::{Arity, Prim};
 
 // ---- the laws --------------------------------------------------------------------
 
@@ -982,7 +982,7 @@ pub enum Ill {
     Interface(Arity, Arity),
     /// A side of the rule, or a graph the payload carries, is not a graph. A
     /// rule that cannot be built cannot be applied.
-    Broken(crate::graph::Error),
+    Broken(crate::kernel::graph::Error),
 }
 
 /// The two ways a [`Pair`] refuses to be one, said as a payload's fault —
@@ -1055,7 +1055,7 @@ impl std::error::Error for Error {}
 /// The two graphs a rule says are the same program, built from its payload
 /// alone.
 ///
-/// This is the table, and after it the rest is [`crate::graph`]'s: what
+/// This is the table, and after it the rest is [`crate::kernel::graph`]'s: what
 /// comes back is a [`Pair`], which knows nothing of laws and everything
 /// about being splice-able, and every rewrite in this module is that pair
 /// applied somewhere.
@@ -1854,7 +1854,7 @@ pub fn replay(graph: &mut Graph, steps: &[Step]) -> Result<Derivation, Error> {
 
 /// A derivation proved about one graph, spent again inside another.
 ///
-/// `at` says where `pattern` sits in `host` — [`find`](crate::graph::find)
+/// `at` says where `pattern` sits in `host` — [`find`](crate::kernel::graph::find)
 /// answers with one, or a caller may state it — and `steps` is a run that
 /// was written about `pattern` alone. What comes back is **the same run said
 /// in the host's coordinates**, so [`replay`] will take it against a fresh
@@ -2093,7 +2093,7 @@ pub fn instances(graph: &Graph, law: Law) -> Vec<Rule> {
 /// and the law's window is what goes in.
 ///
 /// This is the payload of an **introduction**. A side with no boxes
-/// anchors nowhere ([`pins_itself`](crate::graph::pins_itself) says why),
+/// anchors nowhere ([`pins_itself`](crate::kernel::graph::pins_itself) says why),
 /// so no search ever proposes these steps: they are *stated*, the wires
 /// named outright, and this is where a statement's width becomes a
 /// payload. Two rows are here. `tuple-cancel`'s right side is `id(n)`, so
@@ -2544,11 +2544,11 @@ fn read_off(graph: &Graph, law: Law, id: NodeId) -> Vec<(Rule, NodeId)> {
 }
 
 #[cfg(test)]
-pub(in crate::diagram2) mod tests {
+pub(crate) mod tests {
     use super::*;
-    use crate::diagram2::build;
-    use crate::graph::{find, find_pinned, isomorphic, pins_itself};
-    use crate::term::Context;
+    use crate::kernel::build;
+    use crate::kernel::graph::{find, find_pinned, isomorphic, pins_itself};
+    use crate::kernel::term::Context;
     use bytecode::{Value, assemble};
 
     /// A law holds. Four claims, and the payload is the only input: the two
@@ -2653,7 +2653,7 @@ pub(in crate::diagram2) mod tests {
             .map(|(idx, _)| idx)
             .unwrap();
         let mut terms = Context::new();
-        let term = crate::term::lower(&mut terms, &library, idx).unwrap();
+        let term = crate::kernel::term::lower(&mut terms, &library, idx).unwrap();
         let graph = build(&terms, term);
         graph.check().unwrap();
         (terms, graph)
@@ -2685,7 +2685,7 @@ pub(in crate::diagram2) mod tests {
     /// laws name: `unit` is a tuple of width 0 and `(1, 2)` one of width 2,
     /// so a law about `as_tuple 2` meets a value it is the identity on, a
     /// tuple it is not, and three things that are no tuple at all.
-    pub(in crate::diagram2) fn samples(width: usize) -> Vec<Vec<Value>> {
+    pub(crate) fn samples(width: usize) -> Vec<Vec<Value>> {
         let each = [
             Value::Bool(true),
             Value::Bool(false),
@@ -2714,14 +2714,14 @@ pub(in crate::diagram2) mod tests {
     /// A closed graph, run: every operation on the machine itself
     /// ([`run_window`], so there is no second semantics), and a select
     /// keeping the block `truthy` says.
-    pub(in crate::diagram2) fn eval_on(graph: &Graph, inputs: &[Value]) -> Vec<Value> {
+    pub(crate) fn eval_on(graph: &Graph, inputs: &[Value]) -> Vec<Value> {
         assert_eq!(inputs.len(), graph.arity().inputs, "one value per input");
         let mut held: HashMap<Source, Value> = inputs
             .iter()
             .enumerate()
             .map(|(i, v)| (Source::Input(i), v.clone()))
             .collect();
-        for id in crate::graph::schedule(graph) {
+        for id in crate::kernel::graph::schedule(graph) {
             let took: Vec<Value> = graph
                 .sources(id)
                 .iter()
@@ -4056,7 +4056,7 @@ pub(in crate::diagram2) mod tests {
     }
 
     /// Every proposal at every box of `graph`, applied to a copy of it and
-    /// held to [`Graph::check`](crate::graph::Graph::check) — the laws it read off,
+    /// held to [`Graph::check`](crate::kernel::graph::Graph::check) — the laws it read off,
     /// in the order it read them.
     fn each_proposal(graph: &Graph, note: &str) -> Vec<Law> {
         let mut spent = Vec::new();

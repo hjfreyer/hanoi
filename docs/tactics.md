@@ -3,8 +3,8 @@
 The rewrite language a proof drives one side of a goal with — the
 `lhs(…)`, `rhs(…)` and `both(…)` steps of [docs/proving.md](proving.md)
 — and the data model underneath it, in
-[`lang/rewrite/src/diagram2/tactic.rs`](../lang/rewrite/src/diagram2/tactic.rs)
-and [`query.rs`](../lang/rewrite/src/diagram2/query.rs). A tactic
+[`lang/rewrite/src/tactic.rs`](../lang/rewrite/src/tactic.rs)
+and [`query.rs`](../lang/rewrite/src/query.rs). A tactic
 orchestrates rewrites; it is entirely untrusted. Every firing lands
 through `Derivation::push` and is verified by `rules::apply`, so a buggy
 tactic produces a refused step, never a wrong graph — a tactic run *is*

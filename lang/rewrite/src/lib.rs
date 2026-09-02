@@ -1,37 +1,48 @@
 //! Machinery for proving Hanoi programs equivalent.
 //!
-//! [`term`] is the model claims are stated over — terms live in a
-//! [`Context`](term::Context) arena and are passed around as
-//! [`TermIndex`](term::TermIndex) — and [`parse`] reads one back out of the
-//! language it prints in; [`graph`] is what a claim is *carried* in — boxes,
-//! the links between them, well-formedness, whether two of them are the same
-//! diagram, and the one rewriting operation there is: a
-//! [`Pair`](graph::Pair) of graphs put down where a [`Match`](graph::Match)
-//! says, checked before anything moves. [`diagram2`] is the engine over it:
-//! a term translated *literally* into a graph, structural boxes and all,
-//! rewritten until the connections are direct against a table
-//! ([`diagram2::rules`]) whose every law *is* such a pair, with what to spend
-//! and where left to whoever drives it ([`diagram2::tactic`]); [`goal`] is a claim — two graphs —
-//! and what became of it; [`hant`] is the strategy language a human
-//! directs a proof with; [`strategy`] interprets one; [`corpus`] loads a
-//! source tree's identities and proofs together. `bin/prove` drives the
+//! The crate is cut in two, and the cut is what a bug would cost.
+//!
+//! [`kernel`] is everything a proof's *truth* rests on: [`term`](kernel::term)
+//! is the model claims are stated over — terms live in a
+//! [`Context`](kernel::term::Context) arena and are passed around as
+//! [`TermIndex`](kernel::term::TermIndex); [`graph`](kernel::graph) is what
+//! a claim is *carried* in — boxes, the links between them, well-formedness,
+//! whether two of them are the same diagram, and the one rewriting operation
+//! there is: a [`Pair`](kernel::graph::Pair) of graphs put down where a
+//! [`Match`](kernel::graph::Match) says, checked before anything moves;
+//! [`kernel::build`] is the term translated *literally* into a graph,
+//! structural boxes and all, and [`kernel::inline`] opens a call in place;
+//! [`rules`](kernel::rules) is the table whose every law *is* such a pair;
+//! and [`goal`](kernel::goal) is a claim — two graphs — and the
+//! [`Proof`](kernel::goal::Proof) that re-checks every step of its
+//! discharge. A bug in any of that could let a false identity through, which
+//! is why it is one module and why nothing in it searches.
+//!
+//! Everything outside the kernel can only fail loudly. [`tactic`] and
+//! [`query`] find steps, with what to spend and where left to whoever drives
+//! them; [`hant`] is the strategy language a human directs a proof with;
+//! [`strategy`] interprets one; [`render`] lays a stuck graph out for
+//! reading; [`parse`] reads a `via` waypoint back out of the language a term
+//! prints in; [`corpus`] loads a source tree's identities and proofs
+//! together. A bug in any of these seeds a step the kernel refuses or a
+//! proof that fails to check, never a wrong graph. `bin/prove` drives the
 //! lot.
 //!
 //! There was a second engine here — `diagram`, an interned value-DAG under
 //! ordered case trees, a decision procedure for its fragment. It is gone,
 //! and what it decided the table now spends as named laws: its folds run
-//! the same machine ([`diagram2::rules::Law::Fold`] and kin), its case
+//! the same machine ([`kernel::rules::Law::Fold`] and kin), its case
 //! trees became the branch layer plus the `cases` proof step, and its one
 //! un-inspectable verdict became a derivation's worth of checked rewrites
 //! and a final isomorphism.
 
 pub mod corpus;
-pub mod diagram2;
-pub mod goal;
-pub mod graph;
 pub mod hant;
+pub mod kernel;
 pub mod parse;
+pub mod query;
+pub mod render;
 pub mod strategy;
-pub mod term;
+pub mod tactic;
 
-pub use term::{Arity, Context, Error, Prim, Term, TermIndex, lower, lower_all};
+pub use kernel::term::{Arity, Context, Error, Prim, Term, TermIndex, lower, lower_all};

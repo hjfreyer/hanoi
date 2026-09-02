@@ -1,4 +1,35 @@
-//! A term as a graph of values, and the table that rewrites one.
+//! The trusted kernel: what a proof's truth rests on, and nothing else.
+//!
+//! The line drawn around this module is what a bug would cost. A bug in
+//! here could let a false identity through; a bug anywhere else in the
+//! crate seeds a step [`rules::apply`] refuses or a proof
+//! [`Proof::check`](goal::Proof::check) fails, never a wrong graph. So what
+//! lives here is exactly the set of things that have to be right, and
+//! nothing that only has to be found:
+//!
+//! - [`term`] — the model a claim is stated over, and the lowering from
+//!   bytecode that says what a sentence *means*.
+//! - [`graph`] — what a claim is carried in: boxes, the links between
+//!   them, well-formedness, whether two graphs are the same diagram, and
+//!   the one rewriting operation there is, a [`Pair`] put down where a
+//!   [`Match`] says, checked port by port before anything moves.
+//! - [`build`] and [`inline`], below — a term translated *literally* into
+//!   a graph, and a call opened in place by definition.
+//! - [`rules`] — the table, every law a pair of graphs, and
+//!   [`rules::apply`], the one way a graph is ever rewritten.
+//! - [`goal`] — a claim, and the [`Proof`](goal::Proof) that re-performs
+//!   every step of its discharge against the claim as stated.
+//!
+//! Searching is not here. Which law, where, in what order — the tactics of
+//! [`crate::tactic`], the queries of [`crate::query`], the strategies of
+//! [`crate::hant`] run by [`crate::strategy`] — is untrusted convenience,
+//! and every step it takes comes back through [`rules::apply`]. The one
+//! thing the kernel takes on someone else's word is a citation:
+//! [`Proof::Cited`](goal::Proof::Cited) holds the cited claim's *use* to
+//! account and leaves its *truth* to the corpus, which proves every
+//! identity and refuses a cycle.
+//!
+//! ## A term, literally
 //!
 //! A term becomes a graph **one operation at a time**, and only the
 //! operations: `id`, `swap`, `copy` and `drop` are how a stack program
@@ -6,15 +37,8 @@
 //! is two names in the other order, a fan-out is one source named twice,
 //! and a discard is a source named nowhere. [`build`] is where that
 //! translation happens and the only place that ever knew about the
-//! stack.
-//!
-//! The graph itself is [`crate::graph`] — values, what each is made of,
-//! well-formedness, and whether two graphs are the same program. What is
-//! here is everything that knows a graph came from a *term*: [`build`]
-//! writes one, [`inline`] opens a call in place, and [`rules`] and
-//! [`tactic`] are the table and the driving of it. The translation runs
-//! one way only — a graph is read by [`render`], not turned back into a
-//! term.
+//! stack. The translation runs one way only — a graph is read by
+//! [`crate::render`], not turned back into a term.
 //!
 //! ## What the representation already says
 //!
@@ -55,33 +79,28 @@
 //! left in the table is the two things a representation cannot decide:
 //! what a branch means, and what an operation computes.
 //!
-//! ## Nothing here spends them
-//!
-//! No driver lives in this module, and none should: *which* laws and
-//! *where* is a strategy, and strategies are written in [`crate::hant`].
-//!
 //! So a graph out of [`build`] is the translation and stays that way
 //! until something applies a rule to it. [`rules`] is where that happens:
 //! [`rules::sides`] turns a payload into the [`Pair`] of graphs it
-//! states, [`find`](crate::graph::find) and [`rules::propose`] say where a
+//! states, [`find`](graph::find) and [`rules::propose`] say where a
 //! law could fire, [`rules::apply`] fires one and hands back its inverse,
 //! and [`rules::replay`] runs a list of them. Only the first of those is
-//! this module's own work — the rest is [`Pair::apply`] wearing a law's
+//! the table's own work — the rest is [`Pair::apply`] wearing a law's
 //! name.
 //!
 //! **A box reads; nothing records being read.** An input port names the
 //! one source it reads ([`Source`]) and that is the whole of the
 //! structure, so a rewrite cannot half-update a link: a box is immutable,
 //! and replacing a value means building the boxes that read it afresh.
-//! Who reads a port is a *reading* ([`Graph::sinks`](crate::graph::Graph::sinks)),
+//! Who reads a port is a *reading* ([`Graph::sinks`]),
 //! computed over the boxes the boundary reaches — which is why a box a
 //! rewrite left behind counts for nothing without anything having to
 //! collect it.
 //!
 //! **Two boundaries are drawn on purpose**, and they moved when the old
-//! `diagram` engine retired and this module became the prover's:
+//! `diagram` engine retired and this kernel became the prover's:
 //!
-//! - **Equality is one question, asked at the end.** [`isomorphic`](crate::graph::isomorphic) says
+//! - **Equality is one question, asked at the end.** [`isomorphic`](graph::isomorphic) says
 //!   whether two graphs are the same diagram, and [`crate::strategy`]'s
 //!   closer asks it once, after driving both sides through the table.
 //!   Nothing here saturates toward a canonical form by decree: `push 1 ;
@@ -100,7 +119,7 @@
 //!   why.
 //!
 //! Nothing translates the other way. A graph is *read* as a graph — see
-//! [`render`], which lays one out as a listing whose lines name the boxes
+//! [`crate::render`], which lays one out as a listing whose lines name the boxes
 //! a next step would name back — and the term a graph came from is not
 //! reconstructed. It could not be the term it was built from anyway: a
 //! branch is flattened into the graph and its arms scheduled like any
@@ -109,21 +128,21 @@
 
 use bytecode::{Library, SentenceIndex};
 
-use crate::graph::{Direction, Graph, Match, NodeKind, Pair, Source};
-use crate::term::{Context, Prim, Term, TermIndex, lower};
+use crate::kernel::graph::{Direction, Graph, Match, NodeKind, Pair, Source};
+use crate::kernel::term::{Context, Prim, Term, TermIndex, lower};
 
-pub mod query;
-pub mod render;
+pub mod goal;
+pub mod graph;
 pub mod rules;
-pub mod tactic;
+pub mod term;
 
 // ---- a term, literally ---------------------------------------------------------
 
 /// The graph of a term: one node per leaf, nothing simplified.
 ///
 /// Every law of the structural layer still has a spelling here, which is
-/// the difference from [`crate::diagram`] and the whole premise of the
-/// module — the table in [`rules`] is what spends them.
+/// the whole premise of the kernel — the table in [`rules`] is what spends
+/// them.
 pub fn build(terms: &Context, term: TermIndex) -> Graph {
     let arity = terms.arity(term);
     let mut graph = Graph::empty(arity.inputs);
@@ -233,7 +252,7 @@ pub fn inline(
     terms: &mut Context,
     library: &Library,
     only: Option<SentenceIndex>,
-) -> Result<usize, crate::term::Error> {
+) -> Result<usize, crate::kernel::term::Error> {
     let mut opened = 0;
     // One at a time, asked again each time round. A rewrite rebuilds
     // everything downstream of what it replaced, so a call that sat under
@@ -275,8 +294,8 @@ pub fn inline(
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use crate::graph::isomorphic;
-    use crate::term::lower;
+    use crate::kernel::graph::isomorphic;
+    use crate::kernel::term::lower;
     use bytecode::{Library, SentenceIndex, assemble};
 
     /// The term a sentence written inline lowers to, built in `terms`.
@@ -302,7 +321,7 @@ pub(crate) mod tests {
     }
 
     /// Every sentence the integration suite compiles, lowered into one
-    /// arena — the same corpus `diagram`'s round trip runs on.
+    /// arena.
     pub(crate) fn corpus() -> (Library, Context, Vec<(SentenceIndex, TermIndex)>) {
         let tests = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
@@ -315,7 +334,7 @@ pub(crate) mod tests {
         let library = bytecode::assemble_source(&mut map, file, Some(&tests))
             .unwrap_or_else(|e| panic!("{}", map.render(&e)));
         let mut arena = Context::new();
-        let lowered = crate::term::lower_all(&mut arena, &library).unwrap();
+        let lowered = crate::kernel::term::lower_all(&mut arena, &library).unwrap();
         let terms = lowered.iter_enumerated().map(|(i, &t)| (i, t)).collect();
         (library, arena, terms)
     }
