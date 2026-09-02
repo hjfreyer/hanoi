@@ -149,13 +149,16 @@ used to be are one graph, and the claim closes before any step runs.
 
 Laws about what specific instructions compute. The discipline that
 governs the whole layer: **facts live on the instruction and are measured
-by `vm`, never restated**. `truthy`, `op_arity`, `yields_bool`,
-`commutative` and `idempotent` are read off the instruction set — and the
-last three are what let one row stand for a family, since the row asks the
-set which instructions it is about rather than listing them. `fold` goes
-one further — it executes the
-literal window on a scratch VM (`run_window`), so there is no second
-implementation of the semantics anywhere in the rewriter.
+by `vm`**, and the rewriter reads them there. `truthy`, `op_arity`,
+`yields_bool`, `commutative` and `idempotent` are read off the
+instruction set — and the last three are what let one row stand for a
+family, since the row asks the set which instructions it is about rather
+than listing them. `fold` goes one further — it executes the literal
+window on a scratch VM (`run_window`), so there is no second
+implementation of the semantics anywhere in the rewriter today. A row
+that wants its own copy of a fact may keep one, with a test measuring it
+against `vm` so the two cannot drift apart silently; see
+[docs/invariants.md](invariants.md).
 
 | law | statement |
 |---|---|

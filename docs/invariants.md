@@ -27,18 +27,28 @@ so every step it produces goes through `apply`, and a buggy tactic yields
 a refused step, never a wrong graph. `Graph`'s mutation surface stays
 crate-private; the tactic layer needs none of it.
 
-## No second semantics
+## The rewriter reads the machine rather than restating it
 
 Facts about instructions live **on the instruction** and are measured by
 `vm` — `truthy`, `op_arity`, `yields_bool`, `commutative`, `idempotent` —
-never restated in the rewriter. A row may read one to stand for a whole
-family (`comm`, `idem`, `tested-bool`), which is the same discipline seen
-from the other end: the table asks the instruction set which instructions
-a law is about instead of naming them itself. `fold` executes its window on a scratch VM rather than
+and the rewriter reads them there rather than keeping its own. A row may
+read one to stand for a whole family (`comm`, `idem`, `tested-bool`),
+which is the same discipline seen from the other end: the table asks the
+instruction set which instructions a law is about instead of naming them
+itself. `fold` executes its window on a scratch VM rather than
 reimplementing any operation. A law that turns on what the machine
 computes is tested against `vm`. What holds the wiring laws is the corpus:
 `strategy`'s tests pin which of `hana`'s identities the bare table decides,
 so a law that stopped saying something true stops closing a claim.
+
+This is a strong preference rather than a prohibition, and the reason
+for it is where these facts sit: on the trusted side, where a wrong one —
+`subtract` listed as commutative, a `fold` that computes something the
+machine does not — permits an unsound rewrite that nothing downstream
+catches. One copy is the cheapest way to keep that from drifting. A rule
+that finds it easier to carry its own copy of a fact may, provided a test
+measures the copy against `vm` the way `commutative` and `yields_bool`
+are themselves measured, so that drift fails a test rather than a proof.
 
 ## Side conditions are carried by interfaces, never tested
 
