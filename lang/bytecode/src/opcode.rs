@@ -111,9 +111,9 @@ pub enum Instruction {
     /// Hide the top value, call the sentence at the target, then restore the
     /// hidden value on top of its results.
     ///
-    /// **One value, never more.** `dip 3 { A }` is three of these nested, which
-    /// is what makes the width a *shape* rather than a number: no equation
-    /// about a frame does arithmetic on it, and no analysis has a depth to get
+    /// **One value.** `dip 3 { A }` is three of these nested, which is what
+    /// makes the width a *shape* rather than a number today: no equation about
+    /// a frame does arithmetic on it, and no analysis has a depth to get
     /// wrong. The hidden value is inaccessible to the callee, so it may be
     /// treated as unchanged across the call.
     ///

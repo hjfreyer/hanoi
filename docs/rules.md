@@ -174,7 +174,7 @@ implementation of the semantics anywhere in the rewriter.
 
 ## Rows no list drives
 
-Each of these is deliberately on no list; a proof (or a hand-rolled
+Each of these is on no list today; a proof (or a hand-rolled
 tactic) names it.
 
 **`promised-bool`** — `op` = `op ; as_bool` for any `op` the instruction

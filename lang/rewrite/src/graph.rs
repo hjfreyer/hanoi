@@ -81,8 +81,9 @@
 //! twice becomes `not(not(A))` for one reader and `A` for the other —
 //! without a dup box, an unshare step, or any global accounting: the
 //! selection costs pointwise checks, because a substitution destroys
-//! nothing. Search never produces one; a selection is a proof's stated
-//! choice.
+//! nothing. Search does not produce one today; a selection is a proof's
+//! stated choice, and a search that proposed one would state it the same
+//! way.
 //!
 //! ## Two graphs are one program by looking
 //!
@@ -550,11 +551,11 @@ impl Graph {
     /// Read off rather than recorded: a node holds what it reads and
     /// nothing holds what reads it, so the answer is a sweep of the live
     /// program — taken once per set of outputs and kept (see the type's
-    /// own docs), never maintained edge by edge. It is the one place the
-    /// distinction between a box and a box the boundary reaches is
-    /// load-bearing — a rewrite leaves its old boxes standing, and they
-    /// read what they always read, so counting them would be counting
-    /// ghosts.
+    /// own docs), rather than maintained edge by edge. A maintained count
+    /// would have to know which boxes the boundary reaches — a rewrite
+    /// leaves its old boxes standing, and they read what they always
+    /// read, so counting them would be counting ghosts — and a sweep gets
+    /// that for free.
     ///
     /// The boundary's own readings come first, then the boxes in id
     /// order, which is the order a caller may rely on.
@@ -1351,7 +1352,7 @@ impl Pair {
 /// them. A substitution re-points *every* reader of the value it replaces
 /// and leaves every reader of anything else alone, so a match never *has*
 /// to say which of a port's outside readers belong to the window — and a
-/// found match never does: search yields `sel: None`, always.
+/// found match does not today: search yields `sel: None`.
 ///
 /// `sel` is the one field that is a choice, and only a proof states one:
 /// which readers come to read the replacement, the rest keeping the value
@@ -1366,7 +1367,7 @@ pub struct Match {
     /// What the pattern's boundary input `i` stands for in the host.
     pub inputs: Vec<Source>,
     /// For each pattern boundary output, the host sinks that come to read
-    /// the replacement. `None` — the only thing search ever yields — is
+    /// the replacement. `None` — all that search yields today — is
     /// every reader, which is what a substitution always meant. `Some` is
     /// a stated choice, checked reader by reader: each named sink must
     /// read the very port the selection says it leaves.
@@ -2602,8 +2603,8 @@ mod tests {
             "a different operand is a different value, so a different name"
         );
 
-        // And a name is letters, never a number: no address can be read as
-        // an id, and no id as an address.
+        // And a name is letters, as things stand, so no address reads as
+        // an id and no id as an address.
         for (id, _) in a.live() {
             let letters = a.address(id).letters();
             assert_eq!(letters.len(), Address::LETTERS);

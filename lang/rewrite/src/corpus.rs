@@ -12,7 +12,7 @@
 //! and a body whose halves do not meet says so where it is written.
 //!
 //! Attachment is checked both ways. An entry naming no stated identity is a
-//! **problem** — a renamed identity must not silently shed its proof — and so
+//! **problem** — a renamed identity would otherwise silently shed its proof — and so
 //! is a claim with two proofs. Problems do not stop the run: proving
 //! proceeds with what attached, and the caller decides that a problem is a
 //! failure, which `bin/prove` does.

@@ -113,7 +113,7 @@ does not survive is a rewrite *under* the box, because a value made of
 different values is a different value; so an `at` written off a report
 is good exactly as long as the steps in front of it leave its box
 computing what it computed. What it buys is that no other spelling of
-"that one" exists. The name is never *held* across a rewrite either — it
+"that one" exists. The name is not *held* across a rewrite either — it
 is looked up live at every entry, and fails by name the moment nothing
 answers to it (`NoSuchBox`) or two boxes do (`ManyBoxes`).
 
@@ -140,7 +140,7 @@ and never on some other branch whose cone happens to hold it. The set and
 the anchoring are the same idea at two scales: the address means the
 branch it points at, and the aim means all of the branch.
 
-Two details of the semantics are load-bearing:
+Two details of the semantics, as they stand:
 
 - The set is read **once, at entry**, and kept as addresses rather than
   ids. Ids because a firing rebuilds boxes; once because `select-hoist`
@@ -182,7 +182,7 @@ row that turns the test round afterwards.
 The direction is the law's own — the bare side is the pattern, so
 `tuple-cancel` reads backward — and writing it out is allowed and
 checked rather than obeyed. Wire names follow `at`'s discipline: looked
-up live at every entry, never held, failing by name (`NoSuchBox`,
+up live at every entry rather than held, failing by name (`NoSuchBox`,
 `ManyBoxes`, a port the box lacks) rather than firing somewhere else.
 Stated on wires the pair already cancels, the step **compounds** — a
 second trip stacks on the first, a true thing said one layer deeper, and
@@ -230,7 +230,7 @@ by one thing:
   the whole cone below the select — branches in it included, copied along
   with everything else. That is what a proof asking for one firing wants.
 - `tree` reads the same cone with every other `select` **left standing**:
-  a branch is never copied, and never moved through another branch.
+  a branch is not copied, and not moved through another branch.
 
 Spent to fixpoint, the second sorts a graph into two halves — the work,
 which reads nothing a branch answers, and the branches, which read the
@@ -280,7 +280,7 @@ available, because blocking runs downstream and the cone below a select
 is finite, so the bottom of any chain of blocked branches is blocked by
 nothing.
 
-It **grows** a graph — that is why no list drives the row — so a value
+It **grows** a graph — which is why no list drives the row today — so a value
 under `n` branches can end up written `2^n` times. This is for a goal
 that wants its cases laid out, not for tidying a large one. It does
 terminate: a hoist replaces each body box with two boxes reading that
@@ -309,9 +309,10 @@ Three layers, all plain data with an interpreter:
 
 The division of labour: the query answers **where**, bound to names; the
 table answers **what shape**; `apply` answers **whether**. There is
-deliberately no second embedding-search — queries narrow and bind, and
-`find_pinned`/`check_match` remain the only isomorphism machinery in the
-crate. Payload wildcards live in the query layer and resolve by reading
+no second embedding-search today — queries narrow and bind, and
+`find_pinned`/`check_match` are the only isomorphism machinery in the
+crate, which keeps the trusted part small; a second one would sit on the
+untrusted side, and nothing rules it out. Payload wildcards live in the query layer and resolve by reading
 the bound host node; only concrete `Rule`s ever reach `sides`.
 
 ### Queries
@@ -365,8 +366,7 @@ cross a rewrite**. A `Bindings` is consumed within one primitive step,
 before any `apply`; persistence across steps is the query's job — run it
 again. `NodeId`s shift meaning across rewrites, so the language never
 stores one across a step; it stores the *description*, which is exactly
-what "the copy feeding the add" is. (`at`'s aim is the one deliberate
-exception, and it is a name rather than an id — looked up against the
+what "the copy feeding the add" is. (`at`'s aim is the one thing carried across steps today, and it is a name rather than an id — looked up against the
 live graph at every entry rather than held. `selects-on` keeps a *list*
 of names across its own firings, for the reason above, and they are names
 too.)
@@ -522,8 +522,8 @@ Three phenomena, three policies:
   replaces and leaves every reader of anything else alone, so search
   never has a split of a port's readers to decide. The one choice a
   match can carry is a **stated** reader selection (`for`/`except`),
-  which a proof writes and the checker verifies — never something a
-  search answers with.
+  which a proof writes and the checker verifies; no search proposes one
+  today, though one that did would carry it the same way.
 
 ### Failure and speculation
 
@@ -568,12 +568,12 @@ only live nodes).
 `Arm` is what a structured `cases` arm runs `Within`
 ([docs/proving.md](proving.md)). Its membership is the arm's **cone**:
 everything upstream of that side's blocks, minus everything upstream of
-the condition — the decided test's own making is exactly what an arm
-must not touch again — plus the `select` itself, since the branch
+the condition — the decided test's own making is what an arm
+is scoped away from — plus the `select` itself, since the branch
 layer's laws are read off it. Where more than one live select turns on
 the wire, the **outermost** is the branch meant: the one the others lie
 inside, which is the one a split introduced. Shared context is
-deliberately *in*: a split duplicates only what lies downstream of its
+*in*: a split duplicates only what lies downstream of its
 wire, so the tests a nested split must reach sit upstream, shared
 between the copies, and a region that evicted them would let an arm
 spend its hypothesis but never decompose it. The region scopes *anchors*, not windows — a law fired
@@ -607,6 +607,6 @@ the program.
   bare-wires slice — both exist as data only, and grow syntax when a
   proof needs it.
 - Serialization for `Tactic` beyond the surface subset.
-- Custom equations. When they come, they come as lemmas with stored
-  derivations — the `Rule::Lemma { lhs, rhs, warrant }` seam — never as
-  unvalidated pairs; see [docs/invariants.md](invariants.md).
+- Custom equations, or a hypothesis context. The seam sketched so far is
+  a lemma with a stored derivation — `Rule::Lemma { lhs, rhs, warrant }` —
+  but which comes first is open; see [docs/invariants.md](invariants.md).

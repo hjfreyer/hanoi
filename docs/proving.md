@@ -7,7 +7,7 @@ isomorphic — or they do not. Every step on the way is an instance of a
 named law, verified before it lands, so a close is a derivation's worth
 of checked rewrites and one final isomorphism rather than any engine's
 word. What a written proof directs is the handful of moves the driver
-deliberately never makes on its own — opening a call, and splitting a
+does not make on its own today — opening a call, and splitting a
 case on an opaque answer, above all.
 
 Companions: [docs/rules.md](rules.md) is the reference for the laws,
@@ -76,10 +76,12 @@ dead slots and id numbers not counting? An identity with no `.hant` entry
 gets exactly this, and most of the corpus closes that way; the `.hant`
 file holds only the claims that need a human's direction.
 
-Two things the driver deliberately never does: it never opens a call
-(`inline` is a proof's decision), and it never reasons by case analysis
+Two things the driver does not do today: it does not open a call
+(`inline` is a proof's decision), and it does not reason by case analysis
 on an unknown value (`cases` is a proof's decision). Everything else it
-decides by running the table dry.
+decides by running the table dry. Neither is a limit on what a driver may
+do — it lands only checked steps either way — so much as a choice about
+how much of a proof is written down.
 
 ## The strategy language
 
@@ -399,8 +401,8 @@ side, replayed blind by the checker.
 
 One file beside each `.hana` that states identities, holding `proof`
 entries in the strategy language above. Attachment is checked both ways:
-an entry naming no stated identity is an error — a renamed identity must
-not silently shed its proof — and a claim discharged twice was
+an entry naming no stated identity is an error — a renamed identity would
+otherwise silently shed its proof — and a claim discharged twice was
 discharged once too often.
 
 A body — a `via` waypoint — is a **term**, read by

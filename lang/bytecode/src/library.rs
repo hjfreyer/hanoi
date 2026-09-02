@@ -20,7 +20,7 @@ pub struct IdentityIndex(usize);
 /// states it.
 ///
 /// The two sides are ordinary sentences in the library rather than trees in a
-/// side table, and that is the load-bearing choice here: a tool that cites an
+/// side table, and that is the choice here, for a reason: a tool that cites an
 /// identity regenerates both sides from the library rather than carrying a copy
 /// of the programs around, so nothing it wrote down can go stale silently
 /// against a library that has since changed.

@@ -248,8 +248,8 @@ impl VM {
                 }
                 Instruction::Dip(target) => {
                     // Withhold the top value for the duration of the call. One
-                    // value, always: a deeper region is this many frames deep,
-                    // and each of them hides its own.
+                    // value: a deeper region is this many frames deep, and
+                    // each of them hides its own.
                     let Some(hidden) = self.stack.pop() else {
                         return Err("Stack underflow on Dip".to_string());
                     };

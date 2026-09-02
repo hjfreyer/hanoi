@@ -116,9 +116,9 @@
 //! `not-not`, the spellings [`Law::name`] holds — and `branching` names
 //! the one driven list of [`crate::diagram2::rules`] with a name of its
 //! own. This
-//! surface is deliberately smaller than the language underneath: queries
-//! and stated backward steps exist as data first, and grow a spelling here
-//! when a proof needs one.
+//! surface is smaller than the language underneath today: queries and
+//! stated backward steps exist as data first, and grow a spelling here
+//! when a proof wants one.
 //!
 //! Everywhere commas separate — a law list, an `at`'s or an `on`'s
 //! fields, a `via`'s or a `cases`'s sides — **the last one is optional**:
@@ -264,7 +264,7 @@
 //! loudly.
 //!
 //! Entries are checked both ways: an entry naming no stated identity is an
-//! error (a renamed identity must not silently shed its proof), and a claim
+//! error (a renamed identity would otherwise silently shed its proof), and a claim
 //! discharged twice was discharged once too often.
 //!
 //! A body — a `via` waypoint — is a **term**, in the language
@@ -386,8 +386,8 @@ pub enum Step<V> {
     /// split, `then_arm` runs with its rewrites scoped to the then side of
     /// the fresh branch on each side of the goal that split, and
     /// `else_arm` to the else side — the hypothesis ("the answer was
-    /// true") spent as the structure it is, never as a context the checker
-    /// would have to know about. An arm holds side rewrites and nested
+    /// true") spent as the structure it is, rather than as a context the
+    /// checker would have to know about. An arm holds side rewrites and nested
     /// `cases` and nothing else, so everything it lands is ordinary
     /// checked steps in the same record as the split; the goal is closed
     /// outside the split, by whatever follows.
@@ -1888,7 +1888,7 @@ mod tests {
     }
 
     /// Every way of writing the address wrong, answered where it is
-    /// written. A list of laws is refused on purpose: naming one box is a
+    /// written. A list of laws is refused today: naming one box is a
     /// claim about one rewrite, and `structural` there would mean
     /// "whichever of twelve happens to fire".
     #[test]
