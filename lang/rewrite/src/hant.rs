@@ -29,9 +29,8 @@
 //! | `exact` | claims the sides are one diagram — **isomorphic** — which the auto-close has already checked, so a reached `exact` fails and shows the goal exactly as it stands | always, when reached |
 //! | `via { body } (left: s, right: s)` | **cuts**: `A = B` splits into the goals `A = C` and `C = B`, the waypoint built as a graph | the waypoint's net stack change is not the goal's, or a side fails |
 //! | `select-same (then: s, else: s)` | **splits a branch**: the left side answers with a `select`, so `select(c, T, E) = B` splits into the goals `T = B` and `E = B`, each on its own road. The law of that name is what puts them back together — a branch answering `B` either way *is* `B` — and the condition goes with the branch. The mirror of `cases`: that one makes a branch to reason under, this one spends the one a goal already has | the left side's answer is not one `select` — every boundary output that box's own — or a block fails, and the residual says which block |
-//! | `cases(op)` | **case analysis** on an intermediate result: an `op` answer is `true` or `false` and nothing else, so everything depending on it becomes a branch holding one copy per case, the assumption pasted in as a literal — one checked rewrite per side, simplified under each assumption by the ordinary laws | no side computes `op`, or nothing depends on its answer |
-//! | `cases(is_tuple n)` | the same, on the one test that takes an operand: `is_tuple` asks whether a value is a tuple at all and `is_tuple n` whether it is one of exactly that width, and they are two questions | likewise |
-//! | `cases(op) (true: s, false: s)` | the same split, with a sub-strategy per case: each runs with its rewrites scoped to its side of the fresh branch — the hypothesis, spent as the structure it is. An arm holds side rewrites and nested `cases`; either is omissible, and a side whose branch is already gone skips its arm quietly | the split fails, or an arm's tactic does — and the residual names whose case it stood in |
+//! | `cases(#nk)` | **case analysis** on the wire that box answers with: the instruction set promises it is `true` or `false` and nothing else, so everything depending on it becomes a branch holding one copy per case, the assumption pasted in as a literal — one checked rewrite per side, simplified under each assumption by the ordinary laws | no side names that box, nothing promises its answer is a bool, or nothing depends on it |
+//! | `cases(#nk) (true: s, false: s)` | the same split, with a sub-strategy per case: each runs with its rewrites scoped to its side of the fresh branch — the hypothesis, spent as the structure it is. An arm holds side rewrites and nested `cases`; either is omissible, and a side whose branch is already gone skips its arm quietly | the split fails, or an arm's tactic does — and the residual names whose case it stood in |
 //! | `diagram` | rewrites both sides by the whole table to fixpoint; they land on one diagram — isomorphic — or they do not | they do not — and the residual is both sides as the diagrams they came to |
 //!
 //! `diagram`, `exact`, `via` and `select-same` end a strategy — the goal is
@@ -214,6 +213,11 @@
 //! An address is a box's **name**: a digest of what it computes and of
 //! what that is computed from, written in letters, and the same letters
 //! wherever that computation is written — the goal's other side included.
+//! It is the one way this language says *where*: an `at`'s box, a stated
+//! wire, a `for(…)`'s reader and a `cases`'s wire are all written the
+//! same, and the last of those is why one address covers both sides of a
+//! goal at once — a test written twice is one name, so a split says which
+//! wire once and every side that computes it splits there.
 //! A proof writes as much of one as the listing emphasised, which is as
 //! much as tells that box from the others on the page, and the rest is
 //! the listing's to print and the reader's to skim. What it costs is that
@@ -343,8 +347,8 @@ pub enum Step<V> {
         left: Option<Strategy<V>>,
         right: Option<Strategy<V>>,
     },
-    /// Case analysis on an intermediate result. The named operation is
-    /// one the instruction set
+    /// Case analysis on the wire one **addressed** box answers with. The
+    /// box named has to be one the instruction set
     /// [guarantees answers a bool](bytecode::Instruction::yields_bool),
     /// so its answer is `true` or `false` and nothing else — and
     /// everything that depends on that answer can be replaced by a branch
@@ -353,14 +357,33 @@ pub enum Step<V> {
     /// promise written down, the coercion unpacked, and the branch grown
     /// forward over the region — see
     /// [`case_split`](crate::kernel::rules::case_split)), and this step
-    /// spends them once per side that computes the operation, at the
-    /// earliest such answer — each rewrite an
+    /// spends them once per side that names the box — each rewrite an
     /// [`apply`](crate::kernel::rules::apply)-checked rewrite like any
     /// other, so the step itself is untrusted convenience that only picks
-    /// where. The ordinary laws then simplify each copy under its
-    /// assumption, and when both come out alike the introduced branch
-    /// collapses as well. A manipulation, not a closer: what it leaves is
-    /// a goal.
+    /// where. The promise is the kernel's to ask for, and it asks at the
+    /// wire rather than at a spelling: a box nothing promises a bool of
+    /// simply offers no second case, and the step says so. The ordinary
+    /// laws then simplify each copy under its assumption, and when both
+    /// come out alike the introduced branch collapses as well. A
+    /// manipulation, not a closer: what it leaves is a goal.
+    ///
+    /// `at` is under the address discipline every other *where* in this
+    /// language is under — as much of a box's name as tells it from the
+    /// others on the page, resolved against the live boxes at every entry
+    /// ([`Graph::lookup`](crate::kernel::graph::Graph::lookup)), failing
+    /// by name rather than splitting somewhere else. The listing a stuck
+    /// goal prints is keyed by address, so the wire to split on is read
+    /// off the report the same way an `at`'s box is: put an `exact` where
+    /// the split belongs and the failure names every wire on offer.
+    /// Nothing here describes the *test* — which operation, against
+    /// which literal — because a description can only reach the tests it
+    /// has words for, and every other step of this language had already
+    /// stopped needing words for them.
+    ///
+    /// One address covers both sides at once, since an address is a fact
+    /// about a computation rather than about a graph: a side that does
+    /// not compute the box is left standing, the way a side without the
+    /// test always was.
     ///
     /// The arms, when written, are per-case sub-strategies: after the
     /// split, `then_arm` runs with its rewrites scoped to the then side of
@@ -371,17 +394,8 @@ pub enum Step<V> {
     /// `cases` and nothing else, so everything it lands is ordinary
     /// checked steps in the same record as the split; the goal is closed
     /// outside the split, by whatever follows.
-    ///
-    /// `literal`, when written — `cases(equal(state::thirsty))` — narrows
-    /// which wire the step picks: the outermost box of the operation
-    /// **one of whose operands is that pushed literal**, named by any
-    /// unambiguous tail of its spelling. This is the sharper addressing
-    /// [docs/proving.md](../../../docs/proving.md) asks for: a goal that
-    /// holds several tests of one operation splits on the one the proof
-    /// means, not on whichever happens to sit outermost.
     Cases {
-        prim: crate::kernel::term::Prim,
-        literal: Option<String>,
+        at: Prefix,
         then_arm: Option<Strategy<V>>,
         else_arm: Option<Strategy<V>>,
     },
@@ -448,11 +462,11 @@ impl<V> fmt::Display for Step<V> {
             Step::Exact => write!(f, "exact"),
             Step::Via { .. } => write!(f, "via {{ … }}"),
             Step::Cases {
+                at,
                 then_arm: None,
                 else_arm: None,
-                ..
-            } => write!(f, "cases(…)"),
-            Step::Cases { .. } => write!(f, "cases(…) (…)"),
+            } => write!(f, "cases({})", at),
+            Step::Cases { at, .. } => write!(f, "cases({}) (…)", at),
             Step::SelectSame {
                 then_arm: None,
                 else_arm: None,
@@ -616,25 +630,14 @@ fn parse_step(input: &str) -> Result<(Step<String>, &str), String> {
         }
         "cases" => {
             let (inside, after) =
-                paren_block(rest.trim_start()).ok_or("`cases` expects `(operation)`")?;
+                paren_block(rest.trim_start()).ok_or("`cases` expects `(#address)`")?;
             let inside = inside.trim();
-            // `cases(equal(state::thirsty))` names the literal the picked
-            // test must hold — the wire, addressed by what it tests.
-            let (name, literal) = match inside.split_once('(') {
-                None => (inside, None),
-                Some((name, lit)) => {
-                    let lit = lit
-                        .trim_end()
-                        .strip_suffix(')')
-                        .ok_or("`cases(op(` never closes")?
-                        .trim();
-                    if lit.is_empty() {
-                        return Err("`cases` names no literal to split against".to_string());
-                    }
-                    (name.trim(), Some(lit.to_string()))
-                }
-            };
-            let prim = testing_prim(name)?;
+            if inside.is_empty() {
+                return Err("`cases()` names no wire to split on".to_string());
+            }
+            // The wire, named the way every other *where* in this language
+            // is: as much of the box's address as the listing emphasised.
+            let at = Prefix::parse(inside).map_err(|e| format!("`cases`: {}", e))?;
             // The arms, when written, ride the same spelling as `via`'s
             // sides: parenthesized, labelled, either omissible.
             let (arms, after) = if after.trim_start().starts_with('(') {
@@ -644,8 +647,7 @@ fn parse_step(input: &str) -> Result<(Step<String>, &str), String> {
             };
             Ok((
                 Step::Cases {
-                    prim,
-                    literal,
+                    at,
                     then_arm: arms.0,
                     else_arm: arms.1,
                 },
@@ -655,48 +657,6 @@ fn parse_step(input: &str) -> Result<(Step<String>, &str), String> {
         "" => Err(format!("expected a step, found: {}", head_of(input))),
         other => Err(format!("no step is called `{}`", other)),
     }
-}
-
-/// The operations a `cases` may split on: one answer, and the instruction
-/// set's promise that the answer is a bool — which is what makes the two
-/// cases everything.
-fn testing_prim(name: &str) -> Result<crate::kernel::term::Prim, String> {
-    use crate::kernel::term::Prim;
-    // `is_tuple` is the one test with an operand, and it is written here
-    // the way the instruction writes it: bare, it asks whether a value is a
-    // tuple at all; `is_tuple n`, whether it is one of exactly that width.
-    // Two different questions, so a proof splits on the one it means.
-    let widthed = name
-        .strip_prefix("is_tuple")
-        .filter(|rest| rest.is_empty() || rest.starts_with(char::is_whitespace));
-    let prim = match widthed {
-        Some("") => Prim::IsTuple(None),
-        Some(width) => Prim::IsTuple(Some(width.trim().parse::<usize>().map_err(|_| {
-            format!(
-                "`is_tuple` takes a width, and `{}` is not one",
-                width.trim()
-            )
-        })?)),
-        None => match name {
-            "equal" => Prim::Equal,
-            "less" => Prim::Less,
-            "greater" => Prim::Greater,
-            "not" => Prim::Not,
-            "and" => Prim::And,
-            "or" => Prim::Or,
-            "is_int" => Prim::IsInt,
-            "is_bool" => Prim::IsBool,
-            "is_const_string" => Prim::IsConstString,
-            "is_symbol" => Prim::IsSymbol,
-            "" => return Err("`cases()` names no operation".to_string()),
-            other => return Err(format!("`cases` cannot split on `{}`", other)),
-        },
-    };
-    debug_assert!(
-        prim.to_instruction().yields_bool() && prim.arity().outputs == 1,
-        "the table above lists only promised bools"
-    );
-    Ok(prim)
 }
 
 // ---- the embedded tactic language -------------------------------------------
@@ -1441,70 +1401,53 @@ mod tests {
     }
 
     #[test]
-    fn a_case_split_parses_and_polices_its_operation() {
-        use crate::kernel::term::Prim;
+    fn a_case_split_parses_and_polices_its_address() {
         // A manipulation now, not a closer: the split lands inside the
-        // graph, and the strategy carries on.
-        let entries = parse_hant("proof p = inline cases(equal) cases(is_bool) diagram;").unwrap();
-        assert!(matches!(
-            entries[0].strategy[..],
-            [
-                Step::Inline(None),
-                Step::Cases {
-                    prim: Prim::Equal,
-                    literal: None,
-                    then_arm: None,
-                    else_arm: None,
-                },
-                Step::Cases {
-                    prim: Prim::IsBool,
-                    ..
-                },
-                Step::Diagram
-            ]
-        ));
+        // graph, and the strategy carries on. The wire is named the way
+        // every other *where* in this language is — as much of a box's
+        // address as the listing emphasised.
+        let entries = parse_hant("proof p = inline cases(#nkz) cases(mlk) diagram;").unwrap();
+        let [
+            Step::Inline(None),
+            Step::Cases {
+                at: first,
+                then_arm: None,
+                else_arm: None,
+            },
+            Step::Cases { at: second, .. },
+            Step::Diagram,
+        ] = &entries[0].strategy[..]
+        else {
+            panic!("{:?}", entries[0].strategy);
+        };
+        // The `#` a listing prints with is accepted and dropped, so a name
+        // pasted out of a report is a name.
+        assert_eq!(first.letters(), "nkz");
+        assert_eq!(second.letters(), "mlk");
 
-        // Only an operation the set promises answers a bool splits a case.
-        let err = parse_hant("proof p = cases(add);").unwrap_err();
-        assert!(err.contains("cannot split on `add`"), "{}", err);
+        // And an address is held to being one: the letters an address is
+        // written in, at least one of them, and no more than an address.
         let err = parse_hant("proof p = cases();").unwrap_err();
-        assert!(err.contains("names no operation"), "{}", err);
-
-        // `is_tuple` is the one test with an operand, and the two readings
-        // are two questions: a proof splits on the one it means.
-        for (written, want) in [
-            ("is_tuple", Prim::IsTuple(None)),
-            ("is_tuple 2", Prim::IsTuple(Some(2))),
-            ("is_tuple 0", Prim::IsTuple(Some(0))),
-        ] {
-            let entries = parse_hant(&format!("proof p = cases({}) diagram;", written)).unwrap();
-            let [Step::Cases { prim, .. }, _] = &entries[0].strategy[..] else {
-                panic!("{:?}", entries[0].strategy)
-            };
-            assert_eq!(*prim, want, "cases({})", written);
-        }
-        // The width still has to be one, and no other test takes one.
-        let err = parse_hant("proof p = cases(is_tuple wide);").unwrap_err();
-        assert!(err.contains("is not one"), "{}", err);
-        let err = parse_hant("proof p = cases(is_bool 2);").unwrap_err();
-        assert!(err.contains("cannot split on"), "{}", err);
+        assert!(err.contains("names no wire"), "{}", err);
+        let err = parse_hant("proof p = cases(equal);").unwrap_err();
+        assert!(err.contains("is not one of the letters"), "{}", err);
+        let err = parse_hant("proof p = cases(#zzzzzzzzzzzzz);").unwrap_err();
+        assert!(err.contains("longer than an address"), "{}", err);
     }
 
     #[test]
     fn a_structured_case_split_parses_its_arms() {
-        use crate::kernel::term::Prim;
         // The arms ride `via`'s spelling: parenthesized, labelled, either
         // omissible — and an arm may split again, which is how a proof
         // writes a decision tree.
         let entries = parse_hant(
-            "proof p = cases(equal) (true: both(decide), \
-             false: both(decide) cases(equal) (true: both(decide))) diagram;",
+            "proof p = cases(#nk) (true: both(decide), \
+             false: both(decide) cases(#zy) (true: both(decide))) diagram;",
         )
         .unwrap();
         let [
             Step::Cases {
-                prim: Prim::Equal,
-                literal: None,
+                at,
                 then_arm: Some(then_arm),
                 else_arm: Some(else_arm),
             },
@@ -1513,6 +1456,7 @@ mod tests {
         else {
             panic!("{:?}", entries[0].strategy);
         };
+        assert_eq!(at.letters(), "nk");
         assert!(matches!(then_arm[..], [Step::Rewrite { .. }]));
         let [
             Step::Rewrite { .. },
@@ -1528,7 +1472,7 @@ mod tests {
         assert!(matches!(nested[..], [Step::Rewrite { .. }]));
 
         // An omitted pair of arms is the bare split, unchanged.
-        let entries = parse_hant("proof p = cases(equal) diagram;").unwrap();
+        let entries = parse_hant("proof p = cases(#nk) diagram;").unwrap();
         assert!(matches!(
             entries[0].strategy[..],
             [
@@ -1542,35 +1486,9 @@ mod tests {
         ));
 
         // A duplicated label is refused the way `via`'s is.
-        let err = parse_hant("proof p = cases(equal) (true: both(decide), true: both(decide));")
+        let err = parse_hant("proof p = cases(#nk) (true: both(decide), true: both(decide));")
             .unwrap_err();
         assert!(err.contains("names a side twice"), "{}", err);
-    }
-
-    #[test]
-    fn a_case_split_may_name_the_literal_it_tests() {
-        use crate::kernel::term::Prim;
-        // The wire, addressed by what it tests: the outermost `equal`
-        // against that pushed value, not whichever sits outermost.
-        let entries =
-            parse_hant("proof p = cases(equal(state::thirsty)) (true: both(decide)) diagram;")
-                .unwrap();
-        let [
-            Step::Cases {
-                prim: Prim::Equal,
-                literal: Some(literal),
-                then_arm: Some(_),
-                else_arm: None,
-            },
-            Step::Diagram,
-        ] = &entries[0].strategy[..]
-        else {
-            panic!("{:?}", entries[0].strategy);
-        };
-        assert_eq!(literal, "state::thirsty");
-
-        let err = parse_hant("proof p = cases(equal()) diagram;").unwrap_err();
-        assert!(err.contains("names no literal"), "{}", err);
     }
 
     /// The splitter that eliminates a branch, and the one step whose name
@@ -1637,7 +1555,7 @@ mod tests {
             "select-same",
         ] {
             let err = parse_hant(&format!(
-                "proof p = cases(equal) (true: {}) diagram;",
+                "proof p = cases(#nk) (true: {}) diagram;",
                 refused
             ))
             .unwrap_err();
@@ -1649,7 +1567,7 @@ mod tests {
             );
         }
         // Nested arms are held to the same rule.
-        let err = parse_hant("proof p = cases(equal) (true: cases(and) (false: inline)) diagram;")
+        let err = parse_hant("proof p = cases(#nk) (true: cases(#zy) (false: inline)) diagram;")
             .unwrap_err();
         assert!(
             err.contains("cannot appear inside a `cases` arm"),
@@ -2134,8 +2052,8 @@ mod tests {
                 "proof p = via { id(0) } (left: diagram, right: diagram);",
             ),
             (
-                "proof p = cases(is_bool) (true: lhs(decide), false: lhs(decide),);",
-                "proof p = cases(is_bool) (true: lhs(decide), false: lhs(decide));",
+                "proof p = cases(#nk) (true: lhs(decide), false: lhs(decide),);",
+                "proof p = cases(#nk) (true: lhs(decide), false: lhs(decide));",
             ),
         ] {
             let spelled = parse_hant(spelled).unwrap_or_else(|e| panic!("{}: {}", spelled, e));

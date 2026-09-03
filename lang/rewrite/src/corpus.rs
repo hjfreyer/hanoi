@@ -130,14 +130,14 @@ pub(crate) fn attach(
                     left: side(ctx, left, library)?,
                     right: side(ctx, right, library)?,
                 },
+                // The address names a box of the goal, not of the
+                // library: nothing in it waits on a name being resolved.
                 Step::Cases {
-                    prim,
-                    literal,
+                    at,
                     then_arm,
                     else_arm,
                 } => Step::Cases {
-                    prim: prim.clone(),
-                    literal: literal.clone(),
+                    at: at.clone(),
                     then_arm: side(ctx, then_arm, library)?,
                     else_arm: side(ctx, else_arm, library)?,
                 },

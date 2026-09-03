@@ -9,12 +9,16 @@
 // tree, the arm that tested equal to a literal holds the literal, and each
 // leaf folds on the machine. What the proof has left to say is the one
 // thing the engine never does on its own — spend the definitions — and
-// which of the four `equal`s each split is about: the tag tests are named
-// by their literals, since an unaddressed `cases(equal)` takes the first
-// it is offered, which is the postcondition's own shape guard and decides
-// nothing.
+// which wire each split is about.
+//
+// It says that by address, the way every other step of this language says
+// where: `#zl` is the test `v = t1` and `#y` is `v = t2`, each read off
+// the listing the goal prints when a step in front of the split is `exact`.
+// The goal holds four `equal`s, and which of them a split means is not
+// something the shape of the step could decide — the outermost is the
+// postcondition's own tuple guard, and splitting there decides nothing.
 proof types_test::number_does_pre_and_post_is_constant =
     inline both(decide)
-    cases(equal(types_test::t1)) both(decide)
-    cases(equal(types_test::t2)) both(decide)
+    cases(#zl) both(decide)
+    cases(#y) both(decide)
     diagram;

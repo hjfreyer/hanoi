@@ -9,9 +9,9 @@ proof identities::testing_a_test_by_name = inline diagram;
 // The arm recomputes the very test its branch decided. Nothing stands
 // between an arm and what it reads, so the driver identifies the two
 // computations by `dedup` alone, and the case split on the one wire that
-// remains decides both readings at once: η, spent deliberately, where no
-// rewrite window could.
-proof identities::specializing_a_tested_value = both(decide) cases(equal) diagram;
+// remains — `#t`, the `equal` both sides are left holding — decides both
+// readings at once: η, spent deliberately, where no rewrite window could.
+proof identities::specializing_a_tested_value = both(decide) cases(#t) diagram;
 
 // The reader-split, said outright. The right side reads one of a shared
 // wire's two readings through the cancelling pair and leaves the other on

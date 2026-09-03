@@ -21,7 +21,7 @@ Trusted, and the whole of it:
   `fold` consults `run_window`, the real `vm`.
 
 Everything else — `find`, `propose`, drivers, tactics, queries, the
-`cases` step's wire-picking, strategy interpretation — is untrusted
+address a `cases` names its wire by, strategy interpretation — is untrusted
 search. It mutates a graph through `Derivation::push` and nothing else,
 so every step it produces goes through `apply`, and a buggy tactic yields
 a refused step, never a wrong graph. `Graph`'s mutation surface stays

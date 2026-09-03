@@ -107,6 +107,11 @@ which is what the listing prints in **bold** on the box's own line and
 what it prints wherever one box refers to another. Two or three letters,
 in practice.
 
+Addresses are the whole of how this language says *where*, and the
+[proof step](proving.md) that says it too says it this way: `cases(#nk)`
+names the wire to split on by the box that answers with it, off the same
+listing and under the same discipline.
+
 Being a fact about the computation rather than about the graph, an
 address means the same box in every graph that computes it — the goal's
 other side included, and the goal as the next step leaves it. What it
