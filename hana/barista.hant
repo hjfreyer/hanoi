@@ -7,31 +7,31 @@
 // hypotheses, written as structured `cases` (docs/proving.md) and
 // compiled to one checked derivation per side.
 //
-// The two `is_symbol` splits are written as *arms* and the state split is
-// not, and the shape is the whole of what says which wire each is about:
-// an unaddressed `cases` takes the first it is offered, and both tag
-// tests are `is_symbol` on one `untuple`'s answers, so the second split
-// goes inside the first's true arm — where the first wire is a literal
-// and off the offer list — rather than picking the same one twice.
+// Each split names its wire by address — as much of the box's name as the
+// listing emphasised, read off the goal as the step before it leaves it.
 //
 // One state decides everything: `emit` dispatches on `equal(x.2,
-// state::thirsty)`, and the driver has already identified that test with
-// the precondition disjunction's own — one wire, two readers — so the
-// split is addressed by its literal, not left to whichever `equal` sits
-// outermost (that would be the tuple-shape guard, forever). In the false
-// case `emit` answers a false flag and the postcondition holds vacuously,
-// whatever the precondition said — the whole disjunction is moot. In the
-// true case `emit` builds the PushBack event outright; the tuple rows
-// (`tuple-cancel`, `as-tuple-built`, `equal-refl`) take the
-// postcondition's shape guards apart until its symbol checks are the very
-// boxes the precondition tested, and the two `is_symbol` splits decide
-// them — each false case discharged by `and-literal`, each true case
-// folding the conjunction shut.
+// state::thirsty)`, which is `#uk`, and the driver has already identified
+// that test with the precondition disjunction's own — one wire, two
+// readers. In the false case `emit` answers a false flag and the
+// postcondition holds vacuously, whatever the precondition said — the
+// whole disjunction is moot. In the true case `emit` builds the PushBack
+// event outright; the tuple rows (`tuple-cancel`, `as-tuple-built`,
+// `equal-refl`) take the postcondition's shape guards apart until its
+// symbol checks are the very boxes the precondition tested, and the two
+// `is_symbol` splits — `#lq` on the payload's second field and `#oz` on
+// its first — decide them, each false case discharged by `and-literal`,
+// each true case folding the conjunction shut.
+//
+// The two `is_symbol` splits are written as *arms* and the state split is
+// not, and the nesting is what the proof means rather than what it needs
+// to name a wire: `#oz`'s readers are created inside `#lq`'s true case,
+// so that is where the hypothesis deciding them is spent.
 proof barista::customer_impl::emit_does_pre_and_post_is_constant =
     inline both(decide)
-    cases(equal(state::thirsty)) both(decide)
-    cases(is_symbol) (
-        true: both(decide) cases(is_symbol) (
+    cases(#uk) both(decide)
+    cases(#lq) (
+        true: both(decide) cases(#oz) (
             true: both(decide),
             false: both(decide)),
         false: both(decide))

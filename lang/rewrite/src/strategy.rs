@@ -33,8 +33,6 @@
 //! failed run leaves its graph at the last step that landed, and showing
 //! that state is the point of the guarantee.
 
-use std::collections::HashSet;
-
 use std::collections::HashMap;
 
 use bytecode::{IdentityIndex, Library};
@@ -42,9 +40,9 @@ use bytecode::{IdentityIndex, Library};
 use crate::hant::{Body, OnSide, Step, Strategy, default_strategy};
 use crate::kernel;
 use crate::kernel::goal::{self, Goal};
-use crate::kernel::graph::{self, Graph, NodeId, Pair, Source};
+use crate::kernel::graph::{self, Address, Graph, Named, Pair, Prefix, Source};
 use crate::kernel::rules::{self, Derivation};
-use crate::kernel::term::{Context, Error, Prim};
+use crate::kernel::term::{Context, Error};
 use crate::proof::{self, Outcome, Proof, Residual, against};
 use crate::tactic;
 use crate::tactic::{Region, Tactic};
@@ -221,17 +219,17 @@ impl<'l> Prover<'l> {
             }
 
             // Case analysis on an intermediate result, as checked
-            // rewrites: the operation's answer is `true` or `false` and
-            // nothing else, so everything downstream of it becomes a
+            // rewrites: the addressed box's answer is `true` or `false`
+            // and nothing else, so everything downstream of it becomes a
             // branch over both assumptions — `rules::case_split`, the
             // three rows that comes to, spent once per side and every one
-            // of them through `apply` like any rewrite. The
-            // step picks the earliest such answer (the box with the least
-            // upstream), because splitting on a late result says nothing
-            // usable about the computations feeding it; a side without
-            // the operation is left standing, and everything after the
-            // expansion is the table's business. A manipulation, not a
-            // closer: what it leaves is a goal.
+            // of them through `apply` like any rewrite. The wire is
+            // named by address, resolved live against each side: one name
+            // covers both, since an address is a fact about what a box
+            // computes, and a side that does not compute it is left
+            // standing. Everything after the expansion is the table's
+            // business. A manipulation, not a closer: what it leaves is a
+            // goal.
             //
             // The arms, when the proof wrote them, run per-case
             // sub-strategies scoped to the fresh branch — the hypothesis
@@ -239,8 +237,7 @@ impl<'l> Prover<'l> {
             // per-side records as the split, so the proof object and its
             // checker do not learn a hypothesis existed.
             Step::Cases {
-                prim,
-                literal,
+                at,
                 then_arm,
                 else_arm,
             } => {
@@ -250,9 +247,8 @@ impl<'l> Prover<'l> {
                     ctx,
                     &mut goal,
                     &mut derivs,
-                    [Scope::Whole, Scope::Whole],
-                    prim,
-                    literal.as_deref(),
+                    [true, true],
+                    at,
                     then_arm,
                     else_arm,
                 ) {
@@ -585,15 +581,20 @@ impl<'l> Prover<'l> {
     /// `derivs` — one derivation per goal side, alive for the whole step
     /// so a structured split's arm steps append after its own, which is
     /// what lets [`Proof::Cases`] replay flat.
+    ///
+    /// `active` is which goal sides the step may touch: both at the top
+    /// level, and under an arm only the sides that split, since a side
+    /// the enclosing split never touched has no arm to work under. The
+    /// *where* needs nothing else — the address names one box of a side
+    /// outright.
     #[allow(clippy::too_many_arguments)]
     fn cases_step(
         &self,
         ctx: &mut Context,
         goal: &mut Goal,
         derivs: &mut [Derivation; 2],
-        scopes: [Scope; 2],
-        prim: &Prim,
-        literal: Option<&str>,
+        active: [bool; 2],
+        at: &Prefix,
         then_arm: &Option<Strategy<Body>>,
         else_arm: &Option<Strategy<Body>>,
     ) -> Result<CaseCounts, Box<Residual>> {
@@ -604,21 +605,44 @@ impl<'l> Prover<'l> {
         };
         let mut branches: [Option<Source>; 2] = [None, None];
         let picks: [Pick; 2] = [|g| &mut g.lhs, |g| &mut g.rhs];
+        // How many sides the address named a box of — which tells the two
+        // ways this step comes to nothing apart, and they are different
+        // mistakes.
+        let mut named = 0;
         for i in 0..2 {
-            let within = match &scopes[i] {
-                Scope::Whole => None,
-                Scope::In(set) => Some(set),
-                Scope::Skip => continue,
-            };
-            let side = picks[i](goal);
-            let Some(wire) = outermost(side, prim, literal, within) else {
+            if !active[i] {
                 continue;
+            }
+            // Resolved live, against the side as it now stands, under the
+            // discipline every other address in this language is under:
+            // the box, or no box — a side that does not compute the wire,
+            // left standing the way a side without the test always was —
+            // or several, which is a name that wants lengthening.
+            let found = picks[i](goal).lookup(at);
+            let wire = match found {
+                Named::One(node) => node,
+                Named::Nothing => continue,
+                Named::Many(found) => {
+                    let why = format!(
+                        "`cases({})` is {} boxes of the {} side: {}",
+                        at,
+                        found.len(),
+                        side_word(i),
+                        found
+                            .iter()
+                            .map(Address::to_string)
+                            .collect::<Vec<String>>()
+                            .join(" ")
+                    );
+                    return Err(Box::new(gave_up(goal, &why)));
+                }
             };
+            named += 1;
             // Three checked rewrites, landing in this side's record like
             // any others — and what the arms scope to is the wire the
             // branch they made turns on, which survives a rewrite that
             // puts a narrower select in its place.
-            let split = match kernel::rules::case_split(side, &mut derivs[i], wire) {
+            let split = match kernel::rules::case_split(picks[i](goal), &mut derivs[i], wire) {
                 Ok(split) => split,
                 Err(e) => {
                     let why = format!("`cases` proposed a split the checker refused: {}", e);
@@ -632,14 +656,22 @@ impl<'l> Prover<'l> {
             counts.splits += 1;
         }
         if branches.iter().all(Option::is_none) {
-            return Err(Box::new(gave_up(
-                goal,
-                "`cases` finds nothing to split on: no side holds the operation \
-                 with anything downstream of its answer",
-            )));
+            let why = match named {
+                0 => format!(
+                    "`cases({})` names no live box of either side: an address is a name for \
+                     what a box computes, and nothing here computes that",
+                    at
+                ),
+                _ => format!(
+                    "`cases({})` names a box and finds nothing to split on: nothing promises \
+                     its answer is a bool, or nothing reads it",
+                    at
+                ),
+            };
+            return Err(Box::new(gave_up(goal, &why)));
         }
-        counts.then_steps = self.arm(ctx, goal, derivs, &branches, prim, true, then_arm)?;
-        counts.else_steps = self.arm(ctx, goal, derivs, &branches, prim, false, else_arm)?;
+        counts.then_steps = self.arm(ctx, goal, derivs, &branches, at, true, then_arm)?;
+        counts.else_steps = self.arm(ctx, goal, derivs, &branches, at, false, else_arm)?;
         Ok(counts)
     }
 
@@ -656,7 +688,7 @@ impl<'l> Prover<'l> {
         goal: &mut Goal,
         derivs: &mut [Derivation; 2],
         branches: &[Option<Source>; 2],
-        prim: &Prim,
+        at: &Prefix,
         case: bool,
         strategy: &Option<Strategy<Body>>,
     ) -> Result<usize, Box<Residual>> {
@@ -667,7 +699,7 @@ impl<'l> Prover<'l> {
         let stood_in = |residual: &mut Residual| {
             residual.path.insert(
                 0,
-                format!("in the {} case of the split on `{}`", case_word, prim),
+                format!("in the {} case of the split on {}", case_word, at),
             );
         };
         // Which goal sides still hold the branch, read at entry; a branch
@@ -707,32 +739,19 @@ impl<'l> Prover<'l> {
                     }
                 }
                 Step::Cases {
-                    prim: inner,
-                    literal,
+                    at: inner,
                     then_arm,
                     else_arm,
                 } => {
-                    let scopes = [0, 1].map(|i| match active[i] {
-                        None => Scope::Skip,
-                        Some(cond) => {
-                            let side = if i == 0 { &goal.lhs } else { &goal.rhs };
-                            match tactic::arm_nodes(side, cond, case) {
-                                Some(set) => Scope::In(set),
-                                None => Scope::Skip,
-                            }
-                        }
-                    });
+                    // A nested split needs no narrowing beyond this: an
+                    // address names one box of a side outright, and the
+                    // arm's own retest of a decided wire is a box with an
+                    // address of its own. What is still the enclosing
+                    // split's business is which sides its arm stands on —
+                    // a side that never split has no arm to work under.
+                    let sides = [0, 1].map(|i| active[i].is_some());
                     let sub = self
-                        .cases_step(
-                            ctx,
-                            goal,
-                            derivs,
-                            scopes,
-                            inner,
-                            literal.as_deref(),
-                            then_arm,
-                            else_arm,
-                        )
+                        .cases_step(ctx, goal, derivs, sides, inner, then_arm, else_arm)
                         .map_err(|mut residual| {
                             stood_in(&mut residual);
                             residual
@@ -749,17 +768,6 @@ impl<'l> Prover<'l> {
     }
 }
 
-/// How a `cases` step scopes each goal side when it looks for the wire to
-/// split on: the whole side at the top level; an enclosing arm's boxes
-/// when nested, so the split picks the arm's own retest rather than the
-/// test the enclosing split already spent; or not at all, for a side the
-/// enclosing split never touched.
-enum Scope {
-    Whole,
-    In(HashSet<NodeId>),
-    Skip,
-}
-
 /// What one `cases` step spent, for the proof's summary: how many
 /// expansions fired, and how many steps each written arm landed (both
 /// goal sides summed, nested splits included).
@@ -769,55 +777,9 @@ struct CaseCounts {
     else_steps: usize,
 }
 
-/// Whether one of a box's operands is the pushed literal `want` names —
-/// by its full spelling, or by any tail of it from a `::` boundary, the
-/// way an `inline` label names a sentence.
-fn names_literal(g: &Graph, id: NodeId, want: &str) -> bool {
-    g.sources(id).iter().any(|src| match *src {
-        Source::Port { node, port: 0 } => match g.kind(node) {
-            graph::NodeKind::Op(Prim::Push(v)) => {
-                let spelled = format!("{}", v);
-                spelled == want || spelled.ends_with(&format!("::{}", want))
-            }
-            _ => false,
-        },
-        _ => false,
-    })
-}
-
-/// The box of one operation with the least upstream — the outermost
-/// decision, which is the one worth splitting on first: everything
-/// downstream of it is what the split decides. Ties break by id. Held to
-/// `within` when a nested split looks only inside its enclosing arm, and
-/// to the boxes testing against a named literal when the proof addressed
-/// the wire by what it tests.
-fn outermost(
-    g: &Graph,
-    prim: &Prim,
-    literal: Option<&str>,
-    within: Option<&HashSet<NodeId>>,
-) -> Option<NodeId> {
-    let cone = |id: NodeId| {
-        let mut seen = HashSet::new();
-        let mut todo = vec![id];
-        while let Some(node) = todo.pop() {
-            if !seen.insert(node) {
-                continue;
-            }
-            for src in g.sources(node) {
-                if let Source::Port { node, .. } = *src {
-                    todo.push(node);
-                }
-            }
-        }
-        seen.len()
-    };
-    g.live()
-        .filter(|(id, _)| within.is_none_or(|set| set.contains(id)))
-        .filter(|(_, k)| matches!(k, graph::NodeKind::Op(p) if p == prim))
-        .filter(|(id, _)| literal.is_none_or(|want| names_literal(g, *id, want)))
-        .map(|(id, _)| id)
-        .min_by_key(|&id| (cone(id), id))
+/// Which side of a goal an index is, for a report that names one.
+fn side_word(i: usize) -> &'static str {
+    if i == 0 { "left" } else { "right" }
 }
 
 /// A residual for a strategy that failed before any engine ran: the goal as
@@ -836,13 +798,38 @@ fn gave_up(goal: &Goal, why: &str) -> Residual {
 mod tests {
     use super::*;
     use crate::hant::parse_hant;
-    use crate::kernel::graph::NodeKind;
+    use crate::kernel::graph::{NodeId, NodeKind};
+    use crate::kernel::term::Prim;
     use bytecode::{Value, assemble};
 
     /// The live boxes of a graph, in id order: what a residual's side is,
     /// checked without going through the listing that prints it.
     fn kinds(graph: &Graph) -> Vec<NodeKind> {
         graph.live().map(|(_, kind)| kind.clone()).collect()
+    }
+
+    /// What a proof writes to name the one box a predicate holds of: the
+    /// shortest prefix of its address, exactly as a residual listing
+    /// prints it — which is where an author of a `cases` reads one.
+    fn address(graph: &Graph, holds: impl Fn(&Graph, NodeId) -> bool) -> String {
+        let mut found = graph
+            .live()
+            .map(|(id, _)| id)
+            .filter(|&id| holds(graph, id));
+        let id = found.next().expect("a box the predicate holds of");
+        assert!(found.next().is_none(), "one box the predicate holds of");
+        format!("#{}", graph.shortest(id))
+    }
+
+    /// The goal's two sides as some steps leave them, got the way a proof's
+    /// author gets them: `exact` on an open goal fails and prints what it
+    /// was reached with.
+    fn standing(code: &str, name: &str, steps: &str) -> (Graph, Graph) {
+        let (_ctx, outcome) = prove_with(code, name, Some(&format!("{} exact", steps)));
+        match outcome {
+            Outcome::Stuck(residual) => (residual.lhs_graph, residual.rhs_graph),
+            _ => panic!("`exact` reached on an open goal fails and shows it"),
+        }
     }
 
     /// Proves the identity named `name`, with the strategy written as a
@@ -1283,10 +1270,19 @@ mod tests {
         let code = "identity probe \
              { pick 0 push 7 equal branch { push 7 equal } { drop 0 push false } } \
            = { pick 0 push 7 equal branch { drop 0 push true } { drop 0 push false } };";
+        // The drive identifies the arm's retest with the one its branch
+        // decided, so one `equal` is left to name.
+        let (lhs, _) = standing(code, "probe", "both(decide)");
+        let at = address(&lhs, |g, id| {
+            matches!(g.kind(id), NodeKind::Op(Prim::Equal))
+        });
         let (_ctx, outcome) = prove_with(
             code,
             "probe",
-            Some("both(decide) cases(equal) (true: both(decide), false: both(decide)) diagram"),
+            Some(&format!(
+                "both(decide) cases({}) (true: both(decide), false: both(decide)) diagram",
+                at
+            )),
         );
         let Outcome::Closed { draft: proof, .. } = outcome else {
             panic!("the structured split closes what the flat one does");
@@ -1306,10 +1302,17 @@ mod tests {
         let code = "identity probe \
              { pick 0 push 7 equal branch { push 7 equal } { drop 0 push false } } \
            = { pick 0 push 7 equal branch { drop 0 push true } { drop 0 push false } };";
+        let (lhs, _) = standing(code, "probe", "both(decide)");
+        let at = address(&lhs, |g, id| {
+            matches!(g.kind(id), NodeKind::Op(Prim::Equal))
+        });
         let (_ctx, outcome) = prove_with(
             code,
             "probe",
-            Some("both(decide) cases(equal) (true: both(fire(tuple-cancel))) diagram"),
+            Some(&format!(
+                "both(decide) cases({}) (true: both(fire(tuple-cancel))) diagram",
+                at
+            )),
         );
         let Outcome::Stuck(residual) = outcome else {
             panic!("a split's branch holds no tuple to cancel");
@@ -1330,13 +1333,24 @@ mod tests {
     }
 
     /// A goal side that never split skips the arms quietly — the same
-    /// tolerance the bare step keeps for a side without the operation.
+    /// tolerance the bare step keeps for a side the address names no box
+    /// of.
     #[test]
     fn a_side_without_the_operation_skips_the_arms_quietly() {
+        let code = "identity probe { is_bool is_bool } = { drop 0 push true };";
+        // The inner test — the one that reads the input. The outer one
+        // reads *it*, and is a box of its own, with a name of its own.
+        let (lhs, _) = standing(code, "probe", "");
+        let at = address(&lhs, |g, id| {
+            matches!(g.kind(id), NodeKind::Op(Prim::IsBool)) && g.sources(id) == [Source::Input(0)]
+        });
         let (_ctx, outcome) = prove_with(
-            "identity probe { is_bool is_bool } = { drop 0 push true };",
+            code,
             "probe",
-            Some("cases(is_bool) (true: both(decide), false: both(decide)) diagram"),
+            Some(&format!(
+                "cases({}) (true: both(decide), false: both(decide)) diagram",
+                at
+            )),
         );
         let Outcome::Closed { draft: proof, .. } = outcome else {
             panic!("the right side has no test, and the left's split closes");
@@ -1346,6 +1360,74 @@ mod tests {
             summary.starts_with("cases: 1 split(s) (true:"),
             "{}",
             summary
+        );
+    }
+
+    /// The three ways a `cases` address comes to nothing, said apart —
+    /// because they are three different mistakes, and only the report
+    /// tells an author which one they made.
+    #[test]
+    fn a_case_split_says_how_its_address_failed() {
+        let code = "identity probe \
+             { pick 0 push 7 equal branch { push 7 equal } { drop 0 push false } } \
+           = { pick 0 push 7 equal branch { drop 0 push true } { drop 0 push false } };";
+
+        // A name nothing answers to: a listing read from before the steps
+        // in front of it changed what that box computes.
+        let (_ctx, outcome) = prove_with(code, "probe", Some("cases(#zzzzzzzzzzzz) diagram"));
+        let Outcome::Stuck(residual) = outcome else {
+            panic!("no box of either side computes that");
+        };
+        assert!(
+            residual
+                .stopped
+                .contains("names no live box of either side"),
+            "{}",
+            residual.stopped
+        );
+
+        // A box both sides hold, and nothing promises its answer is a
+        // bool — so there is no second case, and no split to make.
+        let (lhs, _) = standing(code, "probe", "");
+        let at = address(&lhs, |g, id| {
+            matches!(g.kind(id), NodeKind::Op(Prim::Push(Value::Int(7))))
+        });
+        let (_ctx, outcome) = prove_with(code, "probe", Some(&format!("cases({}) diagram", at)));
+        let Outcome::Stuck(residual) = outcome else {
+            panic!("a literal seven is no case analysis");
+        };
+        assert!(
+            residual.stopped.contains("finds nothing to split on"),
+            "{}",
+            residual.stopped
+        );
+
+        // And a prefix several boxes answer to is not a name at all: it
+        // wants lengthening, and the report says to what. Seventeen boxes
+        // against sixteen letters, so two of them start alike whatever
+        // the letters turn out to be.
+        let wide = "identity wide \
+             { push 1 push 2 add push 3 add push 4 add push 5 add push 6 add \
+               push 7 add push 8 add push 9 add } = { push 45 };";
+        let (lhs, _) = standing(wide, "wide", "");
+        let mut sharing: HashMap<char, usize> = HashMap::new();
+        for (id, _) in lhs.live() {
+            let first = lhs.address(id).letters().chars().next().expect("letters");
+            *sharing.entry(first).or_default() += 1;
+        }
+        let (&letter, _) = sharing
+            .iter()
+            .find(|(_, held)| **held > 1)
+            .expect("sixteen letters cannot tell seventeen boxes apart");
+        let (_ctx, outcome) =
+            prove_with(wide, "wide", Some(&format!("cases(#{}) diagram", letter)));
+        let Outcome::Stuck(residual) = outcome else {
+            panic!("an ambiguous address is not a name");
+        };
+        assert!(
+            residual.stopped.contains("boxes of the left side"),
+            "{}",
+            residual.stopped
         );
     }
 

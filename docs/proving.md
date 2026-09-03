@@ -106,10 +106,8 @@ proof identities::testing_a_test_by_name = inline diagram;
 | `exact` | claims the sides are one diagram — which the auto-close has already checked, so a reached `exact` fails and shows the goal exactly as it stands | always, when reached |
 | `via { body } (left: s, right: s)` | **cuts**: `A = B` splits into the goals `A = C` and `C = B`, the waypoint built as a graph | the waypoint's net stack change is not the goal's, or a side fails |
 | `select-same (then: s, else: s)` | **splits a branch**: the left side answers with a `select`, so `select(c, T, E) = B` becomes the goals `T = B` and `E = B` (see below) | the left side's answer is not one `select`, or a block fails |
-| `cases(op)` | **case analysis** on an intermediate result: an `op` answer is `true` or `false` and nothing else, so everything depending on it becomes a branch holding one copy per case, the assumed answer pasted in as a literal (see below) | no side computes `op`, or nothing depends on its answer |
-| `cases(op(lit))` | the same split, with the wire addressed by what it tests: the outermost `op` one of whose operands is the pushed literal `lit` names — by any tail of its spelling, the way `inline` names a sentence | no such test |
-| `cases(is_tuple n)` | the same, on the one test that takes an operand: `is_tuple` asks whether a value is a tuple at all, `is_tuple n` whether it is one of exactly that width — two different questions | likewise |
-| `cases(op) (true: s, false: s)` | the same split with a sub-strategy per case, each run scoped to its side of the fresh branch (see below) | the split fails, or an arm's tactic does — and the residual names whose case it stood in |
+| `cases(#nk)` | **case analysis** on the wire a box answers with, the box named by [address](tactics.md): the instruction set promises the answer is `true` or `false` and nothing else, so everything depending on it becomes a branch holding one copy per case, the assumed answer pasted in as a literal (see below) | no side names that box, nothing promises its answer is a bool, or nothing depends on it — and the residual says which |
+| `cases(#nk) (true: s, false: s)` | the same split with a sub-strategy per case, each run scoped to its side of the fresh branch (see below) | the split fails, or an arm's tactic does — and the residual names whose case it stood in |
 | `diagram` | rewrites both sides by the whole table to fixpoint and asks whether they landed on one diagram | they did not — and the residual is both sides as they stand |
 
 A strategy acts on **one goal**, and the proof mirrors a tree of goals:
@@ -274,9 +272,14 @@ a rewrite window could see. That particular fact is common enough to be
 its own law (`tested-bool`); the general situation is not, and `cases` is
 the general instrument.
 
-`cases(op)` picks an intermediate result — a wire — produced by an
-operation the instruction set guarantees answers a boolean (`equal`,
-`is_int`, `not`, …; the parser refuses anything else). That answer is
+`cases(#nk)` picks an intermediate result — a wire — by naming the box
+that answers with it, in the same [addresses](tactics.md) an `at` and an
+`on` are written in: as much of the box's name as tells it from the
+others on the page, which is what a residual listing prints in bold on
+its line. The box has to be one the instruction set guarantees answers a
+boolean (`equal`, `is_int`, `not`, …); the kernel is what asks, at the
+wire rather than at a spelling, and a box nothing promises a bool of
+simply offers no second case. That answer is
 `true` or it is `false`, and there is no third case, so the goal's
 downstream computation equals a branch holding one copy per case with the
 assumed answer pasted in as a literal. That is not a row of its own: it
@@ -292,34 +295,55 @@ copies simplify to the same thing, the introduced branch collapses too
 (`select-same`), and the goal closes by plain rewriting — the case
 analysis happened, and every step of it is in the proof's record.
 
-Two practical notes. *Earliest matters*: splitting on a result computed
-late says nothing usable about the computations feeding it, so the step
-takes the earliest test and leaves later ones to be decided along the
-way — or split in turn: `cases(equal) cases(equal)` is a two-variable
-case analysis, four leaves, all folded shut by the closing `diagram`.
+Three practical notes. *One address covers both sides*: an address is a
+fact about what a box computes rather than about the graph holding it, so
+one written name means the same test wherever it is written — the goal's
+other side included, and the goal as the next step leaves it. The step
+spends the split on every side that names the box, and a side that does
+not compute it is left standing.
+
+*Earliest still matters, and the proof is what says so*: splitting on a
+result computed late says nothing usable about the computations feeding
+it. The step no longer guesses at that — it splits where it is told —
+so the wire to name is the outermost decision, and the later tests are
+left to be decided along the way, or split in turn: two `cases` in a row
+is a two-variable case analysis, four leaves, all folded shut by the
+closing `diagram`.
+
 And *identification is free*: a program often retests one condition in
 several places, and the split only helps once those are recognized as a
 single wire. They are, from the moment the graph is written — a box is
-its kind and what it reads, so two spellings of one test are one box.
-`cases` still usually follows a drive, for the ordinary reason: the wire
-it wants may only appear once a branch has folded.
+its kind and what it reads, so two spellings of one test are one box, and
+one address. `cases` still usually follows a drive, for the ordinary
+reason: the wire it wants may only appear once a branch has folded — and
+for a second reason now, that the address is read off the goal *as the
+drive leaves it*.
 
-*And which wire*: an unaddressed `cases(op)` takes the first it is
-offered, so a goal with several tests of one shape needs the split said
-more precisely — `cases(equal(lit))` names one by its literal, and a
-second split of the same shape goes **inside an arm** of the first,
-where the wire already decided is a literal and no longer on offer.
+Which is how a split is written at all: reach the point the split belongs
+at, put an `exact` there, and read the wire's name off the listing the
+failure prints. A rewrite **under** a box renames it — a value made of
+different values is a different value — so an address is good exactly as
+long as the steps in front of it leave its box computing what it
+computed, and a name that has gone stale fails loudly rather than
+splitting somewhere else.
 
 The first worked example, the `types_test` contract claim — a case
 analysis over the two tags an input might be:
 
 ```text
 proof types_test::number_does_pre_and_post_is_constant =
-    inline both(decide) cases(equal) both(decide) cases(equal) diagram;
+    inline both(decide)
+    cases(#zl) both(decide)
+    cases(#y) both(decide)
+    diagram;
 ```
 
-Open the definitions, drive, split on `equal(x, t1)`, drive, split on
-`equal(x, t2)`, and the closer folds every leaf shut.
+Open the definitions, drive, split on `#zl` — which is `equal(x, t1)` —
+drive, split on `#y`, which is `equal(x, t2)`, and the closer folds every
+leaf shut. The goal holds four `equal`s, and which of them each split
+means is not something the shape of the step could decide: the outermost
+is the postcondition's own tuple guard, and splitting there decides
+nothing.
 
 ### Structured `cases`: a sub-proof per case
 
@@ -327,9 +351,9 @@ The structured form carries a sub-strategy per case, in the
 parenthesized-arm spelling `via` already uses:
 
 ```text
-cases(equal) (
+cases(#nk) (
     true:  both(decide),
-    false: both(decide) cases(is_symbol) (true: both(decide)),
+    false: both(decide) cases(#zy) (true: both(decide)),
 )
 ```
 
@@ -356,7 +380,9 @@ Two things to know when writing one:
   afterwards — say, by `tuple-cancel` taking a shape guard apart inside
   an arm — reads the wire undecided, and the move that decides it is to
   **split again inside the arm**: the new readers are downstream there,
-  and a re-test of the old wire *is* the old wire.
+  and a re-test of the old wire *is* the old wire. What the nesting says
+  is *where the hypothesis is spent*, not which wire is meant — the
+  address says that, and says it the same inside an arm as out.
 
 A hypothesis the goal never computes can still be had: compute the test
 — an unread box costs nothing, totality and purity footing the bill —
@@ -372,27 +398,26 @@ contract claim over a four-state machine, 351 boxes against 2 once
 ```text
 proof barista::customer_impl::emit_does_pre_and_post_is_constant =
     inline both(decide)
-    cases(equal(state::thirsty)) (
-        true: both(decide) cases(is_symbol) (
-            true: both(decide) cases(is_symbol) (
-                true: both(decide),
-                false: both(decide)),
+    cases(#uk) both(decide)
+    cases(#lq) (
+        true: both(decide) cases(#oz) (
+            true: both(decide),
             false: both(decide)),
         false: both(decide))
     diagram;
 ```
 
-The addressed split is what makes the tree writable at all: the goal
-holds two dozen `equal`s, and the outermost is the tuple-shape guard —
-splitting there is a fixpoint that decides nothing.
-`cases(equal(state::thirsty))` splits the one test `emit` dispatches on,
-which the drive has already identified with the precondition
-disjunction's own; its false case closes vacuously (the emitted flag is
-false, so the postcondition holds whatever the precondition said), and
-its true case resolves `emit` outright, leaving the nested `is_symbol`
-splits to decide the payload checks — by then the very boxes the
-precondition tested, and each created inside the `thirsty` arm, which is
-why the splits sit there. The whole tree lands in one flat record per
+The addressing is what makes the tree writable at all: the goal holds two
+dozen `equal`s, and the outermost is the tuple-shape guard — splitting
+there is a fixpoint that decides nothing. `#uk` is the one test `emit`
+dispatches on, `equal(x.2, state::thirsty)`, which the drive has already
+identified with the precondition disjunction's own; its false case closes
+vacuously (the emitted flag is false, so the postcondition holds whatever
+the precondition said), and its true case resolves `emit` outright,
+leaving the two `is_symbol` splits — `#lq` and `#oz` — to decide the
+payload checks. Those are by then the very boxes the precondition tested,
+and `#oz`'s readers are created inside `#lq`'s true arm, which is why
+that split sits there. The whole tree lands in one flat record per
 side, replayed blind by the checker.
 
 ## The `.hant` file
@@ -449,7 +474,7 @@ written by hand off the boxes the listing names.
 
 `sides`, `apply` and `certify` are the whole of it — plus the machine
 itself, where a law is *about* what an operation computes. Search,
-drivers, tactics, the `cases` step's wire-picking and the shape of the
+drivers, tactics, the address a `cases` names its wire by and the shape of the
 argument itself are all untrusted: a strategy writes a *draft* — the tree
 of goals it carved and the steps each spent — and `flatten` turns the
 draft into one flat run of steps from the goal's left side to its right,
