@@ -33,14 +33,14 @@
 //! failed run leaves its graph at the last step that landed, and showing
 //! that state is the point of the guarantee.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use bytecode::{IdentityIndex, Library};
 
 use crate::hant::{Body, OnSide, Step, Strategy, default_strategy};
 use crate::kernel;
 use crate::kernel::goal::{self, Goal};
-use crate::kernel::graph::{self, Address, Graph, Named, NodeId, Pair, Prefix, Source};
+use crate::kernel::graph::{self, Address, Graph, Named, NodeId, Pair, Prefix, Sink, Source};
 use crate::kernel::rules::{self, Derivation};
 use crate::kernel::term::{Context, Error, Prim};
 use crate::proof::{self, Outcome, Proof, Residual, against};
@@ -50,6 +50,13 @@ use crate::tactic::{MatchSpec, Reader, Readers, SrcExpr, Tactic};
 
 /// One side of a goal, picked out for a mutation that borrows it alone.
 type Pick = fn(&mut Goal) -> &mut Graph;
+
+/// How many splits an unbudgeted `by-cases` may spend.
+///
+/// Large enough that no tree a person would write by hand comes near it —
+/// the corpus's deepest is three — and small enough that a search which is
+/// not converging says so in a moment rather than in an afternoon.
+const GAS: usize = 32;
 
 /// A claim that has closed, in the two forms a `by` might spend it: the
 /// pair a citation applies, and the run that would discharge that citation.
@@ -244,6 +251,21 @@ impl<'l> Prover<'l> {
                     unreachable!("`cases` closes the goal, and `validate` refused what follows");
                 }
                 self.cases_step(ctx, goal, at, *specialize, then_arm, else_arm)
+            }
+
+            // The same tree, searched for rather than written out: the
+            // closer, and where that stops a split on a wire the goal's
+            // own branches turn on, and the same again on each case. It
+            // spends `cases-equal` wherever that has anything to say. What
+            // it leaves is what a written tree leaves, step for step — a
+            // search that answers wrong is a proof the kernel refuses,
+            // never a wrong graph.
+            Step::ByCases { gas } => {
+                if !rest.is_empty() {
+                    unreachable!("`by-cases` closes the goal, and `validate` refused what follows");
+                }
+                let mut gas = gas.unwrap_or(GAS);
+                self.by_cases(goal, &mut gas)
             }
 
             // A goal whose sides are one graph closed above, before any
@@ -571,7 +593,6 @@ impl<'l> Prover<'l> {
     ) -> Result<Draft, Error> {
         let mut goal = goal;
         let word = if specialize { "cases-equal" } else { "cases" };
-        let mut deriv = Derivation::default();
         // Resolved live, against the side as it now stands, under the
         // discipline every other address in this language is under: the
         // box, no box, or several — and the three are different mistakes.
@@ -611,70 +632,297 @@ impl<'l> Prover<'l> {
                 return Ok(Draft::Stuck(gave_up(&goal, &why)));
             }
         };
-        // `cases-equal` puts the substitution in *before* the η, as the
-        // branch it is, so that the η decides it along with everything
-        // else downstream of the test.
-        if specialize && let Err(why) = substitute(&mut goal.lhs, &mut deriv, wire) {
-            return Ok(Draft::Stuck(gave_up(&goal, &why)));
-        }
-        // The stated row left the test alone, so the address still names
-        // it — but a rewrite has landed, and an address is looked up live
-        // at every entry rather than held across one.
-        let wire = match goal.lhs.lookup(at) {
-            Named::One(node) => node,
-            _ => unreachable!("the stated row excepts the test, so it computes what it did"),
-        };
-        // Three checked rewrites, landing in the left side's record like
-        // any others. A decline leaves nothing behind — the last of the
-        // three is the one that would refuse an empty body, and it is
-        // asked before anything moves.
-        match kernel::rules::case_split(&mut goal.lhs, &mut deriv, wire) {
-            Ok(Some(_)) => {}
-            Ok(None) => {
-                let why = format!(
-                    "`{}({})` names a box and finds nothing to split on: nothing promises \
-                     its answer is a bool, or nothing reads it",
-                    word, at
-                );
+        let (lhs, then_goal, else_goal) = match split_at(&mut goal, wire, specialize) {
+            Ok(split) => split,
+            Err(why) => {
+                let why = format!("`{}({})` {}", word, at, why);
                 return Ok(Draft::Stuck(gave_up(&goal, &why)));
             }
-            Err(e) => {
-                let why = format!("`{}` proposed a split the checker refused: {}", word, e);
-                return Ok(Draft::Stuck(gave_up(&goal, &why)));
-            }
-        }
-        let lhs: Vec<kernel::rules::Step> = deriv.steps().cloned().collect();
-
-        let Some((then, els)) = proof::blocks(&goal.lhs) else {
-            let why = format!(
-                "`{}({})` expanded the wire and the left side's answer is not one branch: \
-                 an output the wire says nothing about is an output the split cannot carve",
-                word, at
-            );
-            return Ok(Draft::Stuck(gave_up(&goal, &why)));
         };
-        let sub = Goal {
-            lhs: then,
-            rhs: goal.rhs.clone(),
-        };
-        let then_sub = match self.side(ctx, "in the true case of the split", then_arm, sub)? {
+        let then_sub = match self.side(ctx, "in the true case of the split", then_arm, then_goal)? {
             Ok(p) => p,
             Err(residual) => return Ok(Draft::Stuck(residual)),
         };
-        let sub = Goal {
-            lhs: els,
-            rhs: goal.rhs.clone(),
-        };
-        let else_sub = match self.side(ctx, "in the false case of the split", else_arm, sub)? {
-            Ok(p) => p,
-            Err(residual) => return Ok(Draft::Stuck(residual)),
-        };
+        let else_sub =
+            match self.side(ctx, "in the false case of the split", else_arm, else_goal)? {
+                Ok(p) => p,
+                Err(residual) => return Ok(Draft::Stuck(residual)),
+            };
         Ok(Draft::Closed(Proof::Cases {
             lhs,
             then_sub,
             else_sub,
         }))
     }
+
+    /// `by-cases`: the closer, and failing that a split, and again on each
+    /// case — the decision tree a proof would have written out, searched
+    /// for instead.
+    ///
+    /// `gas` is the whole search's budget of splits, shared by every case:
+    /// running out is a failure like any other, and the residual says so.
+    /// It is there because termination is an argument rather than a
+    /// theorem — see [`pick_split`].
+    /// Takes no [`Context`]: a search builds no terms, which is the same
+    /// thing as saying it never cuts. Every road it takes is the table's.
+    fn by_cases(&self, goal: Goal, gas: &mut usize) -> Result<Draft, Error> {
+        if graph::isomorphic(&goal.lhs, &goal.rhs) {
+            return Ok(Draft::Closed(Proof::Trivial));
+        }
+        let mut goal = goal;
+        // The closer first, on every goal the search reaches: what a case
+        // wants is usually nothing but the table, and a split is only for
+        // where the table stops.
+        let mut spent: [Vec<kernel::rules::Step>; 2] = [Vec::new(), Vec::new()];
+        let picks: [Pick; 2] = [|g| &mut g.lhs, |g| &mut g.rhs];
+        for (pick, record) in picks.into_iter().zip(&mut spent) {
+            let mut deriv = Derivation::default();
+            if let Err(e) = tactic::run(pick(&mut goal), &mut deriv, &tactic::decide()) {
+                let why = format!("`by-cases`'s drive failed: {}", e);
+                return Ok(Draft::Stuck(gave_up(&goal, &why)));
+            }
+            *record = deriv.steps().cloned().collect();
+        }
+        let [drove_lhs, drove_rhs] = spent;
+        if graph::isomorphic(&goal.lhs, &goal.rhs) {
+            return Ok(Draft::Closed(Proof::Diagram {
+                lhs: drove_lhs,
+                rhs: drove_rhs,
+            }));
+        }
+        let Some((wire, specialize)) = pick_split(&goal.lhs) else {
+            return Ok(Draft::Stuck(gave_up(
+                &goal,
+                "`by-cases` has nowhere left to split: the sides are not one diagram, and \
+                 the left side computes no wire the instruction set promises is a bool and \
+                 something reads",
+            )));
+        };
+        if *gas == 0 {
+            return Ok(Draft::Stuck(gave_up(
+                &goal,
+                "`by-cases` has spent its splits: write `by-cases(n)` for more, or the tree \
+                 out by hand — the search is bounded because its termination is an argument \
+                 rather than a theorem",
+            )));
+        }
+        *gas -= 1;
+        let word = if specialize { "cases-equal" } else { "cases" };
+        let at = goal.lhs.address(wire);
+        let (lhs, then_goal, else_goal) = match split_at(&mut goal, wire, specialize) {
+            Ok(split) => split,
+            Err(why) => {
+                let why = format!("`by-cases` chose `{}({})`, and it {}", word, at, why);
+                return Ok(Draft::Stuck(gave_up(&goal, &why)));
+            }
+        };
+        let case = |sub: Goal, label: &str, gas: &mut usize| match self.by_cases(sub, gas)? {
+            Draft::Closed(p) => Ok(Ok(Box::new(p))),
+            Draft::Stuck(mut residual) => {
+                residual
+                    .path
+                    .insert(0, format!("in the {} case of `{}({})`", label, word, at));
+                Ok(Err(residual))
+            }
+        };
+        let then_sub = match case(then_goal, "true", gas)? {
+            Ok(p) => p,
+            Err(residual) => return Ok(Draft::Stuck(residual)),
+        };
+        let else_sub = match case(else_goal, "false", gas)? {
+            Ok(p) => p,
+            Err(residual) => return Ok(Draft::Stuck(residual)),
+        };
+        Ok(Draft::Closed(Proof::Rewrote {
+            side: "both",
+            lhs: drove_lhs,
+            rhs: drove_rhs,
+            sub: Box::new(Proof::Cases {
+                lhs,
+                then_sub,
+                else_sub,
+            }),
+        }))
+    }
+}
+
+/// The η and the carving, which the written split and the searched one do
+/// alike: expand `at` on the goal's left side, and answer the expansion's
+/// steps beside the two goals its blocks make.
+///
+/// `specialize` states `specialize-equal` onto the test's operands first
+/// (see [`substitute`]), which is the whole of `cases-equal`.
+fn split_at(
+    goal: &mut Goal,
+    at: NodeId,
+    specialize: bool,
+) -> Result<(Vec<kernel::rules::Step>, Goal, Goal), String> {
+    let mut deriv = Derivation::default();
+    let mut at = at;
+    // The substitution goes in *before* the η, as the branch it is, so
+    // that the η decides it along with everything else downstream.
+    if specialize {
+        let name = Prefix::parse(&goal.lhs.address(at).letters()).expect("an address is a prefix");
+        substitute(&mut goal.lhs, &mut deriv, at)?;
+        // A rewrite has landed, so an id is no name for a box; the stated
+        // row excepts the test, so the test computes what it did and its
+        // address still finds it.
+        at = match goal.lhs.lookup(&name) {
+            Named::One(node) => node,
+            _ => unreachable!("the stated row excepts the test, so it computes what it did"),
+        };
+    }
+    // Three checked rewrites, landing in the left side's record like any
+    // others. A decline leaves nothing behind — the last of the three is
+    // the one that would refuse an empty body, and it is asked before
+    // anything moves.
+    match kernel::rules::case_split(&mut goal.lhs, &mut deriv, at) {
+        Ok(Some(_)) => {}
+        Ok(None) => {
+            return Err(
+                "names a box and finds nothing to split on: nothing promises its answer is a \
+                 bool, or nothing reads it"
+                    .to_string(),
+            );
+        }
+        Err(e) => return Err(format!("proposed a split the checker refused: {}", e)),
+    }
+    let Some((then, els)) = proof::blocks(&goal.lhs) else {
+        return Err(
+            "expanded the wire and the left side's answer is not one branch: an output the \
+             wire says nothing about is an output the split cannot carve"
+                .to_string(),
+        );
+    };
+    Ok((
+        deriv.steps().cloned().collect(),
+        Goal {
+            lhs: then,
+            rhs: goal.rhs.clone(),
+        },
+        Goal {
+            lhs: els,
+            rhs: goal.rhs.clone(),
+        },
+    ))
+}
+
+/// Which wire the searched split takes next, and whether the substitution
+/// applies to it.
+///
+/// The candidates are every live box the instruction set promises answers
+/// a **bool** and something reads. That set is also the termination
+/// argument: the η pastes its literal into every reader the wire had, so
+/// in each case nothing reads that box any more and it is no longer a
+/// candidate — while every box a split leaves is one that was already
+/// there or a copy of one, so nothing new enters. The set shrinks by at
+/// least one at every split, and a goal has finitely many boxes.
+///
+/// What keeps that an argument rather than a theorem is the drive between
+/// splits, which is free to reshape the goal. Hence the gas.
+///
+/// The order is a heuristic, and it is three questions asked in turn.
+///
+/// **Is it primitive?** A candidate no other candidate feeds is preferred
+/// to one built out of others, because deciding `and(a, b)` says nothing
+/// about `a` or `b`, while deciding both of those decides the `and`. This
+/// is the question that matters most: a split on a derived test is how a
+/// search paints itself into a case that is no longer true.
+///
+/// **Does a branch turn on it?** Among equals, a wire the goal already
+/// branches on is worth more, since the split resolves that branch
+/// outright by `select-literal` rather than only feeding the rows below.
+///
+/// **How far upstream is it?** Then the outermost — least cone, ties by
+/// id — which is the goal's own first decision.
+///
+/// A condition is followed through an `as_bool`, since a coercion is where
+/// a branch is *made* and not what it tests.
+///
+/// `true` for the substitution when the wire is an `equal` some box other
+/// than the test itself reads the deep operand of, which is exactly when
+/// `cases-equal` has something to say ([`substitute`]).
+fn pick_split(graph: &Graph) -> Option<(NodeId, bool)> {
+    let promised = |node: NodeId| match graph.kind(node) {
+        graph::NodeKind::Op(p) => p.to_instruction().yields_bool() && p.arity().outputs == 1,
+        _ => false,
+    };
+    let read = |node: NodeId| !graph.sinks(Source::Port { node, port: 0 }).is_empty();
+    let candidates: HashSet<NodeId> = graph
+        .live()
+        .map(|(id, _)| id)
+        .filter(|&id| promised(id) && read(id))
+        .collect();
+    // A branch is made at a coercion, and what it tests is underneath one.
+    let tested = |mut node: NodeId| {
+        while let graph::NodeKind::Op(Prim::AsBool) = graph.kind(node) {
+            match graph.sources(node).first() {
+                Some(Source::Port { node: under, .. }) => node = *under,
+                _ => break,
+            }
+        }
+        node
+    };
+    let turned_on: HashSet<NodeId> = graph
+        .live()
+        .filter(|(_, kind)| matches!(kind, graph::NodeKind::Select))
+        .filter_map(|(id, _)| match graph.sources(id).first() {
+            Some(Source::Port { node, port: 0 }) => Some(tested(*node)),
+            _ => None,
+        })
+        .collect();
+    // Everything one box reads, transitively — itself excluded, so that
+    // "some other candidate feeds this one" is a question about the boxes
+    // strictly above it.
+    let cone = |id: NodeId| {
+        let mut seen = HashSet::new();
+        let mut todo: Vec<NodeId> = graph
+            .sources(id)
+            .iter()
+            .filter_map(|src| match *src {
+                Source::Port { node, .. } => Some(node),
+                Source::Input(_) => None,
+            })
+            .collect();
+        while let Some(node) = todo.pop() {
+            if !seen.insert(node) {
+                continue;
+            }
+            for src in graph.sources(node) {
+                if let Source::Port { node, .. } = *src {
+                    todo.push(node);
+                }
+            }
+        }
+        seen
+    };
+    let wire = candidates
+        .iter()
+        .map(|&id| {
+            let above = cone(id);
+            let derived = above.iter().any(|up| candidates.contains(up));
+            ((derived, !turned_on.contains(&id), above.len(), id), id)
+        })
+        .min_by(|a, b| a.0.cmp(&b.0))
+        .map(|(_, id)| id)?;
+    Some((wire, substitutes(graph, wire)))
+}
+
+/// Whether [`substitute`] has anything to do at this wire: it is an
+/// `equal`, and some box other than the test itself reads what the test
+/// read. Where nothing else does, the substitution would reach nobody and
+/// the plain split is the whole of what there is to spend.
+fn substitutes(graph: &Graph, wire: NodeId) -> bool {
+    if !matches!(graph.kind(wire), graph::NodeKind::Op(Prim::Equal)) {
+        return false;
+    }
+    let Some(&deep) = graph.sources(wire).first() else {
+        return false;
+    };
+    graph
+        .sinks(deep)
+        .into_iter()
+        .any(|sink| !matches!(sink, Sink::Port { node, .. } if node == wire))
 }
 
 /// `cases-equal`'s extra step: `specialize-equal` **stated** onto the two
@@ -1422,6 +1670,76 @@ mod tests {
             "{}",
             residual.stopped
         );
+    }
+
+    /// The searched tree closes what the written one does, on the goal
+    /// the written one was written for — and closes it **certified**,
+    /// which is the whole of what makes a search admissible here: what it
+    /// answers is a draft the kernel replays like any other.
+    #[test]
+    fn by_cases_finds_the_tree_a_proof_would_have_written() {
+        // `b and not b` is false, and no window says so: whatever the
+        // test answered, it answered one thing, and that is the split.
+        let code = "identity probe { is_int pick 0 not and } = { drop 0 push false };";
+        let (_ctx, outcome) = prove_with(code, "probe", Some("by-cases"));
+        let Outcome::Closed { draft, run } = outcome else {
+            panic!("one split and the table close this: {:?}", outcome);
+        };
+        assert!(!run.is_empty(), "a close is a run of checked steps");
+        assert!(draft.summary().contains("cases:"), "{}", draft.summary());
+    }
+
+    /// It reaches for `cases-equal` on its own where the substitution is
+    /// what the goal wants — the claim `cases` alone cannot close.
+    #[test]
+    fn by_cases_substitutes_where_that_is_what_is_wanted() {
+        let code = "identity probe \
+             { pick 0 push 7 equal branch { push 1 add } { drop 0 push 8 } } \
+           = { drop 0 push 8 };";
+        let (_ctx, outcome) = prove_with(code, "probe", Some("by-cases"));
+        assert!(
+            matches!(outcome, Outcome::Closed { .. }),
+            "the search spends the substitution without being asked: {:?}",
+            outcome
+        );
+    }
+
+    /// The budget is a real bound and says so when it runs out, and a
+    /// goal with nothing left to split on says *that* — two different
+    /// ends to a search, and a report that tells them apart.
+    #[test]
+    fn a_search_that_does_not_close_says_how_it_stopped() {
+        // Nothing to split on: no box here answers a bool at all.
+        let (_ctx, outcome) = prove_with(
+            "identity probe { push 1 add } = { push 2 add };",
+            "probe",
+            Some("by-cases"),
+        );
+        let Outcome::Stuck(residual) = outcome else {
+            panic!("adding one is not adding two");
+        };
+        assert!(
+            residual.stopped.contains("nowhere left to split"),
+            "{}",
+            residual.stopped
+        );
+
+        // And a budget of none, on a goal that would otherwise close.
+        let code = "identity probe { is_int pick 0 not and } = { drop 0 push false };";
+        let (_ctx, outcome) = prove_with(code, "probe", Some("by-cases(0)"));
+        let Outcome::Stuck(residual) = outcome else {
+            panic!("no splits is no case analysis");
+        };
+        assert!(
+            residual.stopped.contains("spent its splits"),
+            "{}",
+            residual.stopped
+        );
+
+        // One is enough for that goal, which is what makes the budget a
+        // bound on the search rather than on the claim.
+        let (_ctx, outcome) = prove_with(code, "probe", Some("by-cases(1)"));
+        assert!(matches!(outcome, Outcome::Closed { .. }), "{:?}", outcome);
     }
 
     /// The three ways a `cases` address comes to nothing, said apart —
