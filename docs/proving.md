@@ -534,7 +534,12 @@ is what makes searching admissible here at all.
 ## The `.hant` file
 
 One file beside each `.hana` that states identities, holding `proof`
-entries in the strategy language above. Attachment is checked both ways:
+entries in the strategy language above. An identity the compiler wrote —
+`#[type(A -> B)]` on a function `f` states `f_has_type`, see
+[docs/hana.md](hana.md#typed-functions) — is addressed exactly as a written
+one is, and always needs an entry: its left side calls `f`, and no driver
+opens a call on its own, so the least it says is `inline diagram`, and
+`inline by-cases` where the claim turns on what the input is. Attachment is checked both ways:
 an entry naming no stated identity is an error — a renamed identity would
 otherwise silently shed its proof — and a claim discharged twice was
 discharged once too often.

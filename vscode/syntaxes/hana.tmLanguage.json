@@ -85,8 +85,15 @@
           "include": "#comment"
         },
         {
-          "match": "\\b(arity|precondition|postcondition)\\b",
+          "match": "\\b(arity|type|precondition|postcondition)\\b",
           "name": "entity.name.function.annotation.hana"
+        },
+        {
+          "match": "->",
+          "name": "keyword.operator.arrow.hana"
+        },
+        {
+          "include": "#type-spec"
         },
         {
           "include": "#number"

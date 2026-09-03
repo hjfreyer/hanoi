@@ -147,8 +147,13 @@ mod customer_impl {
     identity emit_does_pre_and_post_is_constant { jump emit_does_pre_and_post } = { drop 0 push true };
 
     // emit takes state: (id, preferred_drink, internal_state) and returns ValueSet of emitted events.
+    //
+    // The type is the contract above stated once: it lowers to the identity
+    // `emit_has_type`, which is `emit_does_pre_and_post_is_constant` with
+    // the sentence in the middle written inline rather than named.
     #[precondition(is_state::check)]
     #[postcondition(emit_postcondition)]
+    #[type(is_state -> emit_postcondition)]
     function emit {
         untuple 3
         // Stack: [id, preferred_drink, internal_state]

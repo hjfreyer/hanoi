@@ -22,9 +22,10 @@
 use crate::ast::core;
 use crate::ast::sugar::{self, Composer};
 use crate::ast::{
-    ParsedInstruction, ParsedSentence, ParsedValue, PrimitiveType, SentenceDecl, SourceAnnotation,
-    SymbolDecl, Target, TypeSpec,
+    IdentityDecl, ParsedInstruction, ParsedSentence, ParsedValue, PrimitiveType, SentenceDecl,
+    SourceAnnotation, SymbolDecl, Target, TypeSpec,
 };
+use crate::library::Annotation;
 use crate::resolve::{Path, PathSegment};
 
 /// Lowers a parsed module body into core items.
@@ -109,7 +110,17 @@ impl Lowerer {
         match item {
             sugar::Item::Symbol(decl) => Ok(vec![core::Item::Symbol(decl)]),
             sugar::Item::ConstString(decl) => Ok(vec![core::Item::ConstString(decl)]),
-            sugar::Item::Sentence(decl) => Ok(vec![core::Item::Sentence(decl)]),
+            // A sentence is core; the type it may carry is not, and lowers to
+            // the identity it states, beside the sentence and at the same
+            // depth — so, like an identity's own paths, nothing in it shifts.
+            sugar::Item::Sentence(sugar::SentenceDecl { decl, signature }) => {
+                let claim = signature
+                    .map(|signature| lower_signature(&decl.name, signature))
+                    .transpose()?;
+                Ok(std::iter::once(core::Item::Sentence(decl))
+                    .chain(claim)
+                    .collect())
+            }
             // Core, so there is nothing to lower. The depth rule does not
             // apply either: an identity emits nothing deeper than where it was
             // written, so no path inside it needs shifting.
@@ -353,6 +364,68 @@ fn expect_paths(args: &[ComposerArg], composer: &str, n: usize) -> Result<Vec<Pa
             )),
         })
         .collect()
+}
+
+/// The name of the identity `#[type(A -> B)]` on `name` states, which is what
+/// a `.hant` proof of the claim addresses it by.
+fn signature_identity_name(name: &str) -> String {
+    format!("{}_has_type", name)
+}
+
+/// `#[type(A -> B)] function f { … }` states, beside `f`,
+///
+/// ```text
+/// identity f_has_type
+///     { pick 0 …A… branch { jump f …B… } { drop 0 push true } }
+///   = { drop 0 push true };
+/// ```
+///
+/// which is `not (A x) or B (f x)` written the way a branch writes it: either
+/// the input was not well-formed, or the output is. The specs compile exactly
+/// as a `type` declaration's would, inline rather than as a `check` of their
+/// own, and the sentence is reached by the name it was declared under, in the
+/// module it was declared in — where the identity lands too, so no path in
+/// either spec needs the depth rule applied.
+///
+/// The identity is a claim and states nothing about how it is proved. In
+/// practice the proof beside the file says `inline` and then `by-cases` or
+/// `diagram`: a call is opaque to the driver until a proof opens it.
+fn lower_signature(name: &str, signature: sugar::Signature) -> Result<core::Item, String> {
+    let sugar::Signature {
+        input,
+        output,
+        span,
+    } = signature;
+
+    let mut well_formed_output = vec![ParsedInstruction::Jump(Target::Label(ident_path(&[name])))];
+    well_formed_output.extend(compile_type_spec(&output)?);
+
+    let constantly_true = || ParsedSentence {
+        instructions: vec![
+            ParsedInstruction::Drop(0),
+            ParsedInstruction::Push(ParsedValue::Bool(true)),
+        ],
+    };
+
+    let mut lhs = vec![ParsedInstruction::Pick(0)];
+    lhs.extend(compile_type_spec(&input)?);
+    lhs.push(ParsedInstruction::Branch(
+        Target::Inline(ParsedSentence {
+            instructions: well_formed_output,
+        }),
+        Target::Inline(constantly_true()),
+    ));
+
+    Ok(core::Item::Identity(IdentityDecl {
+        name: signature_identity_name(name),
+        lhs: ParsedSentence { instructions: lhs },
+        rhs: constantly_true(),
+        // Both sides read one value and leave one, and saying so is what
+        // makes a sentence that is not `1 -> 1` fail at the claim rather
+        // than somewhere inside it.
+        annotations: vec![Annotation::Arity(1, 1)],
+        span,
+    }))
 }
 
 /// `type Name spec;` becomes `mod Name { export sentence check { …spec… } }`.

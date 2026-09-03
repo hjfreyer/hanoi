@@ -22,3 +22,8 @@
 // own. So the proof says that much and no more.
 proof barista::customer_impl::emit_does_pre_and_post_is_constant =
     inline by-cases;
+
+// The claim `#[type(is_state -> emit_postcondition)]` on `emit` states: the
+// same goal, so the same proof.
+proof barista::customer_impl::emit_has_type =
+    inline by-cases;

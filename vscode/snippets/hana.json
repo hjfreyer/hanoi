@@ -75,5 +75,15 @@
     "prefix": "identity",
     "body": "identity ${1:name} { $2 } = { $3 };",
     "description": "A stated identity between two programs"
+  },
+  "Typed function": {
+    "prefix": "typed",
+    "body": [
+      "#[type(${1:A} -> ${2:B})]",
+      "function ${3:name} {",
+      "\t$0",
+      "}"
+    ],
+    "description": "A function with a type, which states the identity <name>_has_type"
   }
 }
