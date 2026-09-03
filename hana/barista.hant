@@ -4,8 +4,9 @@
 
 // The contract claim, and the corpus's biggest goal: 351 boxes against 2
 // once `inline` has opened it. It closes as a decision tree of three
-// hypotheses, written as structured `cases` (docs/proving.md) and
-// compiled to one checked derivation per side.
+// hypotheses, and the tree is the splits' own: a `cases` is η on its wire
+// and then the branch that makes split by `select-same`, so each case is
+// an independent goal written inside it.
 //
 // Each split names its wire by address — as much of the box's name as the
 // listing emphasised, read off the goal as the step before it leaves it.
@@ -13,26 +14,22 @@
 // One state decides everything: `emit` dispatches on `equal(x.2,
 // state::thirsty)`, which is `#uk`, and the driver has already identified
 // that test with the precondition disjunction's own — one wire, two
-// readers. In the false case `emit` answers a false flag and the
-// postcondition holds vacuously, whatever the precondition said — the
-// whole disjunction is moot. In the true case `emit` builds the PushBack
-// event outright; the tuple rows (`tuple-cancel`, `as-tuple-built`,
-// `equal-refl`) take the postcondition's shape guards apart until its
-// symbol checks are the very boxes the precondition tested, and the two
-// `is_symbol` splits — `#lq` on the payload's second field and `#oz` on
-// its first — decide them, each false case discharged by `and-literal`,
-// each true case folding the conjunction shut.
+// readers. Its false case closes outright: `emit` answers a false flag, so
+// the postcondition holds whatever the precondition said and the whole
+// disjunction is moot. Its true case resolves `emit`; the tuple rows
+// (`tuple-cancel`, `as-tuple-built`, `equal-refl`) take the
+// postcondition's shape guards apart until its symbol checks are the very
+// boxes the precondition tested, and the two `is_symbol` splits — `#lq` on
+// the payload's second field, then `#oz` on its first — decide them. Each
+// false case is discharged by `and-literal` and each true case folds the
+// conjunction shut, which is why every leaf here is a bare `diagram`.
 //
-// The two `is_symbol` splits are written as *arms* and the state split is
-// not, and the nesting is what the proof means rather than what it needs
-// to name a wire: `#oz`'s readers are created inside `#lq`'s true case,
-// so that is where the hypothesis deciding them is spent.
+// `#oz`'s readers are created inside `#lq`'s true case, which is why that
+// split sits there rather than beside it.
 proof barista::customer_impl::emit_does_pre_and_post_is_constant =
     inline both(decide)
-    cases(#uk) both(decide)
-    cases(#lq) (
-        true: both(decide) cases(#oz) (
-            true: both(decide),
-            false: both(decide)),
-        false: both(decide))
-    diagram;
+    cases(#uk) (
+        true: both(decide) cases(#lq) (
+            true: both(decide) cases(#oz) (true: diagram, false: diagram),
+            false: diagram),
+        false: diagram);

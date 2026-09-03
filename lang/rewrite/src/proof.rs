@@ -103,20 +103,18 @@ pub enum Proof {
         then_sub: Box<Proof>,
         else_sub: Box<Proof>,
     },
-    /// A `cases` expanded a boolean-valued wire — η, spent as the three
-    /// table rows it is — on each side that held one, and the expanded goal
-    /// closed. The per-side records hold the split(s) and, when the step
-    /// carried per-case sub-strategies, every step those landed inside the
-    /// arms, in order — all ordinary rewrites. `splits` and `arms` are
-    /// presentation only: how many expansions fired, and how many rewrites
-    /// each case's sub-strategy spent (both sides summed), when arms were
-    /// written.
+    /// A `cases` expanded a boolean-valued wire on the left side — η,
+    /// spent as the three table rows it is — and then split the branch it
+    /// made, which is [`SelectSame`](Proof::SelectSame)'s move on a branch
+    /// the step itself put there. `lhs` is the expansion's steps; the two
+    /// sub-proofs discharge the cases, each against the whole right side,
+    /// and `select-same` closes the branch once both blocks have landed on
+    /// it. The blocks are `blocks`'s to rebuild from the expanded left
+    /// side, the same way the prover carved them.
     Cases {
         lhs: Vec<Step>,
-        rhs: Vec<Step>,
-        splits: usize,
-        arms: Option<(usize, usize)>,
-        sub: Box<Proof>,
+        then_sub: Box<Proof>,
+        else_sub: Box<Proof>,
     },
     /// A `diagram` drove both sides to fixpoint and they were one diagram.
     Diagram { lhs: Vec<Step>, rhs: Vec<Step> },
@@ -158,17 +156,15 @@ impl Proof {
                 else_sub.summary()
             ),
             Proof::Cases {
-                splits, arms, sub, ..
-            } => match arms {
-                None => format!("cases: {} split(s); {}", splits, sub.summary()),
-                Some((t, e)) => format!(
-                    "cases: {} split(s) (true: {} rewrite(s); false: {} rewrite(s)); {}",
-                    splits,
-                    t,
-                    e,
-                    sub.summary()
-                ),
-            },
+                lhs,
+                then_sub,
+                else_sub,
+            } => format!(
+                "cases: {} expansion step(s) (true: {}; false: {})",
+                lhs.len(),
+                then_sub.summary(),
+                else_sub.summary()
+            ),
             Proof::Diagram { .. } => "the two sides are one diagram".to_string(),
         }
     }
@@ -215,9 +211,6 @@ fn extract(
         Proof::Rewrote {
             lhs, rhs: r, sub, ..
         }
-        | Proof::Cases {
-            lhs, rhs: r, sub, ..
-        }
         | Proof::Inlined {
             lhs, rhs: r, sub, ..
         } => valley(lhs, r, Some(sub), cur, rhs, ctx, run),
@@ -258,57 +251,92 @@ fn extract(
                 .map_err(|e| format!("joining the halves of the cut: {}", e))
         }
         Proof::SelectSame { then_sub, else_sub } => {
-            let Some((then, els)) = blocks(cur) else {
-                return Err(
-                    "claimed a `select-same` split, and the left side does not answer with \
-                     one branch"
-                        .to_string(),
-                );
-            };
-            for (label, block, sub, port) in
-                [("then", then, then_sub, 1), ("else", els, else_sub, 2)]
-            {
-                let mut from = block.clone();
-                let mut arm = Vec::new();
-                extract(sub, &mut from, rhs, ctx, &mut arm)
-                    .map_err(|e| format!("in the branch's {} block: {}", label, e))?;
-                splice(cur, &block, &arm, Some(port), run)
-                    .map_err(|e| format!("splicing the {} block's run: {}", label, e))?;
+            split_blocks("`select-same`", cur, then_sub, else_sub, rhs, ctx, run)
+        }
+        // η, and then the branch it made spent exactly as `select-same`
+        // spends one a goal already had: the expansion's own steps, each
+        // case's run spliced into its block, and the branch closed by the
+        // law this step is named after. That the branch was put there a
+        // moment ago is the only difference between the two.
+        Proof::Cases {
+            lhs,
+            then_sub,
+            else_sub,
+        } => {
+            for step in lhs {
+                apply(cur, step)
+                    .map_err(|e| format!("a recorded expansion step does not re-apply: {}", e))?;
+                run.push(step.clone());
             }
-            // Both blocks are the right side now, over the same sources, so
-            // they are one box and every select answers it either way.
-            let selects: Vec<NodeId> = cur
-                .outputs()
-                .iter()
-                .map(|&out| match out {
-                    Source::Port { node, port: 0 }
-                        if matches!(cur.kind(node), NodeKind::Select) =>
-                    {
-                        Ok(node)
-                    }
-                    _ => Err("the blocks' runs left an output that is not a select".to_string()),
-                })
-                .collect::<Result<_, _>>()?;
-            for select in selects {
-                if !cur.is_live(select) {
-                    // Two outputs answered by one select: the first firing
-                    // took care of both.
-                    continue;
-                }
-                let step = propose(cur, &[Law::SelectSame], select)
-                    .into_iter()
-                    .next()
-                    .ok_or_else(|| {
-                        "the blocks' runs did not land on one box, so `select-same` has nothing \
-                         to say"
-                            .to_string()
-                    })?;
-                apply(cur, &step).map_err(|e| format!("`select-same` refused: {}", e))?;
-                run.push(step);
-            }
-            Ok(())
+            split_blocks("`cases`", cur, then_sub, else_sub, rhs, ctx, run)
         }
     }
+}
+
+/// The move both splitters make: the left side answers with one branch, so
+/// each block's run is spliced into that block, and once both have landed
+/// on the right side the branch answers it either way and `select-same`
+/// closes it.
+fn split_blocks(
+    step: &str,
+    cur: &mut Graph,
+    then_sub: &Proof,
+    else_sub: &Proof,
+    rhs: &Graph,
+    ctx: &mut Context,
+    run: &mut Vec<Step>,
+) -> Result<(), String> {
+    let Some((then, els)) = blocks(cur) else {
+        return Err(format!(
+            "claimed a {} split, and the left side does not answer with one branch",
+            step
+        ));
+    };
+    for (label, block, sub, port) in [("then", then, then_sub, 1), ("else", els, else_sub, 2)] {
+        let mut from = block.clone();
+        let mut arm = Vec::new();
+        extract(sub, &mut from, rhs, ctx, &mut arm)
+            .map_err(|e| format!("in the branch's {} block: {}", label, e))?;
+        splice(cur, &block, &arm, Some(port), run)
+            .map_err(|e| format!("splicing the {} block's run: {}", label, e))?;
+    }
+    // Both blocks are the right side now, over the same sources, so they
+    // are one box and every select answers it either way.
+    close_branch(cur, run)
+}
+
+/// A branch both of whose blocks have landed on one graph, spent: every
+/// output `select` answers that graph either way, so `select-same` closes
+/// it — one firing per answer, and an answer an earlier firing took with it
+/// is already gone.
+fn close_branch(cur: &mut Graph, run: &mut Vec<Step>) -> Result<(), String> {
+    let selects: Vec<NodeId> = cur
+        .outputs()
+        .iter()
+        .map(|&out| match out {
+            Source::Port { node, port: 0 } if matches!(cur.kind(node), NodeKind::Select) => {
+                Ok(node)
+            }
+            _ => Err("the blocks' runs left an output that is not a select".to_string()),
+        })
+        .collect::<Result<_, _>>()?;
+    for select in selects {
+        if !cur.is_live(select) {
+            // Two outputs answered by one select: the first firing took
+            // care of both.
+            continue;
+        }
+        let step = propose(cur, &[Law::SelectSame], select)
+            .into_iter()
+            .next()
+            .ok_or_else(|| {
+                "the blocks' runs did not land on one box, so `select-same` has nothing to say"
+                    .to_string()
+            })?;
+        apply(cur, &step).map_err(|e| format!("`select-same` refused: {}", e))?;
+        run.push(step);
+    }
+    Ok(())
 }
 
 /// A valley: `lhs` steps on the left, `rhs` steps on the right, and a

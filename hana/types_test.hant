@@ -12,13 +12,20 @@
 // which wire each split is about.
 //
 // It says that by address, the way every other step of this language says
-// where: `#zl` is the test `v = t1` and `#y` is `v = t2`, each read off
-// the listing the goal prints when a step in front of the split is `exact`.
-// The goal holds four `equal`s, and which of them a split means is not
-// something the shape of the step could decide — the outermost is the
-// postcondition's own tuple guard, and splitting there decides nothing.
+// where: `#zl` is the test `v = t1`, and `#y`, inside the case where that
+// one failed, is `v = t2`. Both are read off the listing the goal prints
+// when the step in front of the split is `exact`. The goal holds four
+// `equal`s, and which of them a split means is not something the shape of
+// the step could decide — the outermost is the postcondition's own tuple
+// guard, and splitting there decides nothing.
+//
+// The tree is the split's own: a `cases` is η on its wire and then the
+// branch that makes spent by `select-same`, so each case is an
+// independent goal written inside it. Both leaves of `#zl`'s true case
+// fold on the machine; the false case is where the second tag is still
+// open, so the second split lives there.
 proof types_test::number_does_pre_and_post_is_constant =
     inline both(decide)
-    cases(#zl) both(decide)
-    cases(#y) both(decide)
-    diagram;
+    cases(#zl) (
+        true: diagram,
+        false: both(decide) cases(#y) (true: diagram, false: diagram));
