@@ -107,6 +107,7 @@ proof identities::testing_a_test_by_name = inline diagram;
 | `via { body } (left: s, right: s)` | **cuts**: `A = B` splits into the goals `A = C` and `C = B`, the waypoint built as a graph | the waypoint's net stack change is not the goal's, or a side fails |
 | `select-same (then: s, else: s)` | **splits a branch**: the left side answers with a `select`, so `select(c, T, E) = B` becomes the goals `T = B` and `E = B` (see below) | the left side's answer is not one `select`, or a block fails |
 | `cases(#nk) (true: s, false: s)` | **case analysis**, which is η on a wire and then `select-same`: the box is named by [address](tactics.md), the instruction set promises its answer is `true` or `false` and nothing else, so the left side's downstream becomes a branch holding one copy per case with the assumed answer pasted in as a literal — and that branch is then split into the two goals (see below) | the left side does not name that box, nothing promises its answer is a bool, nothing depends on it, or a case fails — and the residual says which |
+| `cases-equal(#nk) (true: s, false: s)` | the same on an `equal`, with the **substitution** the true case licenses: every other reader of the deep operand comes to read the top one there (see below) | the box is no `equal`, nothing but the test reads its deep operand, or the split fails |
 | `diagram` | rewrites both sides by the whole table to fixpoint and asks whether they landed on one diagram | they did not — and the residual is both sides as they stand |
 
 A strategy acts on **one goal**, and the proof mirrors a tree of goals:
@@ -357,6 +358,57 @@ again, split on `#y`, which is `equal(x, t2)`, and both leaves fold. The
 goal holds four `equal`s, and which of them each split means is not
 something the shape of the step could decide: the outermost is the
 postcondition's own tuple guard, and splitting there decides nothing.
+
+### `cases-equal`: the substitution a test licenses
+
+Where a test held, the two things it compared **are one value**, and the
+code in that case can be read with either. Nothing in the table says so
+where you want it said: the specializing rows are stated at a select and
+reach a *block*, not the inside of an arm ([docs/rules.md](rules.md)),
+because a branch's arms are the boxes only that side's blocks reach — a
+fact about the whole graph rather than about a window.
+
+`cases-equal` is the way to have it anyway, and it needs no new law.
+Before the η it **states** `specialize-equal` onto the test's two
+operands:
+
+```text
+on(a b, specialize-equal, except(#test))
+```
+
+which puts `select(equal(a, b), b, a)` into the graph and sends every
+reader of `a` through it — every one but the test itself, which reads `a`
+too, and a test reading the branch that turns on it would be a box
+reaching itself. That claims nothing at all: `select(equal(a, b), b, a)`
+is `a` on any wires whatever, which is exactly why the row has a bare
+side to state ([docs/tactics.md](tactics.md)).
+
+The introduced branch turns on the very wire about to be split, so the η
+decides it along with everything else downstream: `b` in the true case,
+`a` in the false one. Which is the substitution — the true case now reads
+the value it was tested against, and the false case is untouched, as it
+must be, since all it knows is that the two differ.
+
+Which operand goes which way is the graph's own record and not a choice:
+readers of the **deep** operand come to read the top one. A test is
+written `value push lit equal`, so that is the useful direction — the
+computed wire specialized to the literal it was compared against.
+
+The corpus's example is the smallest claim that needs it:
+
+```text
+identity a_tested_value_is_what_it_was_tested_against
+    { pick 0 push 7 equal branch { push 1 add } { drop 0 push 8 } }
+  = { drop 0 push 8 };
+
+proof identities::a_tested_value_is_what_it_was_tested_against =
+    cases-equal(#t) (true: diagram, false: diagram);
+```
+
+Plain `cases` gets as far as `x + 1` against `8` in the true case and
+stops, with nothing to say that `x` is `7` there. `cases-equal` closes
+it, and the record the checker replays is a stated row and a case
+analysis with no idea either was about the other.
 
 ### The decision tree
 

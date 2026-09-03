@@ -101,3 +101,9 @@ proof identities::three_negatives_are_a_branch_and_a_negative =
 // box, so what the left side and the right side differ by is the operand
 // order, and that is exactly what the row exchanges.
 proof identities::the_operands_of_a_sum_are_interchangeable = lhs(fire(comm));
+
+// The substitution, and the one claim in the corpus that needs it. `cases`
+// alone would leave the true case as `x + 1` against `8`, with nothing to
+// say that `x` is `7` there.
+proof identities::a_tested_value_is_what_it_was_tested_against =
+    cases-equal(#t) (true: diagram, false: diagram);

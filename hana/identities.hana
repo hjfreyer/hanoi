@@ -952,3 +952,15 @@ identity a_promised_bool_is_no_integer { is_int is_int } = { drop 0 push false }
 // driver run to fixpoint would exchange the same two operands forever; the
 // proof beside this file names it once.
 identity the_operands_of_a_sum_are_interchangeable { roll 1 add } = { add };
+
+// A value used under a test that decided what it is.
+//
+// The then arm computes `x + 1`, and the claim is that the whole branch is
+// `8`: where the test held, `x` *is* `7`. No window says that. The
+// specializing rows are stated at a select and reach a block, not the inside
+// of an arm, so the fact has to be put into the graph as the branch it is
+// before the case analysis and decided by it — which is what `cases-equal`
+// spends, and the whole of the difference between it and `cases`.
+identity a_tested_value_is_what_it_was_tested_against
+    { pick 0 push 7 equal branch { push 1 add } { drop 0 push 8 } }
+  = { drop 0 push 8 };

@@ -176,8 +176,10 @@ them. Every reader of each wire, the goal boundary included, comes to
 read through the introduced pair; the order is the window's shape, so
 `on(in1 in0, tuple-cancel)` builds the other tuple.
 
-`on(#nk in0, specialize-equal)` is the other row on the table, and what
-it puts in is a **branch**: the first wire tested against the second,
+`on(#nk in0, specialize-equal)` is the other row on the table — and the
+one the `cases-equal` proof step spends for the substitution a test
+licenses ([docs/proving.md](proving.md)). What it puts in is a
+**branch**: the first wire tested against the second,
 answering with the second where the test held and with the first where
 it did not — which is the first wire either way, and why that side is
 bare. Two wires exactly, and the order says both things at once: the

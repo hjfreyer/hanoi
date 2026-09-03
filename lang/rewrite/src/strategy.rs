@@ -40,11 +40,13 @@ use bytecode::{IdentityIndex, Library};
 use crate::hant::{Body, OnSide, Step, Strategy, default_strategy};
 use crate::kernel;
 use crate::kernel::goal::{self, Goal};
-use crate::kernel::graph::{self, Address, Graph, Named, Pair, Prefix};
+use crate::kernel::graph::{self, Address, Graph, Named, NodeId, Pair, Prefix, Source};
 use crate::kernel::rules::{self, Derivation};
-use crate::kernel::term::{Context, Error};
+use crate::kernel::term::{Context, Error, Prim};
 use crate::proof::{self, Outcome, Proof, Residual, against};
+use crate::query::Query;
 use crate::tactic;
+use crate::tactic::{MatchSpec, Reader, Readers, SrcExpr, Tactic};
 
 /// One side of a goal, picked out for a mutation that borrows it alone.
 type Pick = fn(&mut Goal) -> &mut Graph;
@@ -234,13 +236,14 @@ impl<'l> Prover<'l> {
             // spends it as the goal it is.
             Step::Cases {
                 at,
+                specialize,
                 then_arm,
                 else_arm,
             } => {
                 if !rest.is_empty() {
                     unreachable!("`cases` closes the goal, and `validate` refused what follows");
                 }
-                self.cases_step(ctx, goal, at, then_arm, else_arm)
+                self.cases_step(ctx, goal, at, *specialize, then_arm, else_arm)
             }
 
             // A goal whose sides are one graph closed above, before any
@@ -556,15 +559,18 @@ impl<'l> Prover<'l> {
     /// with `symm`, the same as for `select-same`. What the two cases are
     /// proved against is the whole right side, untouched: the hypothesis
     /// is the block each stands in.
+    #[allow(clippy::too_many_arguments)]
     fn cases_step(
         &self,
         ctx: &mut Context,
         goal: Goal,
         at: &Prefix,
+        specialize: bool,
         then_arm: &Option<Strategy<Body>>,
         else_arm: &Option<Strategy<Body>>,
     ) -> Result<Draft, Error> {
         let mut goal = goal;
+        let word = if specialize { "cases-equal" } else { "cases" };
         let mut deriv = Derivation::default();
         // Resolved live, against the side as it now stands, under the
         // discipline every other address in this language is under: the
@@ -573,7 +579,8 @@ impl<'l> Prover<'l> {
             Named::One(node) => node,
             Named::Many(found) => {
                 let why = format!(
-                    "`cases({})` is {} boxes of the left side: {}",
+                    "`{}({})` is {} boxes of the left side: {}",
+                    word,
                     at,
                     found.len(),
                     found
@@ -590,19 +597,32 @@ impl<'l> Prover<'l> {
                 // left does not is a `symm` away.
                 let why = match goal.rhs.lookup(at) {
                     Named::Nothing => format!(
-                        "`cases({})` names no live box of the left side: an address is a name \
+                        "`{}({})` names no live box of the left side: an address is a name \
                          for what a box computes, and nothing there computes that",
-                        at
+                        word, at
                     ),
                     _ => format!(
-                        "`cases({})` names a box of the right side and none of the left, and \
+                        "`{}({})` names a box of the right side and none of the left, and \
                          the blocks are carved off the left — `symm` says the branch is on \
                          the other side",
-                        at
+                        word, at
                     ),
                 };
                 return Ok(Draft::Stuck(gave_up(&goal, &why)));
             }
+        };
+        // `cases-equal` puts the substitution in *before* the η, as the
+        // branch it is, so that the η decides it along with everything
+        // else downstream of the test.
+        if specialize && let Err(why) = substitute(&mut goal.lhs, &mut deriv, wire) {
+            return Ok(Draft::Stuck(gave_up(&goal, &why)));
+        }
+        // The stated row left the test alone, so the address still names
+        // it — but a rewrite has landed, and an address is looked up live
+        // at every entry rather than held across one.
+        let wire = match goal.lhs.lookup(at) {
+            Named::One(node) => node,
+            _ => unreachable!("the stated row excepts the test, so it computes what it did"),
         };
         // Three checked rewrites, landing in the left side's record like
         // any others. A decline leaves nothing behind — the last of the
@@ -612,14 +632,14 @@ impl<'l> Prover<'l> {
             Ok(Some(_)) => {}
             Ok(None) => {
                 let why = format!(
-                    "`cases({})` names a box and finds nothing to split on: nothing promises \
+                    "`{}({})` names a box and finds nothing to split on: nothing promises \
                      its answer is a bool, or nothing reads it",
-                    at
+                    word, at
                 );
                 return Ok(Draft::Stuck(gave_up(&goal, &why)));
             }
             Err(e) => {
-                let why = format!("`cases` proposed a split the checker refused: {}", e);
+                let why = format!("`{}` proposed a split the checker refused: {}", word, e);
                 return Ok(Draft::Stuck(gave_up(&goal, &why)));
             }
         }
@@ -627,9 +647,9 @@ impl<'l> Prover<'l> {
 
         let Some((then, els)) = proof::blocks(&goal.lhs) else {
             let why = format!(
-                "`cases({})` expanded the wire and the left side's answer is not one branch: \
+                "`{}({})` expanded the wire and the left side's answer is not one branch: \
                  an output the wire says nothing about is an output the split cannot carve",
-                at
+                word, at
             );
             return Ok(Draft::Stuck(gave_up(&goal, &why)));
         };
@@ -657,6 +677,78 @@ impl<'l> Prover<'l> {
     }
 }
 
+/// `cases-equal`'s extra step: `specialize-equal` **stated** onto the two
+/// operands of the test at `wire`, so that every other reader of the deep
+/// one comes to read `select(equal(a, b), b, a)` — the top operand where
+/// the test holds, and the deep one where it does not.
+///
+/// It is `on(a b, specialize-equal, except(#test))` and nothing more, and
+/// each piece of that earns its place. **Stated**, because the law's
+/// answer side is a bare wire and there is nothing there for a search to
+/// anchor on. **Those two wires in that order**, because the window it
+/// builds is `equal(a, b)` in the order they are named — which is the
+/// test itself, box for box, since a box is its kind and what it reads —
+/// so the branch it introduces turns on the very wire about to be split.
+/// And **except the test**, because the test is a reader of `a` too, and a
+/// test that came to read the branch that turns on it would be a box
+/// reaching itself.
+///
+/// What it claims is nothing: `select(equal(a, b), b, a)` is `a` on any
+/// wires at all, which is why the row has a bare side to state. The
+/// substitution appears when the η decides that branch — `b` in the true
+/// case — and the checker replays a stated row and a case analysis with no
+/// idea either was about the other.
+fn substitute(graph: &mut Graph, deriv: &mut Derivation, wire: NodeId) -> Result<(), String> {
+    let named = |graph: &Graph, node: NodeId| {
+        Prefix::parse(&graph.address(node).letters()).expect("an address is a prefix")
+    };
+    if !matches!(graph.kind(wire), graph::NodeKind::Op(Prim::Equal)) {
+        return Err(format!(
+            "`cases-equal` substitutes what an `equal` tested, and {} is `{}` — `cases` is \
+             the split without the substitution",
+            graph.address(wire),
+            graph.kind(wire)
+        ));
+    }
+    let operands: Vec<SrcExpr> = graph
+        .sources(wire)
+        .iter()
+        .map(|src| match *src {
+            Source::Input(i) => SrcExpr::Input(i),
+            Source::Port { node, port } => SrcExpr::Addressed(named(graph, node), port),
+        })
+        .collect();
+    let (rule, dir) = rules::boxless(rules::Law::SpecializeEqual, operands.len())
+        .expect("`specialize-equal` is stated on the two wires an `equal` reads");
+    let stated = Tactic::State {
+        at: Query::new(),
+        rule,
+        dir,
+        with: MatchSpec {
+            nodes: Vec::new(),
+            inputs: operands,
+        },
+        pick: tactic::Pick::Unique,
+        readers: Some(Readers::Except(vec![Reader::Box(named(graph, wire))])),
+    };
+    // Read before the step runs: a rewrite rebuilds boxes, so the id is
+    // no name for one afterwards.
+    let test = graph.address(wire);
+    tactic::run(graph, deriv, &stated)
+        .map(|_| ())
+        .map_err(|e| match e {
+            // The test is the only thing that reads what it tested, so
+            // there is nobody for the substitution to reach: what the
+            // author wanted is the split, and `cases` is the split.
+            tactic::TacticError::NobodyLeft => format!(
+                "`cases-equal({})` has nothing to substitute in: the test is the only reader \
+                 of the wire it tested — `cases` is this split without the substitution",
+                test
+            ),
+            e => format!("`cases-equal` could not state `specialize-equal`: {}", e),
+        })
+}
+
 /// A residual for a strategy that failed before any engine ran: the goal as
 /// it stands, and why the step gave up. For a failed tactic "as it stands"
 /// is the point: the graph reflects the last rewrite that landed.
@@ -673,7 +765,7 @@ fn gave_up(goal: &Goal, why: &str) -> Residual {
 mod tests {
     use super::*;
     use crate::hant::parse_hant;
-    use crate::kernel::graph::{NodeId, NodeKind, Source};
+    use crate::kernel::graph::NodeKind;
     use crate::kernel::term::Prim;
     use bytecode::{Value, assemble};
 
@@ -1228,6 +1320,105 @@ mod tests {
         // a different mistake and gets a different sentence.
         assert!(
             !residual.stopped.contains("nothing there computes that"),
+            "{}",
+            residual.stopped
+        );
+    }
+
+    /// `cases-equal` is the same split with the substitution its wire
+    /// licenses: where the test held, the two operands are one value, so
+    /// the true case reads the one it was tested against. The claim here
+    /// is out of plain `cases`'s reach and closes under this one — which
+    /// is the whole of what the second spelling buys, asserted both ways.
+    #[test]
+    fn a_case_split_on_an_equal_substitutes_what_it_decided() {
+        // Where the test holds, `x + 1` is `8`; where it does not, the
+        // else block is `8` outright. No window says the first half.
+        let code = "identity probe \
+             { pick 0 push 7 equal branch { push 1 add } { drop 0 push 8 } } \
+           = { drop 0 push 8 };";
+        let (lhs, _) = standing(code, "probe", "");
+        let at = address(&lhs, |g, id| {
+            matches!(g.kind(id), NodeKind::Op(Prim::Equal))
+        });
+
+        let cases = format!("cases({}) (true: diagram, false: diagram)", at);
+        let (_ctx, outcome) = prove_with(code, "probe", Some(&cases));
+        let Outcome::Stuck(residual) = outcome else {
+            panic!("`cases` leaves the true case reading a value it cannot decide");
+        };
+        assert!(
+            residual
+                .path
+                .iter()
+                .any(|p| p.contains("in the true case of the split")),
+            "{:?}",
+            residual.path
+        );
+
+        let (_ctx, outcome) = prove_with(
+            code,
+            "probe",
+            Some(&cases.replacen("cases", "cases-equal", 1)),
+        );
+        assert!(
+            matches!(outcome, Outcome::Closed { .. }),
+            "the substitution is what closes it: {:?}",
+            outcome
+        );
+    }
+
+    /// The substitution is a stated `specialize-equal`, so it wants an
+    /// `equal` to state it on and somebody to state it for — and says
+    /// which of the two it is missing, since `cases` is the answer to
+    /// both.
+    #[test]
+    fn a_substituting_split_says_what_it_wants() {
+        // A wire that is no `equal` at all.
+        let code = "identity probe { is_bool is_bool } = { drop 0 push true };";
+        let (lhs, _) = standing(code, "probe", "");
+        let at = address(&lhs, |g, id| {
+            matches!(g.kind(id), NodeKind::Op(Prim::IsBool)) && g.sources(id) == [Source::Input(0)]
+        });
+        let (_ctx, outcome) = prove_with(
+            code,
+            "probe",
+            Some(&format!(
+                "cases-equal({}) (true: diagram, false: diagram)",
+                at
+            )),
+        );
+        let Outcome::Stuck(residual) = outcome else {
+            panic!("`is_bool` is no `equal`");
+        };
+        assert!(
+            residual.stopped.contains("is `is_bool`"),
+            "{}",
+            residual.stopped
+        );
+
+        // And an `equal` nothing but the test itself reads the deep
+        // operand of: there is nobody for the substitution to reach.
+        let code = "identity probe \
+             { pick 0 push 7 equal branch { drop 0 push 8 } { drop 0 push 8 } } \
+           = { drop 0 push 8 };";
+        let (lhs, _) = standing(code, "probe", "");
+        let at = address(&lhs, |g, id| {
+            matches!(g.kind(id), NodeKind::Op(Prim::Equal))
+        });
+        let (_ctx, outcome) = prove_with(
+            code,
+            "probe",
+            Some(&format!(
+                "cases-equal({}) (true: diagram, false: diagram)",
+                at
+            )),
+        );
+        let Outcome::Stuck(residual) = outcome else {
+            panic!("nothing else reads what the test tested");
+        };
+        assert!(
+            residual.stopped.contains("nothing to substitute in"),
             "{}",
             residual.stopped
         );

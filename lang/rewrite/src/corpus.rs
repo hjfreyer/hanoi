@@ -134,10 +134,12 @@ pub(crate) fn attach(
                 // library: nothing in it waits on a name being resolved.
                 Step::Cases {
                     at,
+                    specialize,
                     then_arm,
                     else_arm,
                 } => Step::Cases {
                     at: at.clone(),
+                    specialize: *specialize,
                     then_arm: side(ctx, then_arm, library)?,
                     else_arm: side(ctx, else_arm, library)?,
                 },
