@@ -31,10 +31,11 @@
 //! | `select-same (then: s, else: s)` | **splits a branch**: the left side answers with a `select`, so `select(c, T, E) = B` splits into the goals `T = B` and `E = B`, each on its own road. The law of that name is what puts them back together — a branch answering `B` either way *is* `B` — and the condition goes with the branch. `cases` is this step with an η in front of it: that one makes the branch first, this one spends the one a goal already has | the left side's answer is not one `select` — every boundary output that box's own — or a block fails, and the residual says which block |
 //! | `cases(#nk) (true: s, false: s)` | **case analysis**: η on the wire that box answers with — the instruction set promises it is `true` or `false` and nothing else, so everything on the left depending on it becomes a branch holding one copy per case, the assumption pasted in as a literal — and then that branch **split** the way `select-same` splits one a goal already has. The two cases are independent goals against the right side, each with its own strategy, and either is omissible for the default | the left side does not name that box, nothing promises its answer is a bool, nothing depends on it, or a case fails — and the residual names which case it stood in |
 //! | `cases-equal(#nk) (true: s, false: s)` | the same, on a wire that is an `equal`, with the **substitution** the true case licenses: `specialize-equal` is stated onto the test's operands first, so every other reader of the deep one comes to read a branch that answers with the top one where the test held — and the split then decides that branch, leaving the true case reading the value it was tested against | the box named is no `equal`, nothing but the test reads its deep operand, or the split does |
+//! | `by-cases` / `by-cases(n)` | the **searched** decision tree: `diagram`, and where that stops a split on the condition of a live branch, and the same again on each case. `n` is the whole search's budget of splits, 32 by default | the table stops where nothing is left to split on, a case fails, or the search spends its budget — and the residual says which case it was in |
 //! | `diagram` | rewrites both sides by the whole table to fixpoint; they land on one diagram — isomorphic — or they do not | they do not — and the residual is both sides as the diagrams they came to |
 //!
-//! `diagram`, `exact`, `via`, `select-same` and `cases` end a strategy — the
-//! goal is
+//! `diagram`, `exact`, `via`, `select-same`, `cases` and `by-cases` end a
+//! strategy — the goal is
 //! closed or split, and what follows a split is written *inside* it, since
 //! the subgoals are independent. A chain is nested cuts — `via { c1 } (right:
 //! via { c2 })` — and each link may take a different road. A strategy that
@@ -416,6 +417,30 @@ pub enum Step<V> {
         then_arm: Option<Strategy<V>>,
         else_arm: Option<Strategy<V>>,
     },
+    /// The decision tree [`Cases`](Step::Cases) writes out, **searched
+    /// for** instead: `diagram`, and where that stops a split, and the
+    /// same again on each case until every leaf closes.
+    ///
+    /// What it picks is the condition of a live branch — the goal's own
+    /// first decision, and a wire the instruction set promises is a bool.
+    /// `strategy::pick_split` is the choice, and its doc is also the
+    /// termination argument. It spends
+    /// `cases-equal` wherever that has anything to say and `cases`
+    /// otherwise, so an author gets the substitution without asking.
+    ///
+    /// `gas` is the whole search's budget of splits, shared by every case
+    /// rather than allowed per branch, because what it is bounding is
+    /// total work. `None` is the default, `strategy::GAS`. Running out is a
+    /// failure like any other: the tree so far is discarded and the
+    /// residual says where it stopped. The bound is there because
+    /// termination is an argument and not a theorem — the drive between
+    /// splits is free to reshape the goal.
+    ///
+    /// What it leaves is what a written tree leaves, step for step: the
+    /// same [`Proof`](crate::proof::Proof), the same flat record, the same
+    /// blind replay. A search that answers wrong is a proof the kernel
+    /// refuses, never a wrong graph.
+    ByCases { gas: Option<usize> },
     /// Split the goal at the branch its **left side answers with**:
     /// `select(c, T, E) = B` becomes the two goals `T = B` and `E = B`,
     /// each discharged by its own strategy, and an omitted one gets the
@@ -492,6 +517,8 @@ impl<V> fmt::Display for Step<V> {
             Step::Cases { at, specialize, .. } => {
                 write!(f, "{}({}) (…)", cases_word(*specialize), at)
             }
+            Step::ByCases { gas: None } => write!(f, "by-cases"),
+            Step::ByCases { gas: Some(n) } => write!(f, "by-cases({})", n),
             Step::SelectSame {
                 then_arm: None,
                 else_arm: None,
@@ -687,6 +714,24 @@ fn parse_step(input: &str) -> Result<(Step<String>, &str), String> {
                 },
                 after,
             ))
+        }
+        "by-cases" => {
+            let after = rest.trim_start();
+            let (gas, after) = match after.starts_with('(') {
+                false => (None, rest),
+                true => {
+                    let (inside, after) = paren_block(after).ok_or("`by-cases(` never closes")?;
+                    let inside = inside.trim();
+                    let n = inside.parse::<usize>().map_err(|_| {
+                        format!(
+                            "`by-cases` takes a budget of splits, and `{}` is not one",
+                            inside
+                        )
+                    })?;
+                    (Some(n), after)
+                }
+            };
+            Ok((Step::ByCases { gas }, after))
         }
         "" => Err(format!("expected a step, found: {}", head_of(input))),
         other => Err(format!("no step is called `{}`", other)),
@@ -1191,6 +1236,7 @@ fn validate<V>(strategy: &Strategy<V>) -> Result<(), String> {
             | Step::Via { .. }
             | Step::SelectSame { .. }
             | Step::Cases { .. }
+            | Step::ByCases { .. }
                 if !last =>
             {
                 return Err(format!("`{}` closes the goal; nothing can follow it", step));
@@ -1449,6 +1495,26 @@ mod tests {
         assert!(err.contains("is not one of the letters"), "{}", err);
         let err = parse_hant("proof p = cases(#zzzzzzzzzzzzz) (true: diagram);").unwrap_err();
         assert!(err.contains("longer than an address"), "{}", err);
+    }
+
+    /// The searched tree: a closer like the rest, with a budget it may be
+    /// given and need not be.
+    #[test]
+    fn a_searched_case_tree_parses_its_budget() {
+        let entries = parse_hant("proof p = inline by-cases;").unwrap();
+        assert_eq!(
+            entries[0].strategy,
+            vec![Step::Inline(None), Step::ByCases { gas: None }]
+        );
+        let entries = parse_hant("proof p = by-cases(12);").unwrap();
+        assert_eq!(entries[0].strategy, vec![Step::ByCases { gas: Some(12) }]);
+
+        // It closes the goal, like every other splitter and closer.
+        let err = parse_hant("proof p = by-cases diagram;").unwrap_err();
+        assert!(err.contains("`by-cases` closes the goal"), "{}", err);
+        // And a budget is a number of splits.
+        let err = parse_hant("proof p = by-cases(lots);").unwrap_err();
+        assert!(err.contains("budget of splits"), "{}", err);
     }
 
     /// The second spelling is the same step, and says so: one variant,

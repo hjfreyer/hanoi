@@ -143,6 +143,9 @@ pub(crate) fn attach(
                     then_arm: side(ctx, then_arm, library)?,
                     else_arm: side(ctx, else_arm, library)?,
                 },
+                // Nothing in it waits on the library either: what it
+                // splits on it finds for itself.
+                Step::ByCases { gas } => Step::ByCases { gas: *gas },
                 // Nothing in it waits on the library: the branch it splits
                 // is the goal's own, and the blocks are read off it.
                 Step::SelectSame { then_arm, else_arm } => Step::SelectSame {

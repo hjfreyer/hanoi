@@ -63,7 +63,7 @@
       }
     },
     "step": {
-      "match": "\\b(diagram|inline|exact|cases-equal|cases|select-same|both|symm|lhs|rhs|via)\\b",
+      "match": "\\b(diagram|inline|exact|by-cases|cases-equal|cases|select-same|both|symm|lhs|rhs|via)\\b",
       "name": "keyword.control.step.hant"
     },
     "tactic": {

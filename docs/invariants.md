@@ -21,7 +21,8 @@ Trusted, and the whole of it:
   `fold` consults `run_window`, the real `vm`.
 
 Everything else — `find`, `propose`, drivers, tactics, queries, the
-address a `cases` names its wire by, strategy interpretation — is untrusted
+address a `cases` names its wire by, the wire a `by-cases` picks for
+itself, strategy interpretation — is untrusted
 search. It mutates a graph through `Derivation::push` and nothing else,
 so every step it produces goes through `apply`, and a buggy tactic yields
 a refused step, never a wrong graph. `Graph`'s mutation surface stays
@@ -133,15 +134,21 @@ take on its merits rather than a broken commitment.
 
 ### The driver decides nothing about what is provable
 
-No driver opens a call or invents a case analysis today: `inline` and
-`cases` are a proof's decisions, stated in the `.hant`. Rows that grow a
-graph — the two hoists, the two unpackings — are on no driven list; a
-strategy names them, and a driver run to fixpoint spends only rows that
-shrink, which is what makes the fixpoint cheap to reach. A case split is
-three of them in a row (`rules::case_split`), which is why it is a
-strategy's act and not a law of its own. A driver that did open calls or
-lay out cases would still land nothing but checked steps, so the trust
-boundary is indifferent; what would change is what a close costs and how
+No driver opens a call or invents a case analysis: `inline` and `cases`
+are a proof's decisions, stated in the `.hant`. Rows that grow a graph —
+the two hoists, the two unpackings — are on no driven list; a strategy
+names them, and a driver run to fixpoint spends only rows that shrink,
+which is what makes the fixpoint cheap to reach. A case split is three of
+them in a row (`rules::case_split`), which is why it is a strategy's act
+and not a law of its own.
+
+`by-cases` lays out cases, and is not a driver: it is a step a proof
+writes, spending exactly what a written tree spends, and a strategy that
+does not name it never gets one. That is the line — not "no search
+invents a case analysis", which would be false, but "nothing invents one
+a proof did not ask for". The trust boundary is indifferent either way,
+since a searched tree lands nothing but checked steps; what a driver that
+laid out cases on its own would change is what a close costs, and how
 much of a proof gets written down.
 
 ### Hypotheses are structure

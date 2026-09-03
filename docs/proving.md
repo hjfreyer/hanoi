@@ -108,6 +108,7 @@ proof identities::testing_a_test_by_name = inline diagram;
 | `select-same (then: s, else: s)` | **splits a branch**: the left side answers with a `select`, so `select(c, T, E) = B` becomes the goals `T = B` and `E = B` (see below) | the left side's answer is not one `select`, or a block fails |
 | `cases(#nk) (true: s, false: s)` | **case analysis**, which is η on a wire and then `select-same`: the box is named by [address](tactics.md), the instruction set promises its answer is `true` or `false` and nothing else, so the left side's downstream becomes a branch holding one copy per case with the assumed answer pasted in as a literal — and that branch is then split into the two goals (see below) | the left side does not name that box, nothing promises its answer is a bool, nothing depends on it, or a case fails — and the residual says which |
 | `cases-equal(#nk) (true: s, false: s)` | the same on an `equal`, with the **substitution** the true case licenses: every other reader of the deep operand comes to read the top one there (see below) | the box is no `equal`, nothing but the test reads its deep operand, or the split fails |
+| `by-cases` / `by-cases(n)` | the same tree **searched for**: `diagram`, and where that stops a split on a wire the goal's own tests offer, and the same again on each case. `n` is the whole search's budget of splits, 32 by default (see below) | nothing is left to split on, a case fails, or the budget runs out — and the residual names the case it stopped in |
 | `diagram` | rewrites both sides by the whole table to fixpoint and asks whether they landed on one diagram | they did not — and the residual is both sides as they stand |
 
 A strategy acts on **one goal**, and the proof mirrors a tree of goals:
@@ -121,8 +122,8 @@ nothing to do — `inline` with no calls, a `fire` no law matches — fails
 loudly rather than becoming a no-op, so a proof that no longer matches
 its identity says so.
 
-Which steps carry which weight: `inline` and `cases` **change what is
-provable** — the engine treats a call as an opaque box and a computed
+Which steps carry which weight: `inline` and `cases` (and the `by-cases`
+that searches for one) **change what is provable** — the engine treats a call as an opaque box and a computed
 value as opaque, and these are the two ways a proof spends what the
 driver will not. The tactic steps direct and report: they spend named
 laws where the author points them. `via` lets a failure say which half of
@@ -447,29 +448,88 @@ boundary.
 The corpus's biggest goal is the worked example.
 `barista::customer_impl::emit_does_pre_and_post_is_constant` — the
 contract claim over a four-state machine, 351 boxes against 2 once
-`inline` has opened it — closes as a decision tree of three hypotheses:
+`inline` has opened it — closes as a decision tree of three hypotheses.
+Written out, it is this:
+
+```text
+inline both(decide)
+cases(#uk) (
+    true: both(decide) cases(#lq) (
+        true: both(decide) cases(#oz) (true: diagram, false: diagram),
+        false: diagram),
+    false: diagram)
+```
+
+The addressing is what makes it writable at all: the goal holds two dozen
+`equal`s, and which one a split means is not something the shape of a step
+could decide. `#uk` is the one test `emit` dispatches on,
+`equal(x.2, state::thirsty)`, which the drive has already identified with
+the precondition disjunction's own. Its false case closes outright — the
+emitted flag is false, so the postcondition holds whatever the
+precondition said. Its true case resolves `emit`, and the two `is_symbol`
+splits — `#lq`, then `#oz` inside its true case — decide the payload
+checks, which are by then the very boxes the precondition tested. Every
+leaf is a bare `diagram`, and the whole tree lands in one flat record,
+replayed blind by the checker.
+
+The corpus does not write that out any more; it says `inline by-cases`
+and lets the search find a tree of its own (below). Reading this one is
+still how you learn what the search is looking for — and how you write the
+next one it cannot find.
+
+## `by-cases`: the tree, searched for
+
+A decision tree is a shape, and finding it is a search — so the corpus
+does not write barista's out. `by-cases` is the whole of that proof, and
+the tree it finds is not quite the one above: it takes the tuple guard
+first, then spends `cases-equal` on the state test, and the substitution
+that buys leaves one `is_symbol` split to do rather than two.
 
 ```text
 proof barista::customer_impl::emit_does_pre_and_post_is_constant =
-    inline both(decide)
-    cases(#uk) (
-        true: both(decide) cases(#lq) (
-            true: both(decide) cases(#oz) (true: diagram, false: diagram),
-            false: diagram),
-        false: diagram);
+    inline by-cases;
 ```
 
-The addressing is what makes the tree writable at all: the goal holds two
-dozen `equal`s, and the outermost is the tuple-shape guard — splitting
-there is a fixpoint that decides nothing. `#uk` is the one test `emit`
-dispatches on, `equal(x.2, state::thirsty)`, which the drive has already
-identified with the precondition disjunction's own. Its false case closes
-outright — the emitted flag is false, so the postcondition holds whatever
-the precondition said. Its true case resolves `emit`, and the two
-`is_symbol` splits — `#lq`, then `#oz` inside its true case — decide the
-payload checks, which are by then the very boxes the precondition tested.
-Every leaf is a bare `diagram`, and the whole tree lands in one flat
-record, replayed blind by the checker.
+What it does on each goal it reaches is `diagram`, and where that stops, a
+split, and then the same again on each case. What it splits on is the
+heuristic, and it is three questions asked in turn of every live box the
+instruction set promises answers a bool and something reads:
+
+- **Is it primitive?** A test no other candidate feeds beats one built out
+  of others. Deciding `and(a, b)` says nothing about `a` or `b`, while
+  deciding both of those decides the `and` — and a split on a derived test
+  is exactly how a search paints itself into a case that is no longer
+  true. (A split is *sufficient*, not necessary: each case has to be true
+  on its own, and a badly chosen wire makes a case that is not.)
+- **Does a branch turn on it?** Among equals, a wire the goal already
+  branches on, since deciding it resolves that branch outright rather than
+  only feeding the rows below.
+- **How far upstream is it?** Then the outermost, which is the goal's own
+  first decision.
+
+It spends `cases-equal` wherever the substitution has something to say and
+`cases` otherwise, so an author gets it without asking.
+
+**Termination** is an argument, not a theorem, which is why there is a
+budget. The argument: the η pastes its literal into every reader the wire
+had, so in each case nothing reads that box any more and it leaves the
+candidate set — while every box a split leaves was already there or is a
+copy of one, so nothing new enters. The set shrinks by at least one per
+split and a goal has finitely many boxes. What the argument does not cover
+is the drive between splits, which is free to reshape the goal. So
+`by-cases` spends at most 32 splits over the whole search, `by-cases(n)`
+as many as you say, and running out is a failure like any other.
+
+Two things it will not do. It will not `inline` — that changes what is
+provable, and opening a definition is a proof's decision, which is why the
+barista proof still says so. And it only ever splits the **left** side, so
+a goal whose right side turns on the wire is out of its reach exactly as
+it is out of `cases`'s.
+
+What it leaves is what a written tree leaves, step for step: the same
+proof object, the same flat record, the same blind replay. A search that
+answers wrong is a proof the kernel refuses, never a wrong graph — which
+is what makes searching admissible here at all.
 
 ## The `.hant` file
 

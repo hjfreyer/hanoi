@@ -4,32 +4,21 @@
 
 // The contract claim, and the corpus's biggest goal: 351 boxes against 2
 // once `inline` has opened it. It closes as a decision tree of three
-// hypotheses, and the tree is the splits' own: a `cases` is η on its wire
-// and then the branch that makes split by `select-same`, so each case is
-// an independent goal written inside it.
+// hypotheses — and the proof does not write the tree, it says to look for
+// one.
 //
-// Each split names its wire by address — as much of the box's name as the
-// listing emphasised, read off the goal as the step before it leaves it.
+// `by-cases` is the closer, and where that stops a split, and the same
+// again on each case: it takes the primitive tests first (deciding
+// `and(a, b)` says nothing about `a` or `b`, while deciding those decides
+// the `and`), prefers a wire the goal already branches on, and spends
+// `cases-equal` wherever the substitution has something to say. On this
+// goal it finds the shape a person would: the tuple guard, then the state
+// `emit` dispatches on — where the substitution is what it wants — and
+// then the payload's symbol checks. The tree it writes is in
+// docs/proving.md, and every leaf of it folds on the machine.
 //
-// One state decides everything: `emit` dispatches on `equal(x.2,
-// state::thirsty)`, which is `#uk`, and the driver has already identified
-// that test with the precondition disjunction's own — one wire, two
-// readers. Its false case closes outright: `emit` answers a false flag, so
-// the postcondition holds whatever the precondition said and the whole
-// disjunction is moot. Its true case resolves `emit`; the tuple rows
-// (`tuple-cancel`, `as-tuple-built`, `equal-refl`) take the
-// postcondition's shape guards apart until its symbol checks are the very
-// boxes the precondition tested, and the two `is_symbol` splits — `#lq` on
-// the payload's second field, then `#oz` on its first — decide them. Each
-// false case is discharged by `and-literal` and each true case folds the
-// conjunction shut, which is why every leaf here is a bare `diagram`.
-//
-// `#oz`'s readers are created inside `#lq`'s true case, which is why that
-// split sits there rather than beside it.
+// The one thing a search will not do is open the definitions: `inline`
+// changes what is provable, and no driver spends a sentence's body on its
+// own. So the proof says that much and no more.
 proof barista::customer_impl::emit_does_pre_and_post_is_constant =
-    inline both(decide)
-    cases(#uk) (
-        true: both(decide) cases(#lq) (
-            true: both(decide) cases(#oz) (true: diagram, false: diagram),
-            false: diagram),
-        false: diagram);
+    inline by-cases;
