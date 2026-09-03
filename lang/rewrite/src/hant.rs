@@ -30,6 +30,7 @@
 //! | `via { body } (left: s, right: s)` | **cuts**: `A = B` splits into the goals `A = C` and `C = B`, the waypoint built as a graph | the waypoint's net stack change is not the goal's, or a side fails |
 //! | `select-same (then: s, else: s)` | **splits a branch**: the left side answers with a `select`, so `select(c, T, E) = B` splits into the goals `T = B` and `E = B`, each on its own road. The law of that name is what puts them back together — a branch answering `B` either way *is* `B` — and the condition goes with the branch. `cases` is this step with an η in front of it: that one makes the branch first, this one spends the one a goal already has | the left side's answer is not one `select` — every boundary output that box's own — or a block fails, and the residual says which block |
 //! | `cases(#nk) (true: s, false: s)` | **case analysis**: η on the wire that box answers with — the instruction set promises it is `true` or `false` and nothing else, so everything on the left depending on it becomes a branch holding one copy per case, the assumption pasted in as a literal — and then that branch **split** the way `select-same` splits one a goal already has. The two cases are independent goals against the right side, each with its own strategy, and either is omissible for the default | the left side does not name that box, nothing promises its answer is a bool, nothing depends on it, or a case fails — and the residual names which case it stood in |
+//! | `cases-equal(#nk) (true: s, false: s)` | the same, on a wire that is an `equal`, with the **substitution** the true case licenses: `specialize-equal` is stated onto the test's operands first, so every other reader of the deep one comes to read a branch that answers with the top one where the test held — and the split then decides that branch, leaving the true case reading the value it was tested against | the box named is no `equal`, nothing but the test reads its deep operand, or the split does |
 //! | `diagram` | rewrites both sides by the whole table to fixpoint; they land on one diagram — isomorphic — or they do not | they do not — and the residual is both sides as the diagrams they came to |
 //!
 //! `diagram`, `exact`, `via`, `select-same` and `cases` end a strategy — the
@@ -394,6 +395,24 @@ pub enum Step<V> {
     /// stopped needing words for them.
     Cases {
         at: Prefix,
+        /// Whether the step is the `cases-equal` spelling: the wire named
+        /// has to be an `equal`, and before the η the step states
+        /// [`Law::SpecializeEqual`] onto its two operands — `on(a b,
+        /// specialize-equal)`, every reader of `a` but the test itself —
+        /// so that each of them comes to read `select(equal(a, b), b, a)`.
+        /// That branch turns on the very wire about to be split, so the η
+        /// decides it along with everything else: `b` in the true case and
+        /// `a` in the false one.
+        ///
+        /// Which is **substitution**, and the only way to have it: the
+        /// specializing rows are stated at a select and reach a block, not
+        /// the inside of an arm ([docs/rules.md](../../../docs/rules.md)),
+        /// so a fact like "these two wires are one value here" has to be
+        /// put into the graph as the branch it is *before* the case
+        /// analysis, and decided by it. Nothing is assumed: the stated row
+        /// is true on any wires at all — `select(equal(a, b), b, a)` is
+        /// `a` either way — which is why it has a bare side to state.
+        specialize: bool,
         then_arm: Option<Strategy<V>>,
         else_arm: Option<Strategy<V>>,
     },
@@ -448,6 +467,11 @@ pub fn default_strategy<V>() -> Strategy<V> {
     vec![Step::Diagram]
 }
 
+/// Which of the two spellings a `cases` was written in.
+fn cases_word(specialize: bool) -> &'static str {
+    if specialize { "cases-equal" } else { "cases" }
+}
+
 impl<V> fmt::Display for Step<V> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -461,10 +485,13 @@ impl<V> fmt::Display for Step<V> {
             Step::Via { .. } => write!(f, "via {{ … }}"),
             Step::Cases {
                 at,
+                specialize,
                 then_arm: None,
                 else_arm: None,
-            } => write!(f, "cases({})", at),
-            Step::Cases { at, .. } => write!(f, "cases({}) (…)", at),
+            } => write!(f, "{}({})", cases_word(*specialize), at),
+            Step::Cases { at, specialize, .. } => {
+                write!(f, "{}({}) (…)", cases_word(*specialize), at)
+            }
             Step::SelectSame {
                 then_arm: None,
                 else_arm: None,
@@ -626,31 +653,35 @@ fn parse_step(input: &str) -> Result<(Step<String>, &str), String> {
                 after,
             ))
         }
-        "cases" => {
-            let (inside, after) =
-                paren_block(rest.trim_start()).ok_or("`cases` expects `(#address)`")?;
+        // One step, two spellings: the second adds the substitution its
+        // wire being an `equal` licenses, and nothing else.
+        "cases" | "cases-equal" => {
+            let specialize = word == "cases-equal";
+            let (inside, after) = paren_block(rest.trim_start())
+                .ok_or_else(|| format!("`{}` expects `(#address)`", word))?;
             let inside = inside.trim();
             if inside.is_empty() {
-                return Err("`cases()` names no wire to split on".to_string());
+                return Err(format!("`{}()` names no wire to split on", word));
             }
             // The wire, named the way every other *where* in this language
             // is: as much of the box's address as the listing emphasised.
-            let at = Prefix::parse(inside).map_err(|e| format!("`cases`: {}", e))?;
+            let at = Prefix::parse(inside).map_err(|e| format!("`{}`: {}", word, e))?;
             // The arms ride the same spelling as `via`'s sides:
             // parenthesized, labelled, either side omissible. The block
-            // itself is not: a splitter is what its cases are, and a
-            // `cases` with none says only that a branch was made.
+            // itself is not: a splitter is what its cases are, and one
+            // with none says only that a branch was made.
             if !after.trim_start().starts_with('(') {
                 return Err(format!(
-                    "`cases({})` splits the goal in two and needs its cases: \
+                    "`{}({})` splits the goal in two and needs its cases: \
                      `(true: …, false: …)`",
-                    at
+                    word, at
                 ));
             }
-            let (arms, after) = parse_arms("cases", "true", "false", after.trim_start())?;
+            let (arms, after) = parse_arms(word, "true", "false", after.trim_start())?;
             Ok((
                 Step::Cases {
                     at,
+                    specialize,
                     then_arm: arms.0,
                     else_arm: arms.1,
                 },
@@ -1393,6 +1424,7 @@ mod tests {
             Step::Inline(None),
             Step::Cases {
                 at,
+                specialize: false,
                 then_arm: Some(_),
                 else_arm: Some(_),
             },
@@ -1417,6 +1449,38 @@ mod tests {
         assert!(err.contains("is not one of the letters"), "{}", err);
         let err = parse_hant("proof p = cases(#zzzzzzzzzzzzz) (true: diagram);").unwrap_err();
         assert!(err.contains("longer than an address"), "{}", err);
+    }
+
+    /// The second spelling is the same step, and says so: one variant,
+    /// one field, and every rule of the first applies to it.
+    #[test]
+    fn a_substituting_case_split_is_the_same_step() {
+        let entries =
+            parse_hant("proof p = cases-equal(#nk) (true: diagram, false: diagram);").unwrap();
+        let [
+            Step::Cases {
+                at,
+                specialize: true,
+                then_arm: Some(_),
+                else_arm: Some(_),
+            },
+        ] = &entries[0].strategy[..]
+        else {
+            panic!("{:?}", entries[0].strategy);
+        };
+        assert_eq!(at.letters(), "nk");
+
+        // Its cases block is required and it closes the goal, like the
+        // first spelling — and the report calls it by the name it was
+        // written under.
+        let err = parse_hant("proof p = cases-equal(#nk);").unwrap_err();
+        assert!(err.contains("`cases-equal(#nk)`"), "{}", err);
+        let err = parse_hant("proof p = cases-equal(#nk) (true: diagram) diagram;").unwrap_err();
+        assert!(
+            err.contains("`cases-equal(#nk) (…)` closes the goal"),
+            "{}",
+            err
+        );
     }
 
     /// The step is what its cases are, so the block is not optional — and
@@ -1445,6 +1509,7 @@ mod tests {
                 at,
                 then_arm: Some(then_arm),
                 else_arm: Some(else_arm),
+                ..
             },
         ] = &entries[0].strategy[..]
         else {
