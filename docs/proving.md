@@ -28,7 +28,7 @@ cargo run --bin prove -- ../hana --color | less -R
 Proving 25 identities...
 identity identities::testing_a_test ... ok (the two sides are one diagram)
 identity identities::testing_a_test_by_name ... ok (inline; the two sides are one diagram)
-identity barista::customer_impl::emit_does_pre_and_post_is_constant ... ok (inline; both: 299 rewrite(s); cases: 1 split(s) (true: 209 rewrite(s); false: 0 rewrite(s)); the two sides are one diagram)
+identity barista::customer_impl::emit_does_pre_and_post_is_constant ... ok (inline; both: 5 rewrite(s); cases: 3 expansion step(s) (true: both: 30 rewrite(s); cases: 3 expansion step(s) (...); false: the two sides are one diagram))
 ...
 identity result: ok. 25 passed; 0 failed; 0 problem(s); 0 filtered out
 ```
@@ -106,14 +106,13 @@ proof identities::testing_a_test_by_name = inline diagram;
 | `exact` | claims the sides are one diagram — which the auto-close has already checked, so a reached `exact` fails and shows the goal exactly as it stands | always, when reached |
 | `via { body } (left: s, right: s)` | **cuts**: `A = B` splits into the goals `A = C` and `C = B`, the waypoint built as a graph | the waypoint's net stack change is not the goal's, or a side fails |
 | `select-same (then: s, else: s)` | **splits a branch**: the left side answers with a `select`, so `select(c, T, E) = B` becomes the goals `T = B` and `E = B` (see below) | the left side's answer is not one `select`, or a block fails |
-| `cases(#nk)` | **case analysis** on the wire a box answers with, the box named by [address](tactics.md): the instruction set promises the answer is `true` or `false` and nothing else, so everything depending on it becomes a branch holding one copy per case, the assumed answer pasted in as a literal (see below) | no side names that box, nothing promises its answer is a bool, or nothing depends on it — and the residual says which |
-| `cases(#nk) (true: s, false: s)` | the same split with a sub-strategy per case, each run scoped to its side of the fresh branch (see below) | the split fails, or an arm's tactic does — and the residual names whose case it stood in |
+| `cases(#nk) (true: s, false: s)` | **case analysis**, which is η on a wire and then `select-same`: the box is named by [address](tactics.md), the instruction set promises its answer is `true` or `false` and nothing else, so the left side's downstream becomes a branch holding one copy per case with the assumed answer pasted in as a literal — and that branch is then split into the two goals (see below) | the left side does not name that box, nothing promises its answer is a bool, nothing depends on it, or a case fails — and the residual says which |
 | `diagram` | rewrites both sides by the whole table to fixpoint and asks whether they landed on one diagram | they did not — and the residual is both sides as they stand |
 
 A strategy acts on **one goal**, and the proof mirrors a tree of goals:
 the manipulations transform the current goal, a splitter — `via`,
-`select-same` — replaces it with independent subgoals each carrying its
-own strategy inside the split, and `diagram` closes it. So the closers end a strategy,
+`select-same`, `cases` — replaces it with independent subgoals each
+carrying its own strategy inside the split, and `diagram` closes it. So the closers end a strategy,
 and what follows a split is written *inside* it. A goal whose sides
 become isomorphic at any point closes on the spot — the second road to a
 proof: rewrite a side until the two are one graph. And a step that finds
@@ -160,11 +159,11 @@ nothing — the block's goal is the same graph closed on that block's
 sources, so the condition and the other block become boxes no output
 reaches.
 
-It is the mirror of `cases`. `cases` **makes** a branch to reason under,
-spending a hypothesis as the structure that holds it; `select-same`
-**spends** a branch the goal already has, so a proof stops having to find
-one rewriting that suits both blocks and can name a step at the block
-that wants it. A block failing says which block it was, and shows that
+It is half of `cases`. `cases` **makes** the branch first — that is the
+η — and then does exactly this to it; `select-same` **spends** a branch
+the goal already has. Either way a proof stops having to find one
+rewriting that suits both blocks and can name a step at the block that
+wants it. A block failing says which block it was, and shows that
 block against the right side rather than the branch it came out of.
 
 Two things to know. It reads the **left** side, and `symm` is how a proof
@@ -272,43 +271,56 @@ a rewrite window could see. That particular fact is common enough to be
 its own law (`tested-bool`); the general situation is not, and `cases` is
 the general instrument.
 
-`cases(#nk)` picks an intermediate result — a wire — by naming the box
-that answers with it, in the same [addresses](tactics.md) an `at` and an
-`on` are written in: as much of the box's name as tells it from the
-others on the page, which is what a residual listing prints in bold on
-its line. The box has to be one the instruction set guarantees answers a
-boolean (`equal`, `is_int`, `not`, …); the kernel is what asks, at the
-wire rather than at a spelling, and a box nothing promises a bool of
-simply offers no second case. That answer is
-`true` or it is `false`, and there is no third case, so the goal's
-downstream computation equals a branch holding one copy per case with the
-assumed answer pasted in as a literal. That is not a row of its own: it
-is three rows of the table spent in order — `promised-bool`,
-`as-bool-branch` and `select-hoist` ([docs/rules.md](rules.md)). The step
-spends them **once** per side that computes `op`, at the earliest such
-wire, and each is an ordinary checked rewrite. The power is in what the
-rest of the table does *afterwards*, inside the copies, where the
-assumption is now a literal: a
-branch on it resolves (`select-literal`), a test against it computes
-(`fold`), untouched code falls away by not being reached. When both
-copies simplify to the same thing, the introduced branch collapses too
-(`select-same`), and the goal closes by plain rewriting — the case
-analysis happened, and every step of it is in the proof's record.
+`cases(#nk) (true: …, false: …)` is one composite, and saying it as the
+composite is the shortest true description: **η on a wire, and then
+`select-same` on the branch that makes.**
 
-Three practical notes. *One address covers both sides*: an address is a
-fact about what a box computes rather than about the graph holding it, so
-one written name means the same test wherever it is written — the goal's
-other side included, and the goal as the next step leaves it. The step
-spends the split on every side that names the box, and a side that does
-not compute it is left standing.
+It picks the wire by naming the box that answers with it, in the same
+[addresses](tactics.md) an `at` and an `on` are written in: as much of
+the box's name as tells it from the others on the page, which is what a
+residual listing prints in bold on its line. The box has to be one the
+instruction set guarantees answers a boolean (`equal`, `is_int`, `not`,
+…); the kernel is what asks, at the wire rather than at a spelling, and a
+box nothing promises a bool of simply offers no second case.
 
-*Earliest still matters, and the proof is what says so*: splitting on a
-result computed late says nothing usable about the computations feeding
-it. The step no longer guesses at that — it splits where it is told —
-so the wire to name is the outermost decision, and the later tests are
-left to be decided along the way, or split in turn: two `cases` in a row
-is a two-variable case analysis, four leaves, all folded shut by the
-closing `diagram`.
+That answer is `true` or it is `false`, and there is no third case, so
+the left side's downstream computation equals a branch holding one copy
+per case with the assumed answer pasted in as a literal. That is not a
+row of its own: it is three rows of the table spent in order —
+`promised-bool`, `as-bool-branch` and `select-hoist`
+([docs/rules.md](rules.md)) — each an ordinary checked rewrite. Then the
+branch is split the way `select-same` splits one a goal already had:
+`select(w, T, E) = B` becomes the goals `T = B` and `E = B`, each on its
+own road, and the law of that name puts them back together.
+
+So the hypothesis is never a context the checker has to know about. It is
+the **block** each case stands in, with the literal pasted into it — and
+inside that block the rest of the table does the work: a branch on the
+assumption resolves (`select-literal`), a test against it computes
+(`fold`), untouched code falls away by not being reached. The checker
+replays a flat record and has no idea a case analysis happened (see
+[docs/invariants.md](invariants.md) — it has no turnstile, and only
+guard-shaped assumptions exist).
+
+Being a splitter has the consequences every splitter has. `cases` **ends
+a strategy**: the cases are written inside it, each is a whole strategy —
+closers, cuts, `symm`, nested splits and all — and an omitted one gets
+the default, `diagram`. A case that fails says which case it was, and
+shows that block against the right side rather than the branch it came
+out of.
+
+Three practical notes.
+
+*It is the left side that expands*, because the left side is where the
+blocks are carved — `select-same`'s rule, inherited whole. A wire only
+the right side computes is a `symm` away, and the report says so rather
+than leaving you to guess.
+
+*What each case is proved against is the whole right side*, untouched. So
+the reach of the step is: goals whose right side does not itself turn on
+the wire. Where it does, neither case is true on its own and the split is
+the wrong instrument — `specialize-bool` and its neighbours in the branch
+layer are the rows for a right side that tests what the left tests.
 
 And *identification is free*: a program often retests one condition in
 several places, and the split only helps once those are recognized as a
@@ -333,62 +345,52 @@ analysis over the two tags an input might be:
 ```text
 proof types_test::number_does_pre_and_post_is_constant =
     inline both(decide)
-    cases(#zl) both(decide)
-    cases(#y) both(decide)
-    diagram;
+    cases(#zl) (
+        true: diagram,
+        false: both(decide) cases(#y) (true: diagram, false: diagram));
 ```
 
-Open the definitions, drive, split on `#zl` — which is `equal(x, t1)` —
-drive, split on `#y`, which is `equal(x, t2)`, and the closer folds every
-leaf shut. The goal holds four `equal`s, and which of them each split
-means is not something the shape of the step could decide: the outermost
-is the postcondition's own tuple guard, and splitting there decides
-nothing.
+Open the definitions, drive, split on `#zl` — which is `equal(x, t1)`.
+Its true case folds shut on the machine outright. Its false case is where
+the second tag is still open, so the second split lives there: drive
+again, split on `#y`, which is `equal(x, t2)`, and both leaves fold. The
+goal holds four `equal`s, and which of them each split means is not
+something the shape of the step could decide: the outermost is the
+postcondition's own tuple guard, and splitting there decides nothing.
 
-### Structured `cases`: a sub-proof per case
+### The decision tree
 
-The structured form carries a sub-strategy per case, in the
-parenthesized-arm spelling `via` already uses:
+Because a case is a whole strategy, a case may split again — which is how
+a proof writes a decision tree, and the nesting says *where* each
+hypothesis is spent:
 
 ```text
 cases(#nk) (
-    true:  both(decide),
-    false: both(decide) cases(#zy) (true: both(decide)),
+    true:  diagram,
+    false: both(decide) cases(#zy) (true: diagram, false: diagram),
 )
 ```
 
-Each arm's rewrites are scoped to its side of the fresh branch, so this
-reads the way a proof assistant's case split does — assume the condition,
-prove the case — while what compiles out the other end is ordinary
-checked rewriting: the split is the branch itself, "the condition holds
-here" is spent by the specializing rows anchored on that branch, and the
-checker replays the flat record with no idea a case analysis happened
-(see [docs/invariants.md](invariants.md) — the checker has no turnstile,
-and only guard-shaped assumptions exist). An arm holds side rewrites and
-nested `cases`; either arm is omissible, the goal is closed outside the
-split, and a goal side whose branch is already gone skips its arms
-quietly. A stuck arm's residual names whose case it stood in.
-
 Two things to know when writing one:
 
-- **An arm can reach upstream.** The arm's scope is its *cone* — shared
-  context included — because a split duplicates only what lies downstream
-  of its wire, and the tests a nested split must decompose sit upstream,
-  shared between the copies.
 - **A hypothesis is spent forward only.** The split pastes its literal
   into the readers its wire had at split time. A reader created
-  afterwards — say, by `tuple-cancel` taking a shape guard apart inside
-  an arm — reads the wire undecided, and the move that decides it is to
-  **split again inside the arm**: the new readers are downstream there,
+  afterwards — say, by `tuple-cancel` taking a shape guard apart inside a
+  case — reads the wire undecided, and the move that decides it is to
+  **split again inside that case**: the new readers are downstream there,
   and a re-test of the old wire *is* the old wire. What the nesting says
-  is *where the hypothesis is spent*, not which wire is meant — the
-  address says that, and says it the same inside an arm as out.
+  is where the hypothesis is spent, not which wire is meant — the address
+  says that, and says it the same inside a case as out.
+- **The blocks share their context.** Carving a block out deletes
+  nothing: the case's goal is the same graph closed on that block's
+  sources, so a nested split can name a box upstream of the branch, where
+  the two copies still share what they read.
 
 A hypothesis the goal never computes can still be had: compute the test
 — an unread box costs nothing, totality and purity footing the bill —
-and split on it. What
-stays out of reach is a fact no test in the language expresses — see
-[docs/invariants.md](invariants.md) for that boundary.
+and split on it. What stays out of reach is a fact no test in the
+language expresses — see [docs/invariants.md](invariants.md) for that
+boundary.
 
 The corpus's biggest goal is the worked example.
 `barista::customer_impl::emit_does_pre_and_post_is_constant` — the
@@ -398,27 +400,24 @@ contract claim over a four-state machine, 351 boxes against 2 once
 ```text
 proof barista::customer_impl::emit_does_pre_and_post_is_constant =
     inline both(decide)
-    cases(#uk) both(decide)
-    cases(#lq) (
-        true: both(decide) cases(#oz) (
-            true: both(decide),
-            false: both(decide)),
-        false: both(decide))
-    diagram;
+    cases(#uk) (
+        true: both(decide) cases(#lq) (
+            true: both(decide) cases(#oz) (true: diagram, false: diagram),
+            false: diagram),
+        false: diagram);
 ```
 
 The addressing is what makes the tree writable at all: the goal holds two
 dozen `equal`s, and the outermost is the tuple-shape guard — splitting
 there is a fixpoint that decides nothing. `#uk` is the one test `emit`
 dispatches on, `equal(x.2, state::thirsty)`, which the drive has already
-identified with the precondition disjunction's own; its false case closes
-vacuously (the emitted flag is false, so the postcondition holds whatever
-the precondition said), and its true case resolves `emit` outright,
-leaving the two `is_symbol` splits — `#lq` and `#oz` — to decide the
-payload checks. Those are by then the very boxes the precondition tested,
-and `#oz`'s readers are created inside `#lq`'s true arm, which is why
-that split sits there. The whole tree lands in one flat record per
-side, replayed blind by the checker.
+identified with the precondition disjunction's own. Its false case closes
+outright — the emitted flag is false, so the postcondition holds whatever
+the precondition said. Its true case resolves `emit`, and the two
+`is_symbol` splits — `#lq`, then `#oz` inside its true case — decide the
+payload checks, which are by then the very boxes the precondition tested.
+Every leaf is a bare `diagram`, and the whole tree lands in one flat
+record, replayed blind by the checker.
 
 ## The `.hant` file
 

@@ -28,12 +28,12 @@
 //! | `symm` | swaps the two sides | never — but two in a row are refused |
 //! | `exact` | claims the sides are one diagram — **isomorphic** — which the auto-close has already checked, so a reached `exact` fails and shows the goal exactly as it stands | always, when reached |
 //! | `via { body } (left: s, right: s)` | **cuts**: `A = B` splits into the goals `A = C` and `C = B`, the waypoint built as a graph | the waypoint's net stack change is not the goal's, or a side fails |
-//! | `select-same (then: s, else: s)` | **splits a branch**: the left side answers with a `select`, so `select(c, T, E) = B` splits into the goals `T = B` and `E = B`, each on its own road. The law of that name is what puts them back together — a branch answering `B` either way *is* `B` — and the condition goes with the branch. The mirror of `cases`: that one makes a branch to reason under, this one spends the one a goal already has | the left side's answer is not one `select` — every boundary output that box's own — or a block fails, and the residual says which block |
-//! | `cases(#nk)` | **case analysis** on the wire that box answers with: the instruction set promises it is `true` or `false` and nothing else, so everything depending on it becomes a branch holding one copy per case, the assumption pasted in as a literal — one checked rewrite per side, simplified under each assumption by the ordinary laws | no side names that box, nothing promises its answer is a bool, or nothing depends on it |
-//! | `cases(#nk) (true: s, false: s)` | the same split, with a sub-strategy per case: each runs with its rewrites scoped to its side of the fresh branch — the hypothesis, spent as the structure it is. An arm holds side rewrites and nested `cases`; either is omissible, and a side whose branch is already gone skips its arm quietly | the split fails, or an arm's tactic does — and the residual names whose case it stood in |
+//! | `select-same (then: s, else: s)` | **splits a branch**: the left side answers with a `select`, so `select(c, T, E) = B` splits into the goals `T = B` and `E = B`, each on its own road. The law of that name is what puts them back together — a branch answering `B` either way *is* `B` — and the condition goes with the branch. `cases` is this step with an η in front of it: that one makes the branch first, this one spends the one a goal already has | the left side's answer is not one `select` — every boundary output that box's own — or a block fails, and the residual says which block |
+//! | `cases(#nk) (true: s, false: s)` | **case analysis**: η on the wire that box answers with — the instruction set promises it is `true` or `false` and nothing else, so everything on the left depending on it becomes a branch holding one copy per case, the assumption pasted in as a literal — and then that branch **split** the way `select-same` splits one a goal already has. The two cases are independent goals against the right side, each with its own strategy, and either is omissible for the default | the left side does not name that box, nothing promises its answer is a bool, nothing depends on it, or a case fails — and the residual names which case it stood in |
 //! | `diagram` | rewrites both sides by the whole table to fixpoint; they land on one diagram — isomorphic — or they do not | they do not — and the residual is both sides as the diagrams they came to |
 //!
-//! `diagram`, `exact`, `via` and `select-same` end a strategy — the goal is
+//! `diagram`, `exact`, `via`, `select-same` and `cases` end a strategy — the
+//! goal is
 //! closed or split, and what follows a split is written *inside* it, since
 //! the subgoals are independent. A chain is nested cuts — `via { c1 } (right:
 //! via { c2 })` — and each link may take a different road. A strategy that
@@ -347,25 +347,38 @@ pub enum Step<V> {
         left: Option<Strategy<V>>,
         right: Option<Strategy<V>>,
     },
-    /// Case analysis on the wire one **addressed** box answers with. The
-    /// box named has to be one the instruction set
-    /// [guarantees answers a bool](bytecode::Instruction::yields_bool),
-    /// so its answer is `true` or `false` and nothing else — and
-    /// everything that depends on that answer can be replaced by a branch
-    /// holding one copy of it per case, the assumed answer pasted in as a
-    /// literal. That replacement is three ordinary equations (the
+    /// Case analysis, and exactly one composite: **η on a wire, and then
+    /// [`SelectSame`](Step::SelectSame) on the branch that makes.**
+    ///
+    /// The box named has to be one the instruction set
+    /// [guarantees answers a bool](bytecode::Instruction::yields_bool), so
+    /// its answer is `true` or `false` and nothing else — and everything
+    /// on the left side that depends on that answer can be replaced by a
+    /// branch holding one copy of it per case, the assumed answer pasted
+    /// in as a literal. That replacement is three ordinary equations (the
     /// promise written down, the coercion unpacked, and the branch grown
     /// forward over the region — see
-    /// [`case_split`](crate::kernel::rules::case_split)), and this step
-    /// spends them once per side that names the box — each rewrite an
+    /// [`case_split`](crate::kernel::rules::case_split)), each an
     /// [`apply`](crate::kernel::rules::apply)-checked rewrite like any
     /// other, so the step itself is untrusted convenience that only picks
     /// where. The promise is the kernel's to ask for, and it asks at the
     /// wire rather than at a spelling: a box nothing promises a bool of
-    /// simply offers no second case, and the step says so. The ordinary
-    /// laws then simplify each copy under its assumption, and when both
-    /// come out alike the introduced branch collapses as well. A
-    /// manipulation, not a closer: what it leaves is a goal.
+    /// simply offers no second case, and the step says so.
+    ///
+    /// What follows is the other splitter's move, on the branch this one
+    /// just put there: `select(w, T, E) = B` is the two goals `T = B` and
+    /// `E = B`, each discharged on its own road, and the law
+    /// `select-same` — a branch answering `B` either way *is* `B` — is
+    /// what puts them back together. So this closes the goal, its cases
+    /// are whole strategies rather than scoped rewrites, and an omitted
+    /// one gets the default. The hypothesis is not a context the checker
+    /// has to know about: it is the block each case stands in, and the
+    /// literal pasted into it.
+    ///
+    /// The expansion is the **left** side's, because that is the side
+    /// whose blocks are carved. A wire only the right side computes is a
+    /// `symm` away, the same answer `select-same` gives to the same
+    /// mistake — and the report says so.
     ///
     /// `at` is under the address discipline every other *where* in this
     /// language is under — as much of a box's name as tells it from the
@@ -375,25 +388,10 @@ pub enum Step<V> {
     /// goal prints is keyed by address, so the wire to split on is read
     /// off the report the same way an `at`'s box is: put an `exact` where
     /// the split belongs and the failure names every wire on offer.
-    /// Nothing here describes the *test* — which operation, against
-    /// which literal — because a description can only reach the tests it
-    /// has words for, and every other step of this language had already
+    /// Nothing here describes the *test* — which operation, against which
+    /// literal — because a description can only reach the tests it has
+    /// words for, and every other step of this language had already
     /// stopped needing words for them.
-    ///
-    /// One address covers both sides at once, since an address is a fact
-    /// about a computation rather than about a graph: a side that does
-    /// not compute the box is left standing, the way a side without the
-    /// test always was.
-    ///
-    /// The arms, when written, are per-case sub-strategies: after the
-    /// split, `then_arm` runs with its rewrites scoped to the then side of
-    /// the fresh branch on each side of the goal that split, and
-    /// `else_arm` to the else side — the hypothesis ("the answer was
-    /// true") spent as the structure it is, rather than as a context the
-    /// checker would have to know about. An arm holds side rewrites and nested
-    /// `cases` and nothing else, so everything it lands is ordinary
-    /// checked steps in the same record as the split; the goal is closed
-    /// outside the split, by whatever follows.
     Cases {
         at: Prefix,
         then_arm: Option<Strategy<V>>,
@@ -638,13 +636,18 @@ fn parse_step(input: &str) -> Result<(Step<String>, &str), String> {
             // The wire, named the way every other *where* in this language
             // is: as much of the box's address as the listing emphasised.
             let at = Prefix::parse(inside).map_err(|e| format!("`cases`: {}", e))?;
-            // The arms, when written, ride the same spelling as `via`'s
-            // sides: parenthesized, labelled, either omissible.
-            let (arms, after) = if after.trim_start().starts_with('(') {
-                parse_arms("cases", "true", "false", after.trim_start())?
-            } else {
-                ((None, None), after)
-            };
+            // The arms ride the same spelling as `via`'s sides:
+            // parenthesized, labelled, either side omissible. The block
+            // itself is not: a splitter is what its cases are, and a
+            // `cases` with none says only that a branch was made.
+            if !after.trim_start().starts_with('(') {
+                return Err(format!(
+                    "`cases({})` splits the goal in two and needs its cases: \
+                     `(true: …, false: …)`",
+                    at
+                ));
+            }
+            let (arms, after) = parse_arms("cases", "true", "false", after.trim_start())?;
             Ok((
                 Step::Cases {
                     at,
@@ -1152,7 +1155,13 @@ fn validate<V>(strategy: &Strategy<V>) -> Result<(), String> {
     for (i, step) in strategy.iter().enumerate() {
         let last = i + 1 == strategy.len();
         match step {
-            Step::Diagram | Step::Exact | Step::Via { .. } | Step::SelectSame { .. } if !last => {
+            Step::Diagram
+            | Step::Exact
+            | Step::Via { .. }
+            | Step::SelectSame { .. }
+            | Step::Cases { .. }
+                if !last =>
+            {
                 return Err(format!("`{}` closes the goal; nothing can follow it", step));
             }
             Step::Via { left, right, .. } => {
@@ -1168,11 +1177,13 @@ fn validate<V>(strategy: &Strategy<V>) -> Result<(), String> {
                     validate(block)?;
                 }
             }
+            // A splitter's subgoals are goals like any other here too:
+            // each case is a whole strategy, closers and all.
             Step::Cases {
                 then_arm, else_arm, ..
             } => {
-                for arm in [then_arm, else_arm].into_iter().flatten() {
-                    validate_arm(arm)?;
+                for case in [then_arm, else_arm].into_iter().flatten() {
+                    validate(case)?;
                 }
             }
             // Swapping twice is the goal it started with, and a step that
@@ -1181,36 +1192,6 @@ fn validate<V>(strategy: &Strategy<V>) -> Result<(), String> {
                 return Err("`symm symm` is the goal unchanged".to_string());
             }
             _ => {}
-        }
-    }
-    Ok(())
-}
-
-/// A `cases` arm holds side rewrites and nested `cases` and nothing else.
-/// The restriction is the proof object's: everything an arm lands must be
-/// ordinary checked steps appended to the split's own record, and the
-/// steps refused here re-perform some other way — `inline` re-opens,
-/// `symm` turns the goal, the closers close it — none of which has a
-/// reading *inside* a branch. The goal is closed outside the split.
-fn validate_arm<V>(arm: &Strategy<V>) -> Result<(), String> {
-    for step in arm {
-        match step {
-            Step::Rewrite { .. } => {}
-            Step::Cases {
-                then_arm, else_arm, ..
-            } => {
-                for nested in [then_arm, else_arm].into_iter().flatten() {
-                    validate_arm(nested)?;
-                }
-            }
-            other => {
-                return Err(format!(
-                    "`{}` cannot appear inside a `cases` arm: an arm holds side \
-                     rewrites and nested `cases`, and the goal is closed outside \
-                     the split",
-                    other
-                ));
-            }
         }
     }
     Ok(())
@@ -1402,47 +1383,61 @@ mod tests {
 
     #[test]
     fn a_case_split_parses_and_polices_its_address() {
-        // A manipulation now, not a closer: the split lands inside the
-        // graph, and the strategy carries on. The wire is named the way
-        // every other *where* in this language is — as much of a box's
-        // address as the listing emphasised.
-        let entries = parse_hant("proof p = inline cases(#nkz) cases(mlk) diagram;").unwrap();
+        // A splitter, so it ends the strategy and its cases are written
+        // inside it. The wire is named the way every other *where* in this
+        // language is — as much of a box's address as the listing
+        // emphasised.
+        let entries =
+            parse_hant("proof p = inline cases(#nkz) (true: diagram, false: diagram);").unwrap();
         let [
             Step::Inline(None),
             Step::Cases {
-                at: first,
-                then_arm: None,
-                else_arm: None,
+                at,
+                then_arm: Some(_),
+                else_arm: Some(_),
             },
-            Step::Cases { at: second, .. },
-            Step::Diagram,
         ] = &entries[0].strategy[..]
         else {
             panic!("{:?}", entries[0].strategy);
         };
         // The `#` a listing prints with is accepted and dropped, so a name
-        // pasted out of a report is a name.
-        assert_eq!(first.letters(), "nkz");
-        assert_eq!(second.letters(), "mlk");
+        // pasted out of a report is a name; and bare letters are one too.
+        assert_eq!(at.letters(), "nkz");
+        let entries = parse_hant("proof p = cases(mlk) (true: diagram, false: diagram);").unwrap();
+        let [Step::Cases { at, .. }] = &entries[0].strategy[..] else {
+            panic!("{:?}", entries[0].strategy);
+        };
+        assert_eq!(at.letters(), "mlk");
 
         // And an address is held to being one: the letters an address is
         // written in, at least one of them, and no more than an address.
         let err = parse_hant("proof p = cases();").unwrap_err();
         assert!(err.contains("names no wire"), "{}", err);
-        let err = parse_hant("proof p = cases(equal);").unwrap_err();
+        let err = parse_hant("proof p = cases(equal) (true: diagram);").unwrap_err();
         assert!(err.contains("is not one of the letters"), "{}", err);
-        let err = parse_hant("proof p = cases(#zzzzzzzzzzzzz);").unwrap_err();
+        let err = parse_hant("proof p = cases(#zzzzzzzzzzzzz) (true: diagram);").unwrap_err();
         assert!(err.contains("longer than an address"), "{}", err);
+    }
+
+    /// The step is what its cases are, so the block is not optional — and
+    /// a `cases` closes the goal, the way every other splitter does.
+    #[test]
+    fn a_case_split_is_a_splitter() {
+        let err = parse_hant("proof p = cases(#nk);").unwrap_err();
+        assert!(err.contains("needs its cases"), "{}", err);
+        let err = parse_hant("proof p = cases(#nk) (true: diagram, false: diagram) diagram;")
+            .unwrap_err();
+        assert!(err.contains("closes the goal"), "{}", err);
     }
 
     #[test]
     fn a_structured_case_split_parses_its_arms() {
         // The arms ride `via`'s spelling: parenthesized, labelled, either
-        // omissible — and an arm may split again, which is how a proof
+        // omissible — and a case may split again, which is how a proof
         // writes a decision tree.
         let entries = parse_hant(
-            "proof p = cases(#nk) (true: both(decide), \
-             false: both(decide) cases(#zy) (true: both(decide))) diagram;",
+            "proof p = cases(#nk) (true: both(decide) diagram, \
+             false: both(decide) cases(#zy) (true: diagram));",
         )
         .unwrap();
         let [
@@ -1451,13 +1446,15 @@ mod tests {
                 then_arm: Some(then_arm),
                 else_arm: Some(else_arm),
             },
-            Step::Diagram,
         ] = &entries[0].strategy[..]
         else {
             panic!("{:?}", entries[0].strategy);
         };
         assert_eq!(at.letters(), "nk");
-        assert!(matches!(then_arm[..], [Step::Rewrite { .. }]));
+        assert!(matches!(
+            then_arm[..],
+            [Step::Rewrite { .. }, Step::Diagram]
+        ));
         let [
             Step::Rewrite { .. },
             Step::Cases {
@@ -1469,111 +1466,58 @@ mod tests {
         else {
             panic!("{:?}", else_arm);
         };
-        assert!(matches!(nested[..], [Step::Rewrite { .. }]));
+        assert!(matches!(nested[..], [Step::Diagram]));
 
-        // An omitted pair of arms is the bare split, unchanged.
-        let entries = parse_hant("proof p = cases(#nk) diagram;").unwrap();
+        // An omitted case gets the default, the way an omitted `via` side
+        // or `select-same` block does.
+        let entries = parse_hant("proof p = cases(#nk) (false: diagram);").unwrap();
         assert!(matches!(
             entries[0].strategy[..],
-            [
-                Step::Cases {
-                    then_arm: None,
-                    else_arm: None,
-                    ..
-                },
-                Step::Diagram
-            ]
+            [Step::Cases {
+                then_arm: None,
+                else_arm: Some(_),
+                ..
+            }]
         ));
 
         // A duplicated label is refused the way `via`'s is.
-        let err = parse_hant("proof p = cases(#nk) (true: both(decide), true: both(decide));")
-            .unwrap_err();
+        let err = parse_hant("proof p = cases(#nk) (true: diagram, true: diagram);").unwrap_err();
         assert!(err.contains("names a side twice"), "{}", err);
     }
 
-    /// The splitter that eliminates a branch, and the one step whose name
-    /// holds a hyphen — it is named for the law that licenses it.
+    /// A case is a whole strategy — closers, cuts, `symm` and all — because
+    /// it is a goal like any other. That is the whole of what changed when
+    /// `cases` stopped being a manipulation.
     #[test]
-    fn a_branch_splits_into_its_two_blocks() {
-        let entries = parse_hant("proof p = select-same;").unwrap();
-        assert_eq!(
-            entries[0].strategy,
-            vec![Step::SelectSame {
-                then_arm: None,
-                else_arm: None
-            }]
-        );
-
-        // The arms ride `via`'s spelling and `cases`'s labels, and either
-        // is omissible — a block that is already the right side needs no
-        // strategy of its own.
-        let entries =
-            parse_hant("proof p = symm select-same (then: inline diagram, else: exact);").unwrap();
-        let [
-            Step::Symm,
-            Step::SelectSame {
-                then_arm: Some(then_arm),
-                else_arm: Some(else_arm),
-            },
-        ] = &entries[0].strategy[..]
-        else {
-            panic!("{:?}", entries[0].strategy);
-        };
-        assert_eq!(then_arm.as_slice(), [Step::Inline(None), Step::Diagram]);
-        assert_eq!(else_arm.as_slice(), [Step::Exact]);
-
-        let entries = parse_hant("proof p = select-same (else: diagram);").unwrap();
-        assert!(matches!(
-            entries[0].strategy[..],
-            [Step::SelectSame {
-                then_arm: None,
-                else_arm: Some(_)
-            }]
-        ));
-
-        // A splitter closes the goal, and its blocks are goals in their
-        // own right — so each takes a whole strategy, closer and all.
-        let err = parse_hant("proof p = select-same diagram;").unwrap_err();
-        assert!(err.contains("nothing can follow"), "{}", err);
-        let err = parse_hant("proof p = select-same (else: diagram inline);").unwrap_err();
-        assert!(err.contains("nothing can follow"), "{}", err);
-        let err = parse_hant("proof p = select-same (true: diagram);").unwrap_err();
-        assert!(err.contains("`then:` or `else:`"), "{}", err);
-    }
-
-    #[test]
-    fn an_arm_holds_rewrites_and_splits_only() {
-        // The goal is closed outside the split: everything an arm lands
-        // must be checked steps in the split's own record, and the steps
-        // that re-perform some other way have no reading inside a branch.
-        for refused in [
+    fn a_case_is_a_whole_strategy() {
+        for written in [
             "diagram",
             "exact",
-            "inline",
-            "symm",
+            "inline diagram",
+            "symm diagram",
             "via { push 1 }",
             "select-same",
         ] {
-            let err = parse_hant(&format!(
-                "proof p = cases(#nk) (true: {}) diagram;",
-                refused
+            let entries = parse_hant(&format!(
+                "proof p = cases(#nk) (true: {}, false: diagram);",
+                written
             ))
-            .unwrap_err();
-            assert!(
-                err.contains("cannot appear inside a `cases` arm"),
-                "{}: {}",
-                refused,
-                err
-            );
+            .unwrap_or_else(|e| panic!("{}: {}", written, e));
+            let [
+                Step::Cases {
+                    then_arm: Some(arm),
+                    ..
+                },
+            ] = &entries[0].strategy[..]
+            else {
+                panic!("{:?}", entries[0].strategy);
+            };
+            assert!(!arm.is_empty(), "{}", written);
         }
-        // Nested arms are held to the same rule.
-        let err = parse_hant("proof p = cases(#nk) (true: cases(#zy) (false: inline)) diagram;")
-            .unwrap_err();
-        assert!(
-            err.contains("cannot appear inside a `cases` arm"),
-            "{}",
-            err
-        );
+        // And it is held to a whole strategy's own rules.
+        let err =
+            parse_hant("proof p = cases(#nk) (true: diagram exact, false: diagram);").unwrap_err();
+        assert!(err.contains("closes the goal"), "{}", err);
     }
 
     #[test]

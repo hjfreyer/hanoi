@@ -578,8 +578,11 @@ rewriting produced from it** — each new step's image joins the region,
 and deleted nodes leave it (a dead id binds nothing, since queries bind
 only live nodes).
 
-`Arm` is what a structured `cases` arm runs `Within`
-([docs/proving.md](proving.md)). Its membership is the arm's **cone**:
+`Arm` is one side of a branch a goal already holds. Nothing in the
+surface spells it today — a `cases` used to be its one caller, and is a
+splitter now, handing each case its block as a goal of its own
+([docs/proving.md](proving.md)) — so it sits here as data the model has
+before the surface does. Its membership is the arm's **cone**:
 everything upstream of that side's blocks, minus everything upstream of
 the condition — the decided test's own making is what an arm
 is scoped away from — plus the `select` itself, since the branch

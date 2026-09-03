@@ -8,10 +8,18 @@ proof identities::testing_a_test_by_name = inline diagram;
 
 // The arm recomputes the very test its branch decided. Nothing stands
 // between an arm and what it reads, so the driver identifies the two
-// computations by `dedup` alone, and the case split on the one wire that
-// remains — `#t`, the `equal` both sides are left holding — decides both
-// readings at once: η, spent deliberately, where no rewrite window could.
-proof identities::specializing_a_tested_value = both(decide) cases(#t) diagram;
+// computations by `dedup` alone, and what is left is a branch answering
+// with the very value it turns on.
+//
+// `specialize-bool` is the row that says a bool a branch turned on is
+// `true` where the select reads it, and it wants the coercion in its
+// window — so the proof spends `promised-bool` on each side to put one
+// there, and the branch layer takes both sides home. `cases` is not what
+// this needs: a split carves the left side's blocks and proves each
+// against the *whole* right side, and this right side tests the same wire,
+// so neither case would be true on its own.
+proof identities::specializing_a_tested_value =
+    both(decide) both(fire(promised-bool)) diagram;
 
 // The reader-split, said outright. The right side reads one of a shared
 // wire's two readings through the cancelling pair and leaves the other on

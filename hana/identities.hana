@@ -550,11 +550,12 @@ identity a_branch_between_what_it_compared_answers_with_it
 
 // The arm that recomputes the test its branch decided.
 //
-// No window reaches this one: nothing stands between an arm and what it reads,
-// so the arm's `push 7 equal` *is* the condition — one box, two readers — and
-// what is left is a branch answering with the very value it turns on. The case
-// split on that wire decides both readings at once, which is why the proof
-// spends `cases` where no rewrite would do.
+// No window reaches this one until the coercion is there: nothing stands
+// between an arm and what it reads, so the arm's `push 7 equal` *is* the
+// condition — one box, two readers — and what is left is a branch answering
+// with the very value it turns on. `specialize-bool` is the row that says so,
+// and it wants the `as_bool` in its window, which is why the proof spends
+// `promised-bool` before letting the branch layer take both sides home.
 identity specializing_a_tested_value
     { pick 0 push 7 equal branch { push 7 equal } { drop 0 push false } }
   = { pick 0 push 7 equal branch { drop 0 push true } { drop 0 push false } };

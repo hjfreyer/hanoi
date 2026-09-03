@@ -243,7 +243,7 @@ impl fmt::Display for Reader {
 /// `Except` takes the complement of what the wire's readers are *then*,
 /// so the recorded match carries a concrete selection either way, and a
 /// reader a later step creates is not retroactively covered (the same
-/// statement-time semantics a `cases` split has). Absent, the step is
+/// statement-time semantics the η a `cases` spends has). Absent, the step is
 /// what it always was: every reader follows.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Readers {
@@ -290,9 +290,18 @@ pub enum Region {
     /// that narrows a select puts down a new box with a new [`NodeId`],
     /// and the wire it turns on is what survives that. A condition
     /// nothing branches on any more resolves to the empty region, which
-    /// binds nothing. Runtime data, not surface syntax: the source is
-    /// only known once a split has landed, so whoever fires the split
-    /// reads it off what [`Derivation::latest_undo`] recorded.
+    /// binds nothing.
+    ///
+    /// Runtime data, and no surface syntax spells it today: the source is
+    /// only known once a split has landed, so whoever names one reads it
+    /// off what [`Derivation::latest_undo`] recorded. A `cases` used to
+    /// be its one caller, scoping a case's rewrites to the side of the
+    /// branch it had just made; it is a splitter now and hands each case
+    /// the block as a goal of its own instead, which needs no region.
+    /// This stays as what it always was here — a capability the data
+    /// model has before the surface does, kept because reasoning inside
+    /// one arm of a branch a goal already holds is a thing a tactic will
+    /// want to say.
     Arm { cond: Source, side: bool },
 }
 
