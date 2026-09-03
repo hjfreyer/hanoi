@@ -114,7 +114,8 @@ pub struct ConstStringDecl {
 /// A sentence declaration. Shared between sugar and core.
 ///
 /// The `function` keyword is not a separate item kind: it lowers to a sentence
-/// carrying an extra `Arity(1, 1)` annotation.
+/// carrying an extra `Arity(1, 1)` annotation. The one annotation that is not
+/// shared is `#[type(A -> B)]`, which is sugar — see [`sugar::Signature`].
 #[derive(Debug, Clone)]
 pub struct SentenceDecl {
     pub name: String,
@@ -199,10 +200,10 @@ impl std::fmt::Display for ParsedValue {
 /// The surface language, as parsed. No desugaring has happened yet.
 pub mod sugar {
     use super::{
-        ConstStringDecl, IdentityDecl, ParsedValue, SentenceDecl, SourceAnnotation, SymbolDecl,
-        TypeSpec,
+        ConstStringDecl, IdentityDecl, ParsedValue, SourceAnnotation, SymbolDecl, TypeSpec,
     };
     use crate::resolve::Path;
+    use crate::source::Span;
 
     #[derive(Debug, Clone)]
     pub enum Item {
@@ -214,6 +215,36 @@ pub mod sugar {
         Type(TypeDecl),
         Enum(EnumDecl),
         Compose(ComposeDecl),
+    }
+
+    /// A sentence as parsed: the declaration core keeps, and the one
+    /// annotation it does not.
+    ///
+    /// Every other annotation is a fact about the sentence and travels with it
+    /// into the library. `#[type(A -> B)]` is a *claim* — that a well-formed
+    /// input gives a well-formed output — and a claim is an identity, so
+    /// lowering writes it as one beside the sentence and erases it here.
+    #[derive(Debug, Clone)]
+    pub struct SentenceDecl {
+        pub decl: super::SentenceDecl,
+        pub signature: Option<Signature>,
+    }
+
+    /// `#[type(A -> B)]`: the input and output specs, in the grammar `type
+    /// Name spec;` uses, so a type is written the same way wherever it is
+    /// written.
+    ///
+    /// The claim it states is `not (A x) or B (f x)`, spelled the way a
+    /// branch spells it, against `drop 0 ; push true`. See
+    /// [`crate::lower`].
+    #[derive(Debug, Clone)]
+    pub struct Signature {
+        pub input: TypeSpec,
+        pub output: TypeSpec,
+        /// Where the annotation was written. The identity it lowers to
+        /// carries this as its own span, so the claim is addressed per file
+        /// exactly as a written identity is.
+        pub span: Span,
     }
 
     #[derive(Debug, Clone)]

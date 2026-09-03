@@ -14,7 +14,8 @@ Hanoi is a stack-oriented, VM-executed language designed to explore static analy
 - **Movement Without Depths**: the ISA today moves values with `drop`, `copy`, `swap` and a one-deep `dip`, and nothing else. `pick d`, `roll d`, `drop d` and `dip N` are still what a program says, and the compiler writes each as the frames it stands for — a depth in an instruction is a pointer into the stack, and every law about one was an infinite family indexed by that pointer. See [docs/compilation.md](docs/compilation.md#why-the-depths-go-and-what-it-costs).
 - **CSP State Machine Modeling**: Fully implements Communicating Sequential Processes (CSP) state machines. State machines are represented as modules with standardized hooks for managing state transitions, internal execution steps, and termination. See the [CSP Machines Documentation](docs/machines.md) for details.
 - **Static Safety & Behavior Contracts** *(annotations only — verifier temporarily removed)*: Functions can be annotated with a precondition (`#[precondition(fn_name)]`) or a postcondition (`#[postcondition(fn_name)]`). Both are parsed and preserved, but the Z3-backed static verifier that proved them has been removed for now. See [docs/typecheck.md](docs/typecheck.md) for the design.
-- **`type` / `enum` Predicate Sugar**: Declare reusable value predicates with `type Name <spec>;` (primitives — `int`, `bool`, `const_string`, `symbol`, `tuple` — literals, tuples, and `|`-unions) or `enum Name { Variant(spec, ...), ... }`, which expand into `Name::check` sentences usable directly as preconditions/postconditions.
+- **Typed Functions**: `#[type(A -> B)]` gives a function a type in the same grammar `type` declares one in, and a type is a *claim*: the compiler states the identity `f_has_type` — "either the input is no `A`, or the output is a `B`" — beside the function, and `bin/prove` discharges it like any other. See [the reference](docs/hana.md#contract-annotations).
+- **`type` / `enum` Predicate Sugar**: Declare reusable value predicates with `type Name <spec>;` (primitives — `int`, `bool`, `const_string`, `symbol`, `tuple` — literals, tuples, and `|`-unions) or `enum Name { Variant(spec, ...), ... }`, which expand into `Name::check` sentences usable directly as preconditions/postconditions, and as either half of a `#[type(A -> B)]`.
 - **Nothing Fails**: Every instruction answers on every input, with one value of the type it computes and nothing about how it got there. A data operation off its domain returns a deterministic default — `add` on two symbols is `0`, `untuple 3` of one is three `()`s — and a caller that needs to know asks before it hands the operands over. There is no `panic`, no `assert`, and no way for a program to end a run over a value: a problem is reported by answering with one. See [docs/totality.md](docs/totality.md).
 - **Result-Answering Tests**: A `test sentence` hands back `((), ok)` or `(payload, err)` rather than halting the VM, built from `check_equals` and carried out by `?`. A failing test prints what it saw — `FAILED (err (5, 6))`. See [the reference](docs/hana.md#tests).
 - **`?` for Results**: A result is the 2-tuple `(value, ok)` or `(value, err)`, and `?` unwraps one or leaves the block early carrying the error. It is sugar for two branches with the rest of the block inside an arm — including the drops that make the early return leave the stack the way finishing would. See [the reference](docs/hana.md#the--operator).
@@ -47,6 +48,7 @@ Hanoi supports two keywords to define execution blocks:
 ### Annotations
 Sentences and functions can be annotated with metadata used by the compiler and static verification tools:
 - `#[arity(inputs, outputs)]`: Declares the expected stack transition (implicit `#[arity(1, 1)]` for `function`).
+- `#[type(A -> B)]`: Gives a function a type, `A` and `B` being specs in the grammar of the `type` keyword. It is sugar for an identity, `<name>_has_type`, claiming that a well-formed input gives a well-formed output; `bin/prove` discharges it.
 - `#[precondition(fn_name)]`: Names a `1 -> 1` function that must evaluate to `true` on the input for the annotated function to be considered safe to call.
 - `#[postcondition(fn_name)]`: Names a `1 -> 1` function that must evaluate to `true` on the output, given the precondition (if any) held on the input.
 
@@ -60,6 +62,23 @@ function is_int_fn {
 #[postcondition(is_int_fn)]
 function identity {
     // returns input unchanged
+}
+```
+
+### Example: A Typed Function
+```hana
+symbol t1
+symbol t2
+type Tag t1 | t2;
+
+// States `identity number_has_type`: an input that is no `Tag`, or an
+// output that is an `int`. `cargo run --bin prove -- <corpus>` proves it,
+// given `proof number_has_type = inline by-cases;` in the `.hant` beside it.
+#[type(Tag -> int)]
+function number {
+    push t1
+    equal
+    branch { push 1 } { push 2 }
 }
 ```
 

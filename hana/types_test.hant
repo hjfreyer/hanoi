@@ -29,3 +29,8 @@ proof types_test::number_does_pre_and_post_is_constant =
     cases(#zl) (
         true: diagram,
         false: both(decide) cases(#y) (true: diagram, false: diagram));
+
+// The same claim as `#[type(is_tag -> is_numbered)]` on `number` states it.
+// The two sides are the ones above once `inline` has opened the calls, so
+// the written tree above would close this one too; the search finds it.
+proof types_test::number_has_type = inline by-cases;

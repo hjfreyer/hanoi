@@ -176,6 +176,7 @@ discharged one has been removed pending a reboot.
 Hanoi supports static checking at compile time via attributes. `#[arity]` is checked by the compiler today; `#[precondition]` and `#[postcondition]` were verified by the `typecheck` tool, currently removed from the codebase along with its Z3 dependency (see [docs/typecheck.md](typecheck.md) for the design):
 
 - `#[arity(inputs, outputs)]`: Declares the stack arity (required for sentences that do not use the default `function` arity of `1 -> 1`).
+- `#[type(A -> B)]`: Gives a function a type, and states it as an identity — see [typed functions](#typed-functions) below.
 - `#[precondition(fn_name)]`: Names a `1 -> 1` function that must evaluate to `true` on the input for the annotated function to be considered safe to call.
 - `#[postcondition(fn_name)]`: Names a `1 -> 1` function that must evaluate to `true` on the output, given the precondition (if any) held on the input.
 
@@ -205,6 +206,63 @@ enum MyEnum {
     Case3(),
 }
 ```
+
+### Typed functions
+
+`#[type(A -> B)]` gives a function a type. `A` and `B` are specs in exactly
+the grammar `type Name spec;` takes — a primitive, a literal, a path to a
+`type`, `enum`, predicate function or symbol, a tuple of specs, or a `|`-union
+— so a type is written the same way wherever it is written, and a `|` binds
+tighter than the arrow: `int | bool -> symbol` is `(int | bool) -> symbol`.
+
+```hana
+symbol t1
+symbol t2
+type Tag t1 | t2;
+
+#[type(Tag -> int)]
+function number {
+    push t1
+    equal
+    branch { push 1 } { push 2 }
+}
+```
+
+**A type is a claim**, and the compiler states it as one. The annotation is
+sugar for an identity written beside the function, named `<name>_has_type`:
+
+```hana
+identity number_has_type
+    { pick 0 jump Tag::check branch { jump number is_int } { drop 0 push true } }
+  = { drop 0 push true };
+```
+
+That is `not (A x) or B (f x)` — either the input was no `A`, or the output
+is a `B` — written the way a branch writes it, and claimed to be constantly
+true. The specs compile as a `type` declaration's would, inline: a path to a
+predicate is a call to its `check`, a symbol is `push sym ; equal`, a tuple
+takes the value apart. Nothing else changes: the function compiles as it did,
+the annotation does not survive into the library, and the identity is the
+record of it.
+
+Three things follow from being an identity:
+
+- **It is discharged by `bin/prove`**, and by nothing at compile time. The
+  claim holds a call to the function, and the driver treats a call as opaque
+  until a proof opens it, so the `.hant` beside the file always has an entry
+  for it. The one above is `proof number_has_type = inline by-cases;`:
+  `inline` opens the call, and `by-cases` splits on the tag test, which is
+  what decides which arm answered. A claim with nothing to decide closes on
+  `inline diagram`. See [docs/proving.md](proving.md).
+- **It shares the module's namespace.** `identity f_has_type` collides with a
+  sentence of that name, as any identity would.
+- **It makes the sentence a function.** `A` and `B` are predicates over one
+  value each, so `#[type]` implies `#[arity(1, 1)]` on a `sentence`, and a
+  body that is not `1 -> 1` is refused at the arity check.
+
+A `type` or `enum` declaration takes no `#[type]`: a predicate answers a bool
+on every value, and there is nothing to claim. Neither does an identity,
+which is a claim already.
 
 ---
 

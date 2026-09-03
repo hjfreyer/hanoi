@@ -46,8 +46,9 @@ user could have written, rather than one a desugaring invented.
 
 `text -> Vec<Token>`. Strips whitespace and `//` comments; recognizes the
 keyword set (`export`, `symbol`, `const_string`, `test`, `mod`, `sentence`,
-`function`, `type`, `enum`, `true`, `false`) and the punctuation used by paths, annotations, blocks
-and tuples.
+`function`, `type`, `enum`, `identity`, `true`, `false`) and the punctuation used by paths, annotations, blocks
+and tuples — including `->`, which only a `#[type(A -> B)]` writes, and which
+is told from a negative number by the `>` after the `-`.
 
 Note that `crate` and `super` are *not* keywords here — they tokenize as
 identifiers and are classified during path parsing. This is why `mod crate {}`
@@ -112,6 +113,11 @@ pub struct ModDecl {
 
 `SentenceDecl` carries `is_exported`, `is_test`, `annotations`, and a body; the
 `function` keyword is represented by a flag on it, not a separate variant.
+`sugar::Item::Sentence` wraps it with one more field, `signature: Option<Signature>`
+— the `#[type(A -> B)]` a sentence may carry, as two `TypeSpec`s. It is the
+one annotation that does not travel into the library: it is sugar, and it
+lowers to an identity, so the parser holds it apart from the `Vec<Annotation>`
+rather than giving `Annotation<Ref>` a variant the library must never hold.
 
 Two notes on this shape:
 
@@ -162,6 +168,7 @@ payload paths now resolve, and `type_tests.hana` pins the behavior.
 | sugar | core |
 |---|---|
 | `function f { … }` | `sentence f { … }` + `Annotation::Arity(1, 1)` |
+| `#[type(A -> B)] function f { … }` | the sentence unchanged, plus `identity f_has_type { pick 0 …A… branch { jump f …B… } { drop 0 push true } } = { drop 0 push true };` beside it, `Arity(1, 1)` on both — and `Arity(1, 1)` on the sentence too, if `sentence` was the keyword |
 | `type N spec;` | `mod N { export sentence check { …spec… } }`, `Total` added if absent |
 | `enum N { V(specs), … }` | `mod N { mod V { symbol tag; mod Body { check }; check }, …; check }` |
 | `mod m compose_X(args);` | `mod m { …template items… }`, plus sibling `__anon_mod_N` for nested composers |
@@ -169,7 +176,11 @@ payload paths now resolve, and `type_tests.hana` pins the behavior.
 `enum` lowers **directly to core**, reusing the same helper functions the
 `type` lowering uses. It does not lower to a `TypeDecl` first. This keeps the
 lowering graph a star rather than a chain, so there is no ordering between
-lowerings and no fixpoint to reason about.
+lowerings and no fixpoint to reason about. `#[type(A -> B)]` is the same
+star: its specs compile through the same `compile_type_spec`, inline into the
+identity's left side rather than into a `check` of their own, and the identity
+lands beside the sentence at the same depth — so, like an identity a user
+wrote, no path in it shifts.
 
 **Invariant: sugar never lowers to sugar.** The first new construct that looks
 like "an enum with extra steps" will tempt you to break this; don't.

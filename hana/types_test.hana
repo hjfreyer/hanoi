@@ -46,8 +46,15 @@ function is_numbered {
 // The function under contract: `t1` numbers as 1, `t2` as 2, and anything else
 // gets the empty tuple — which is exactly the answer the postcondition rejects,
 // and exactly the input the precondition rules out.
+//
+// `#[type(is_tag -> is_numbered)]` is the contract stated as a type, and a
+// type is a claim: the compiler writes `number_has_type` beside this function,
+// which is `number_does_pre_and_post_is_constant` below with nothing changed
+// but the name. The two are kept side by side so the generated claim can be
+// read against the spelled-out one.
 #[precondition(is_tag)]
 #[postcondition(is_numbered)]
+#[type(is_tag -> is_numbered)]
 function number {
     pick 0
     push t1
@@ -91,3 +98,15 @@ function number_does_pre_and_post {
 identity number_does_pre_and_post_is_constant
     { jump number_does_pre_and_post }
   = { drop 0 push true };
+
+// What `#[type(is_tag -> is_numbered)]` on `number` states, written out. The
+// annotation lowers to exactly this claim, under the name `number_has_type`:
+//
+//     identity number_has_type
+//         { pick 0 jump is_tag branch { jump number jump is_numbered }
+//                                      { drop 0 push true } }
+//       = { drop 0 push true };
+//
+// A spec that names a `type` compiles as it would inside one — `is_tag` is a
+// function here, so it is called; a `type Tag …;` would be `Tag::check`, and
+// a symbol would be `push sym ; equal`.

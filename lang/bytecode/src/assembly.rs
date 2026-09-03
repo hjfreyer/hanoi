@@ -31,6 +31,8 @@ enum Token {
     IdentityKeyword,
     DoubleColon,
     Equals,
+    /// `->`, between the two halves of a `#[type(A -> B)]`.
+    Arrow,
     Semicolon,
     Identifier(String),
     StringLiteral(String),
@@ -66,6 +68,7 @@ fn describe(token: &Token) -> String {
         Token::IdentityKeyword => "identity",
         Token::DoubleColon => "::",
         Token::Equals => "=",
+        Token::Arrow => "->",
         Token::Semicolon => ";",
         Token::LBrace => "{",
         Token::RBrace => "}",
@@ -214,11 +217,17 @@ fn tokenize(input: &str, file: FileId) -> Result<Vec<SpannedToken>, Error> {
                 }
                 push!(tokens, start, chars, Token::StringLiteral(string_val));
             }
-            // Parse negative or positive numbers
+            // A minus sign starts a negative number, unless a `>` follows
+            // and the two are the arrow a `#[type(A -> B)]` is written with.
             '-' | '0'..='9' => {
                 let mut number_str = String::new();
                 if c == '-' {
                     number_str.push(chars.next().unwrap().1);
+                    if chars.peek().map(|&(_, c)| c) == Some('>') {
+                        chars.next();
+                        push!(tokens, start, chars, Token::Arrow);
+                        continue;
+                    }
                 }
 
                 while let Some(&(_, next_c)) = chars.peek() {
@@ -716,9 +725,22 @@ pub(crate) fn parse_source(
     parse_items(&mut stream, None, base_dir, map)
 }
 
-fn parse_annotations(stream: &mut TokenStream) -> Result<Vec<SourceAnnotation>, Error> {
+/// What precedes a declaration: the annotations it keeps, and the one it does
+/// not.
+///
+/// `#[type(A -> B)]` is held apart because it is sugar where the rest are
+/// facts — it lowers to an identity beside the sentence rather than travelling
+/// into the library with it — and because only a sentence can carry one.
+struct ParsedAnnotations {
+    annotations: Vec<SourceAnnotation>,
+    signature: Option<sugar::Signature>,
+}
+
+fn parse_annotations(stream: &mut TokenStream) -> Result<ParsedAnnotations, Error> {
     let mut annotations = Vec::new();
+    let mut signature: Option<sugar::Signature> = None;
     while stream.peek() == Some(&Token::Hash) {
+        let open = stream.span();
         stream.next(); // consume '#'
         stream.expect(Token::LBracket)?;
         let name_span = stream.span();
@@ -728,8 +750,39 @@ fn parse_annotations(stream: &mut TokenStream) -> Result<Vec<SourceAnnotation>, 
                 stream.next();
                 name
             }
+            // `type` is a keyword, so it never lexes as an identifier; here
+            // it names the annotation that gives a function a type in the
+            // same grammar the keyword declares one in.
+            Some(&Token::TypeKeyword) => {
+                stream.next();
+                "type".to_string()
+            }
             _ => return Err(stream.expected("an annotation name")),
         };
+
+        if name == "type" {
+            stream.expect(Token::LParen)?;
+            let input = parse_type_spec(stream)?;
+            stream.expect(Token::Arrow)?;
+            let output = parse_type_spec(stream)?;
+            stream.expect(Token::RParen)?;
+            let close = stream.span();
+            stream.expect(Token::RBracket)?;
+            // One claim per declaration, for the reason one precondition is:
+            // a second would be silently dropped rather than conjoined.
+            if signature.is_some() {
+                return Err(Error::at("duplicate #[type] on one declaration", name_span)
+                    .with_help(
+                        "only one is allowed; a second would be ignored rather than conjoined",
+                    ));
+            }
+            signature = Some(sugar::Signature {
+                input,
+                output,
+                span: Span::new(open.file, open.start as usize, close.end as usize),
+            });
+            continue;
+        }
 
         let ann = match name.as_str() {
             "arity" => {
@@ -788,7 +841,7 @@ fn parse_annotations(stream: &mut TokenStream) -> Result<Vec<SourceAnnotation>, 
             other => {
                 return Err(
                     Error::at(format!("unsupported annotation `{}`", other), name_span)
-                        .with_help("known annotations: arity, precondition, postcondition"),
+                        .with_help("known annotations: arity, type, precondition, postcondition"),
                 );
             }
         };
@@ -818,7 +871,10 @@ fn parse_annotations(stream: &mut TokenStream) -> Result<Vec<SourceAnnotation>, 
 
         annotations.push(ann);
     }
-    Ok(annotations)
+    Ok(ParsedAnnotations {
+        annotations,
+        signature,
+    })
 }
 
 fn parse_annotation_path(stream: &mut TokenStream, kind: &str) -> Result<Path, Error> {
@@ -881,10 +937,14 @@ fn parse_items(
         }
 
         let item_span = stream.span();
-        let annotations = parse_annotations(stream)?;
+        let ParsedAnnotations {
+            annotations,
+            signature,
+        } = parse_annotations(stream)?;
 
         // Constants take no modifiers, so they are recognized before them.
-        if annotations.is_empty() && stream.peek() == Some(&Token::SymbolKeyword) {
+        let no_annotations = annotations.is_empty() && signature.is_none();
+        if no_annotations && stream.peek() == Some(&Token::SymbolKeyword) {
             stream.next(); // consume 'symbol'
             let name = expect_name(stream, "symbol name")?;
             // A symbol used to carry a description, which was also the text
@@ -904,7 +964,7 @@ fn parse_items(
             continue;
         }
 
-        if annotations.is_empty() && stream.peek() == Some(&Token::ConstStringKeyword) {
+        if no_annotations && stream.peek() == Some(&Token::ConstStringKeyword) {
             stream.next(); // consume 'const_string'
             let name = expect_name(stream, "const string name")?;
             let text = match stream.peek() {
@@ -926,7 +986,7 @@ fn parse_items(
         let is_test_mod = stream.peek() == Some(&Token::TestKeyword)
             && stream.peek_at(1) == Some(&Token::ModKeyword);
         if is_test_mod || stream.peek() == Some(&Token::ModKeyword) {
-            if !annotations.is_empty() {
+            if !no_annotations {
                 return Err(Error::at(
                     "annotations are not supported on modules",
                     item_span,
@@ -943,6 +1003,7 @@ fn parse_items(
         let (is_exported, is_test) = parse_modifiers(stream);
 
         if stream.peek() == Some(&Token::TypeKeyword) {
+            refuse_signature_on(&signature, "type")?;
             stream.next(); // consume 'type'
             let name = expect_name(stream, "type name")?;
             let spec = parse_type_spec(stream)?;
@@ -956,6 +1017,7 @@ fn parse_items(
         }
 
         if stream.peek() == Some(&Token::EnumKeyword) {
+            refuse_signature_on(&signature, "enum")?;
             items.push(sugar::Item::Enum(parse_enum_decl(stream, annotations)?));
             continue;
         }
@@ -980,7 +1042,7 @@ fn parse_items(
                         ),
                 );
             }
-            check_identity_annotations(&annotations, item_span)?;
+            check_identity_annotations(&annotations, &signature, item_span)?;
             items.push(sugar::Item::Identity(IdentityDecl {
                 name,
                 lhs,
@@ -1013,21 +1075,45 @@ fn parse_items(
         }
         let body = parse_sentence_body(stream)?;
 
+        // A type `A -> B` is a type for a function: its two halves are
+        // predicates over one value each, so a sentence given one is a
+        // function whether or not the keyword said so.
         let mut annotations = annotations;
-        if is_function {
+        if is_function || signature.is_some() {
             annotations.push(Annotation::Arity(1, 1));
         }
 
-        items.push(sugar::Item::Sentence(SentenceDecl {
-            name,
-            body,
-            annotations,
-            is_exported,
-            is_test,
+        items.push(sugar::Item::Sentence(sugar::SentenceDecl {
+            decl: SentenceDecl {
+                name,
+                body,
+                annotations,
+                is_exported,
+                is_test,
+            },
+            signature,
         }));
     }
 
     Ok(items)
+}
+
+/// `#[type(A -> B)]` types a function, and a `type` or `enum` declares a
+/// predicate: what it lowers to is a `check` that answers a bool on every
+/// value, which is the one type every predicate has and nothing to claim.
+fn refuse_signature_on(signature: &Option<sugar::Signature>, what: &str) -> Result<(), Error> {
+    match signature {
+        Some(sig) => Err(Error::at(
+            format!("`#[type]` is not a `{}` annotation", what),
+            sig.span,
+        )
+        .with_help(format!(
+            "`#[type(A -> B)]` types a function; a `{}` declares a predicate, which \
+             answers a bool on every value, and there is nothing to claim",
+            what
+        ))),
+        None => Ok(()),
+    }
 }
 
 /// The annotations an identity may carry.
@@ -1035,8 +1121,22 @@ fn parse_items(
 /// `#[arity(n, m)]` pins the shape both sides must have. The rest name
 /// properties of a sentence *being called* — which an identity is not — so they
 /// are refused rather than ignored, on the principle that an annotation nothing
-/// reads is a lie.
-fn check_identity_annotations(annotations: &[SourceAnnotation], span: Span) -> Result<(), Error> {
+/// reads is a lie. `#[type(A -> B)]` is refused for the same reason and one
+/// more: it *is* an identity, and an identity carrying a claim would be a claim
+/// about a claim.
+fn check_identity_annotations(
+    annotations: &[SourceAnnotation],
+    signature: &Option<sugar::Signature>,
+    span: Span,
+) -> Result<(), Error> {
+    if signature.is_some() {
+        return Err(
+            Error::at("`#[type]` is not an identity annotation", span).with_help(
+                "a type is a claim about a function, stated as an identity; an identity \
+                 is a claim already. `#[arity(n, m)]` is the one that is",
+            ),
+        );
+    }
     for ann in annotations {
         let (name, why) = match ann {
             Annotation::Arity(..) => continue,
@@ -2101,6 +2201,63 @@ mod tests {
                 rendered
             );
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // `#[type(A -> B)]`
+    // -----------------------------------------------------------------------
+
+    /// `->` is one token, and a minus sign in front of digits is still a
+    /// number: the arrow is told apart by what follows the `-`.
+    #[test]
+    fn an_arrow_is_one_token_and_a_negative_number_is_still_one() {
+        let toks = spans("#[type(int -> bool)] push -1");
+        assert!(toks.iter().any(|(t, s)| *t == Token::Arrow && *s == "->"));
+        assert!(toks.iter().any(|(t, _)| *t == Token::Int(-1)));
+    }
+
+    #[test]
+    fn a_type_annotation_needs_its_arrow() {
+        let rendered = error_for("#[type(int)] function f { }");
+        assert!(
+            rendered.contains("expected `->`, found `)`"),
+            "{}",
+            rendered
+        );
+    }
+
+    #[test]
+    fn a_type_annotation_is_one_per_declaration() {
+        let rendered = error_for("#[type(int -> int)] #[type(bool -> bool)] function f { }");
+        assert!(rendered.contains("duplicate #[type]"), "{}", rendered);
+    }
+
+    /// A type types a function. A `type` or `enum` declares a predicate, and
+    /// an identity is a claim already, so none of them takes one.
+    #[test]
+    fn a_type_annotation_belongs_on_a_sentence_only() {
+        for (code, what) in [
+            ("#[type(int -> bool)] type T int;", "`type`"),
+            ("#[type(int -> bool)] enum E { A() }", "`enum`"),
+            ("#[type(int -> bool)] identity x { } = { };", "identity"),
+        ] {
+            let rendered = error_for(code);
+            assert!(
+                rendered.contains(&format!(
+                    "`#[type]` is not a{} {} annotation",
+                    if what == "identity" { "n" } else { "" },
+                    what
+                )),
+                "{}",
+                rendered
+            );
+        }
+        let rendered = error_for("#[type(int -> bool)] mod m { }");
+        assert!(
+            rendered.contains("not supported on modules"),
+            "{}",
+            rendered
+        );
     }
 
     #[test]

@@ -1222,6 +1222,116 @@ mod tests {
         );
     }
 
+    // -----------------------------------------------------------------------
+    // `#[type(A -> B)]`
+    // -----------------------------------------------------------------------
+
+    /// A type on a function is the identity it states: either the input was
+    /// not an `A`, or the output is a `B` — against `drop 0 ; push true`.
+    #[test]
+    fn a_type_annotation_states_an_identity() {
+        let code = "#[type(int -> bool)] function f { is_int }";
+        let lib = assemble(code).unwrap();
+        let f = sentence_named(&lib, "f");
+        assert_eq!(lib.annotations[f], vec![Annotation::Arity(1, 1)]);
+
+        assert_eq!(lib.identities.len(), 1);
+        let id = &lib.identities[IdentityIndex::from(0)];
+        assert_eq!(id.name, "f_has_type");
+        // Both sides are `1 -> 1`, and the claim says so of each.
+        assert!(lib.annotations[id.lhs].contains(&Annotation::Arity(1, 1)));
+        assert!(lib.annotations[id.rhs].contains(&Annotation::Arity(1, 1)));
+
+        let [
+            Instruction::Copy,
+            Instruction::IsInt,
+            Instruction::Branch(well_formed, vacuous),
+        ] = lib.sentences[id.lhs][..]
+        else {
+            panic!(
+                "expected the contract shape, got {:?}",
+                lib.sentences[id.lhs]
+            );
+        };
+        assert_eq!(
+            lib.sentences[well_formed],
+            vec![Instruction::Jump(f), Instruction::IsBool]
+        );
+        let constantly_true = vec![Instruction::Drop, Instruction::Push(Value::Bool(true))];
+        assert_eq!(lib.sentences[vacuous], constantly_true);
+        assert_eq!(lib.sentences[id.rhs], constantly_true);
+
+        // Spanned at the annotation, which is where the claim was written.
+        assert_eq!(
+            &code[id.span.start as usize..id.span.end as usize],
+            "#[type(int -> bool)]"
+        );
+    }
+
+    /// The specs take the grammar `type Name spec;` takes, and compile as a
+    /// `type`'s would: a path to a predicate is its `check`, a symbol is a
+    /// comparison, a union is a chain of branches.
+    #[test]
+    fn a_type_annotation_takes_the_type_grammar() {
+        let code = r#"
+            symbol t1
+            type Tag t1 | 42;
+            mod inner {
+                #[type(super::Tag -> super::t1 | (int, bool))]
+                function g { drop 0 push super::t1 }
+            }
+        "#;
+        let lib = assemble(code).unwrap();
+        let id = &lib.identities[IdentityIndex::from(0)];
+        assert_eq!(id.name, "inner::g_has_type");
+
+        // `super::Tag` in type position is `Tag::check`, resolved from the
+        // module the function was declared in.
+        let check = sentence_named(&lib, "Tag::check");
+        let [
+            Instruction::Copy,
+            Instruction::Jump(called),
+            Instruction::Branch(..),
+        ] = lib.sentences[id.lhs][..]
+        else {
+            panic!("expected a call to the check: {:?}", lib.sentences[id.lhs]);
+        };
+        assert_eq!(called, check);
+        assert_eq!(
+            arity::sentence_arity(&lib, id.lhs),
+            Some(Arity {
+                inputs: 1,
+                outputs: 1
+            })
+        );
+    }
+
+    /// A type `A -> B` is a function's, so a sentence given one is held to
+    /// `1 -> 1` whether or not it said `function`.
+    #[test]
+    fn a_type_annotation_makes_a_sentence_a_function() {
+        assemble("#[type(bool -> bool)] sentence negation { not }").unwrap();
+        let err = assemble("#[type(int -> int)] sentence sum { add }").unwrap_err();
+        assert!(
+            err.contains("requires 2 inputs, which exceeds its annotated arity 1"),
+            "{}",
+            err
+        );
+    }
+
+    /// The identity lands in the sentence's own module, so its name shares
+    /// that namespace like any identity's does.
+    #[test]
+    fn a_type_annotation_names_its_claim_in_the_module() {
+        let err =
+            assemble("#[type(int -> int)] function f { } sentence f_has_type { }").unwrap_err();
+        assert!(
+            err.contains("Duplicate declaration of name 'f_has_type'"),
+            "{}",
+            err
+        );
+    }
+
     /// The annotation that claimed a sentence could not fail says what became
     /// of it, rather than coming back as a name that might be misspelled.
     #[test]

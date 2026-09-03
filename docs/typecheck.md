@@ -5,6 +5,8 @@
 >
 > **The recursion model below is stale too.** `#[recursive]` no longer exists and recursion is forbidden outright (see [hana.md](hana.md#recursion-is-forbidden)), so a reimplementation has no cycles to annotate, validate, or encode as Z3 recursive definitions: every sentence unfolds finitely.
 >
+> **What is checked today is the identity.** `#[type(A -> B)]` on a function states the postcondition claim below — `∀x. A(x) ⟹ B(F(x))`, as the program `not (A x) or B (F x)` against `true` — as an identity named `<name>_has_type`, and `bin/prove` discharges it by rewriting rather than by SMT. See [hana.md](hana.md#typed-functions) and [proving.md](proving.md).
+>
 > **The panic model below is stale.** It was written against a VM in which any operator could reject an operand — division by zero, `untuple` on a non-tuple, `and` on two ints. Every operation is now total (see [docs/totality.md](totality.md)), and the three instructions that existed to fail — `panic`, `assert` and `assert_eq` — have been removed along with the `#[total]` annotation that claimed a sentence avoided them. `Panic` is therefore unreachable, and the interesting judgment has changed from "does this program panic" to "does this program compute on junk". A reimplementation should be generated from the junk table in `totality.md` rather than from the encoding described here.
 
 Typecheck is a static analysis and formal safety verification tool for Hanoi. It allows developers to prove that specific functions never trigger a runtime panic under designated precondition checks. 
