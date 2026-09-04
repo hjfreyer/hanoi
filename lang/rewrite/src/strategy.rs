@@ -1883,6 +1883,14 @@ mod tests {
                 "identities::a_coerced_tuple_survives_the_round_trip",
                 "identities::a_built_tuple_is_the_width_it_was_built",
                 "identities::a_built_tuple_is_no_other_width",
+                // What `is-tuple-built` had no case for: the width-blind
+                // reading of the test, and the same question of a value
+                // that was coerced rather than built. Both arrived when
+                // `codomain-test` swallowed that row — a built tuple's
+                // shape *is* its codomain, and so is a coerced one's.
+                "identities::a_built_tuple_is_a_tuple",
+                "identities::a_coerced_tuple_is_the_width_it_was_coerced_to",
+                "identities::a_coerced_tuple_is_no_integer",
                 "identities::two_branches_on_one_condition_are_one_branch",
                 // The rows that were `not yet written`, each decided by
                 // `decide` alone now that it has them — every one of these

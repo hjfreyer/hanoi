@@ -555,7 +555,7 @@ identity a_branch_between_what_it_compared_answers_with_it
 // condition — one box, two readers — and what is left is a branch answering
 // with the very value it turns on. `specialize-bool` is the row that says so,
 // and it wants the `as_bool` in its window, which is why the proof spends
-// `codomain` before letting the branch layer take both sides home.
+// `codomain-coerce` before letting the branch layer take both sides home.
 identity specializing_a_tested_value
     { pick 0 push 7 equal branch { push 7 equal } { drop 0 push false } }
   = { pick 0 push 7 equal branch { drop 0 push true } { drop 0 push false } };
@@ -653,11 +653,13 @@ identity as_tuple_is_a_guarded_identity
 // watched being built has a shape the window knows, so a test of that shape is
 // decided rather than computed.
 //
-// The sibling of `tuple n ; as_tuple n = tuple n`: that one says the coercion
-// changes nothing, this one says the test answers. It is what lets a `type`
-// or `enum` guard be written as `pick 0 ; is_tuple n` — the shorter spelling
-// hands the rewriter a test where the old one handed it an `equal` against a
-// built tuple, and without this row that test is a question nothing decides.
+// A built tuple's shape *is* its codomain, which is why this is the same law
+// as `is_int ; is_bool` and not a tuple-shaped one beside it: `codomain-test`
+// asks whether the test names the type the value landed in, and for a tuple
+// that naming takes a width with it. It is what lets a `type` or `enum` guard
+// be written as `pick 0 ; is_tuple n` — the shorter spelling hands the
+// rewriter a test where the old one handed it an `equal` against a built
+// tuple, and without this row that test is a question nothing decides.
 test sentence a_built_tuple_knows_its_own_shape {
     push 1 push 2 tuple 2 is_tuple 2   push true  jump crate::prelude::check_equals ? drop 0
     push 1 push 2 tuple 2 is_tuple 3   push false jump crate::prelude::check_equals ? drop 0
@@ -670,6 +672,21 @@ identity a_built_tuple_is_the_width_it_was_built
 
 identity a_built_tuple_is_no_other_width
     { tuple 2 is_tuple 3 } = { drop 0 drop 0 push false };
+
+// The width-blind reading of the same test, which the row that used to carry
+// two widths had no case for: a tuple of some length is what `tuple 2` built,
+// whatever length was asked about, and that is the surface's bare `tuple` type
+// spec asked of a value the window watched being built.
+identity a_built_tuple_is_a_tuple
+    { tuple 2 is_tuple } = { drop 0 drop 0 push true };
+
+// And the same question of a value that was *coerced* rather than built. The
+// coercion's whole content is that width, so it answers both readings — and
+// answers every other type test `false`, a tuple being no int.
+identity a_coerced_tuple_is_the_width_it_was_coerced_to
+    { as_tuple 2 is_tuple 2 } = { drop 0 push true };
+
+identity a_coerced_tuple_is_no_integer { as_tuple 2 is_int } = { drop 0 push false };
 
 // The commuting conversion, run against the interpreter: the same two
 // spellings, on both arms and on a condition that is not a boolean at all.

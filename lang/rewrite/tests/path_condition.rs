@@ -12,7 +12,7 @@
 //! `copy-elim` — so this is δ-naturality on two boxes like any other pair,
 //! and the then block *is* the condition afterwards.
 //!
-//! **Promise.** `codomain` writes down what the instruction set already
+//! **Promise.** `codomain-coerce` writes down what the instruction set already
 //! guarantees: `is_symbol` lands in `Bool`, so `is_symbol` is
 //! `is_symbol ; as_bool`. The coercion is a no-op on a value already a
 //! bool; what it is for is to *stand there*, a type assertion manifested in
@@ -95,7 +95,7 @@ fn select(graph: &Graph) -> (Source, Source) {
 }
 
 /// The two rows the route turns on are about what the machine computes,
-/// and no list drives `codomain`. So the decision procedure alone
+/// and no list drives `codomain-coerce`. So the decision procedure alone
 /// still leaves this open, and should.
 #[test]
 fn the_decision_procedure_does_not_close_it() {
@@ -128,7 +128,7 @@ fn the_block_is_the_condition_as_built() {
 #[test]
 fn dedup_promise_specialize() {
     let (_ctx, mut goal) = settled();
-    drive(&mut goal.lhs, &saturate(Law::Codomain));
+    drive(&mut goal.lhs, &saturate(Law::CodomainCoerce));
 
     // The other half of the anchor: the condition is manifestly a bool.
     let (condition, _) = select(&goal.lhs);

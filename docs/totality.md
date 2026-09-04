@@ -169,9 +169,9 @@ apart, and that is the whole definition rather than a coincidence.
 `Instruction::codomain` is this column as something a program can ask, and
 `vm::totality_tests` measures it the way it measures everything else here:
 every instruction run on every shape of operand, the table held to what the
-top of the stack came back as. The rewriter reads it there — the `codomain`
-row of [docs/rules.md](rules.md) is `op` = `op ; as_T`, which is this
-sentence written into a graph — and the entries with no type to name (`push`,
+top of the stack came back as. The rewriter reads it there — the
+`codomain-coerce` row of [docs/rules.md](rules.md) is `op` = `op ; as_T`,
+which is this sentence written into a graph — and the entries with no type to name (`push`,
 whose literal is known better than a type; `drop`, `copy` and `swap`, which
 leave what came off the stack; `untuple n`, whose answers the tuple decides)
 are the negative cases that keep the sweep a measurement.
@@ -249,7 +249,7 @@ as_tuple n ; untuple n      =  untuple n
 
 The first is why a coercion is idempotent; the second and third are why writing
 one is worth more than reading a check. The first two are rows of
-[docs/rules.md](rules.md) — `idem` and `test-coerced` — and both are stated
+[docs/rules.md](rules.md) — `idem` and `codomain-test` — and both are stated
 over the whole instruction set rather than over the coercions, since what makes
 them true is the codomain and every data instruction has one. `as_bool` has a fourth: it is the
 coercion `not`, `and`, `or` and `branch` already apply to their operands, so it
@@ -376,14 +376,20 @@ The `?` operator's guard is the same question and is written the same way —
 
 Shortening it took a **law**, not just an instruction, and that is the part
 worth recording. The coercing guard handed the rewriter an `equal` against a
-value `tuple n` built, which `as-tuple-built` and the folding rows take apart;
-a guard that asks `is_tuple n` hands over a test instead, and a test of a
-built tuple had no row at all. Written without one, the barista's contract
-claim stalls on a nest of `tuple n ; is_tuple n` nobody can decide. The row is
-`as-tuple-built`'s sibling — `tuple m ; is_tuple n` = `tuple m ; push (m ==
-n)`, the tuple untouched and standing for whatever else reads it — and with
-it in the table the claim closes in fewer rewrites than it did before, there
-being less guard to rewrite.
+value `tuple n` built, which the folding rows take apart; a guard that asks
+`is_tuple n` hands over a test instead, and a test of a built tuple had no row
+at all. Written without one, the barista's contract claim stalls on a nest of
+`tuple n ; is_tuple n` nobody can decide. The law that decides it is
+`codomain-test` — `tuple m ; is_tuple n` = `tuple m ; push (m == n)`, the
+tuple untouched and standing for whatever else reads it — and with it in the
+table the claim closes in fewer rewrites than it did before, there being less
+guard to rewrite.
+
+It was a row of its own, `is-tuple-built`, before the codomain table above was
+written down where a rewriter could read it. It is a line of one now, and its
+sibling `tuple n ; as_tuple n = tuple n` is a line of `codomain-coerce`: what
+made both true is that a value the window watched being built has a shape the
+window knows, and a shape a value always has *is* a codomain.
 
 ### The single-arm hoist, which totality *did* buy
 
