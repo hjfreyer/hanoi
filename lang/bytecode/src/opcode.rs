@@ -46,8 +46,9 @@ use crate::value::Value;
 ///
 /// What is left is that each instruction has a **codomain**: `add` leaves an
 /// `Int` on every pair of values, `less` a `Bool`, `untuple n` exactly `n`
-/// values. See [`yields_bool`] for why that is the one fact an equational
-/// account cannot discover for itself, and `docs/totality.md` for the table.
+/// values. See [`codomain`] for the table as something a rewriter can ask, and
+/// for why it is the one fact an equational account cannot discover for
+/// itself; `docs/totality.md` is the normative version.
 ///
 /// # Coercions
 ///
@@ -71,7 +72,7 @@ use crate::value::Value;
 /// [`AsBool`]: Instruction::AsBool
 /// [`AsInt`]: Instruction::AsInt
 /// [`AsTuple`]: Instruction::AsTuple
-/// [`yields_bool`]: Instruction::yields_bool
+/// [`codomain`]: Instruction::codomain
 #[derive(Debug, Clone, PartialEq)]
 pub enum Instruction {
     /// Push a constant value onto the stack.
@@ -210,6 +211,30 @@ pub enum Instruction {
     AsTuple(usize),
 }
 
+/// The type an instruction's answer lands in, whatever it was handed.
+///
+/// One entry per type a value can be forced to, which is not a coincidence:
+/// [a coercion is the codomain named on its own](Instruction::AsTuple), so the
+/// three coercions and the three variants here are the same list read twice.
+/// `docs/totality.md` is the normative table, and
+/// [`Instruction::codomain`] is it as something a rewriter can ask.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Codomain {
+    /// `Bool`, the codomain `as_bool` forces and every predicate answers in.
+    Bool,
+    /// `Int`, the codomain `as_int` forces and all of arithmetic answers in.
+    Int,
+    /// A tuple of **exactly** this width, the codomain `as_tuple n` forces.
+    ///
+    /// The width is part of the type in the sense `untuple n` means it — a
+    /// tuple of the wrong length is as much a mismatch as a symbol — so it
+    /// rides in the variant rather than being asked about separately. It is
+    /// also the one variant carrying anything, which is why a rule stated over
+    /// this table can be width-free and the tuple case is its own row: see
+    /// `as-tuple-built` in `docs/rules.md`.
+    Tuple(usize),
+}
+
 impl Instruction {
     /// The sentence this calls, if it calls one.
     ///
@@ -290,54 +315,98 @@ impl Instruction {
         )
     }
 
-    /// Whether what this leaves on top of the stack is always a `Bool`.
+    /// The type this instruction's answer always lands in, where naming one
+    /// says more than the instruction's own spelling does.
     ///
-    /// Folding `op ; is_bool` to `op ; drop ; push true` rests on this, so a
-    /// wrong entry is a soundness bug rather than an inaccurate comment — and
-    /// `vm` measures it, running every candidate on every shape of operand and
-    /// holding the list to what it finds.
+    /// Every data instruction has a codomain — that is the whole content of
+    /// `docs/totality.md`: `add` leaves an `Int` on every
+    /// pair of values, `less` a `Bool`, `tuple n` a tuple of exactly `n`, and
+    /// junk is the default of that same type rather than a second outcome. This
+    /// is that table, said where a rewriter can read it.
     ///
-    /// The list is the predicates and the boolean connectives, which is what is
-    /// left once no instruction reports on itself: an operation that answers
-    /// with a `bool` is one that was *asked* something. `add` leaves an `Int`
-    /// on every pair of values, junk included, so it is not here — the codomain
-    /// it does have is a fact of the same kind with nowhere to be said.
-    ///
-    /// The exclusions worth naming:
-    ///
-    /// - `tuple n` builds a tuple, and is the negative case the sweep needs to
-    ///   stay honest about being a measurement.
-    /// - `drop`, `copy` and `swap` leave a value that came off the stack rather
-    ///   than one they computed, so nothing about the instruction decides it.
-    /// - `push` leaves exactly its literal, so the answer is known *better*
-    ///   than this: evaluation folds `push c ; is_bool` to the literal it
-    ///   really is, where this would only say that it is one.
-    ///
-    /// A **codomain is not something a rewrite can discover.** Case-splitting
-    /// a value on whether it is a boolean leaves the value opaque in the case
+    /// A **codomain is not something a rewrite can discover.** Case-splitting a
+    /// value on whether it is a boolean leaves the value opaque in the case
     /// where it is not, and every equation over the instruction set is true of
     /// an `is_bool` that answered `42` for `true` — truthiness is all a branch
-    /// can observe, and `false` is the only falsy value. So this fact has to be
-    /// stated about the instruction and measured against the machine.
-    pub fn yields_bool(&self) -> bool {
-        matches!(
-            self,
+    /// can observe, and `false` is the only falsy value. So the fact has to be
+    /// stated about the instruction and measured against the machine: `vm` runs
+    /// every candidate on every shape of operand and holds this table to what
+    /// it finds. A wrong entry is a soundness bug rather than an inaccurate
+    /// comment: the rewriter's `codomain` row writes `op = op ; as_T` on the
+    /// strength of it, and `tested-bool` decides `op ; is_T` from it.
+    ///
+    /// `None` is "nothing about the instruction decides it", and the entries
+    /// worth naming:
+    ///
+    /// - `drop`, `copy` and `swap` leave a value that came off the stack rather
+    ///   than one they computed.
+    /// - `push` leaves exactly its literal, so the answer is known *better*
+    ///   than this: evaluation folds `push c ; is_bool` to the literal it
+    ///   really is, where this would only say which type it is one of.
+    /// - `untuple n` leaves the elements, and what type each of those is
+    ///   depends on the tuple rather than on the instruction. It is the
+    ///   negative case the measuring sweep needs to stay honest about being a
+    ///   measurement.
+    /// - the two calls and `branch` leave whatever they ran.
+    ///
+    /// The coercions are the one place this is not a *derived* fact but the
+    /// instruction's whole point: `as_bool`, `as_int` and `as_tuple n` are the
+    /// codomain named on its own, for a value nothing is being computed from.
+    pub fn codomain(&self) -> Option<Codomain> {
+        Some(match self {
+            // The predicates and the boolean connectives, which is what is
+            // left once no instruction reports on itself: an operation that
+            // answers with a `bool` is one that was *asked* something.
             Instruction::Equal
-                | Instruction::Greater
-                | Instruction::Less
-                | Instruction::Not
-                | Instruction::And
-                | Instruction::Or
-                | Instruction::IsInt
-                | Instruction::IsBool
-                | Instruction::IsConstString
-                | Instruction::IsSymbol
-                | Instruction::IsTuple(_)
-                // A coercion's whole point is its codomain, and this one's is
-                // `Bool`. The other two leave an Int and a Tuple, which is the
-                // same fact about a different type and has nowhere to be said.
-                | Instruction::AsBool
-        )
+            | Instruction::Greater
+            | Instruction::Less
+            | Instruction::Not
+            | Instruction::And
+            | Instruction::Or
+            | Instruction::IsInt
+            | Instruction::IsBool
+            | Instruction::IsConstString
+            | Instruction::IsSymbol
+            | Instruction::IsTuple(_)
+            | Instruction::AsBool => Codomain::Bool,
+
+            // `Int` is the whole of arithmetic, and of every count: an
+            // operation with no sum, quotient or length to give answers `Int
+            // 0`, which is an `Int` like any other.
+            Instruction::Add
+            | Instruction::Subtract
+            | Instruction::Multiply
+            | Instruction::Divide
+            | Instruction::Modulo
+            | Instruction::Negate
+            | Instruction::TupleLength
+            | Instruction::ConstStringLen
+            | Instruction::ConstStringCharAt
+            | Instruction::AsInt => Codomain::Int,
+
+            // The width is part of the type, here as everywhere: `tuple n`
+            // builds one of exactly `n` and `as_tuple n` forces one, and a
+            // tuple of the wrong length is as much a mismatch as a symbol.
+            Instruction::Tuple(n) | Instruction::AsTuple(n) => Codomain::Tuple(*n),
+
+            Instruction::Push(_)
+            | Instruction::Drop
+            | Instruction::Copy
+            | Instruction::Swap
+            | Instruction::Untuple(_)
+            | Instruction::Jump(_)
+            | Instruction::Dip(_)
+            | Instruction::Branch(_, _) => return None,
+        })
+    }
+
+    /// Whether what this leaves on top of the stack is always a `Bool`.
+    ///
+    /// One reading of [`codomain`][Instruction::codomain], kept because it is
+    /// the reading a branch wants: a wire the set promises is a bool is one a
+    /// case split can pin to `true` and `false` and nothing else.
+    pub fn yields_bool(&self) -> bool {
+        self.codomain() == Some(Codomain::Bool)
     }
 }
 

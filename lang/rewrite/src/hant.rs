@@ -353,7 +353,7 @@ pub enum Step<V> {
     /// [`SelectSame`](Step::SelectSame) on the branch that makes.**
     ///
     /// The box named has to be one the instruction set
-    /// [guarantees answers a bool](bytecode::Instruction::yields_bool), so
+    /// [guarantees answers a bool](bytecode::Instruction::codomain), so
     /// its answer is `true` or `false` and nothing else — and everything
     /// on the left side that depends on that answer can be replaced by a
     /// branch holding one copy of it per case, the assumed answer pasted

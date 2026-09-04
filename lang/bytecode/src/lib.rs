@@ -11,7 +11,7 @@ pub mod value;
 pub use arity::check_arities;
 pub use assembly::{assemble, assemble_source, assemble_with_path};
 pub use library::{Annotation, Arity, Identity, IdentityIndex, Library, Sentence, SentenceIndex};
-pub use opcode::Instruction;
+pub use opcode::{Codomain, Instruction};
 pub use source::{Error, FileId, SourceMap, Span};
 pub use value::{Symbol, Value};
 

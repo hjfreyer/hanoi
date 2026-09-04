@@ -65,19 +65,27 @@
 //!
 //! ## One row for a family
 //!
-//! Three rows read a **fact off the instruction set** rather than naming
+//! Four rows read a **fact off the instruction set** rather than naming
 //! an instruction, and each stands for what would otherwise be a family:
 //! [`Law::Commute`] over
 //! [`commutative`](bytecode::Instruction::commutative), [`Law::Idem`] over
-//! [`idempotent`](bytecode::Instruction::idempotent), and
-//! [`Law::TestedBool`] over
-//! [`yields_bool`](bytecode::Instruction::yields_bool) and whichever type
-//! test it is asked with. `idem` is the three coercions and `comm` the
-//! five operators that answer either way round, and neither list is
-//! written here: `vm` measures both, the way it measures every other fact
-//! about what the machine does, and a row per member would be several
-//! copies of one sentence with a fourth to write whenever the instruction
-//! set grew one.
+//! [`idempotent`](bytecode::Instruction::idempotent), [`Law::Codomain`]
+//! over [`codomain`](bytecode::Instruction::codomain), and
+//! [`Law::TestedBool`] over that same table and whichever type test it is
+//! asked with. `idem` is the three coercions, `comm` the five operators
+//! that answer either way round, and `codomain` the type every data
+//! instruction lands in — none of those lists is written here: `vm`
+//! measures them, the way it measures every other fact about what the
+//! machine does, and a row per member would be several copies of one
+//! sentence with another to write whenever the instruction set grew one.
+//!
+//! `codomain` is the row those families were noticed through. It began as
+//! `promised-bool` — `op = op ; as_bool` for the predicates — which is one
+//! reading of a table that has an entry for every data instruction, so the
+//! row now writes down whichever type the set promises: `add ; as_int` as
+//! readily as `equal ; as_bool`. The tuple entry stays its own row, and
+//! for the reason a width always earns one here — see
+//! [`Rule::Codomain`].
 //!
 //! ## The value layer, and the two rows no list drives
 //!
@@ -181,17 +189,19 @@
 //! order, and [`case_split`] is that composite:
 //!
 //! ```text
-//! body(w)                               promised-bool
+//! body(w)                               codomain
 //!   = body(as_bool w)                   as-bool-branch
 //!   = body(select(w, true, false))      select-hoist
 //!   = select(w, body(true), body(false))
 //! ```
 //!
 //! Each step contributes one part of what the row used to say at once.
-//! [`Law::PromisedBool`] is where the **promise** is spent, and it is the
+//! [`Law::Codomain`] is where the **promise** is spent, and it is the
 //! only step of the three that asks anything of the wire — asking is the
-//! whole of what the old row's refusal was. [`Law::AsBoolBranch`] is
-//! where the **pin** appears: the branch a coercion is reads the wire
+//! whole of what the old row's refusal was. The wire has to be a
+//! *promised bool* and not merely an answer with a codomain: `true` and
+//! `false` are the whole of a bool, and no other type is two cases wide.
+//! [`Law::AsBoolBranch`] is where the **pin** appears: the branch a coercion is reads the wire
 //! itself and answers with the two literals, so a copy under the `true`
 //! block reads `true` and a copy under the `false` block reads `false`.
 //! [`Law::SelectHoist`] moves the **region** over that branch, and the
@@ -229,7 +239,7 @@
 //! whose truthiness *is* its value, and having the coercion in the window
 //! is how the rule says the condition is one — without it a condition of
 //! `5` is truthy and its then block reads `5`, not `true`.
-//! [`Law::PromisedBool`] is what puts the coercion there, which is the
+//! [`Law::Codomain`] is what puts the coercion there, which is the
 //! whole use of writing an instruction set's promise down as a box.
 //!
 //! ## Where the trust sits
@@ -258,7 +268,7 @@ use crate::kernel::graph::{
     Direction, Embedding, Graph, Match, Mismatch, NodeId, NodeKind, Pair, Sink, Source, Unpaired,
     check_match, find_at, lift,
 };
-use bytecode::{Instruction, Library, SentenceIndex, Value};
+use bytecode::{Codomain, Instruction, Library, SentenceIndex, Value};
 
 use crate::kernel::term::{Arity, Prim};
 
@@ -285,7 +295,7 @@ pub enum Law {
     SelectHoist,
     CondHoist,
     // The value layer: what an operation computes, measured on the machine.
-    PromisedBool,
+    Codomain,
     Fold,
     TestedBool,
     Retuple,
@@ -329,7 +339,7 @@ impl Law {
             Law::SpecializeChoice => "specialize-choice",
             Law::SelectHoist => "select-hoist",
             Law::CondHoist => "cond-hoist",
-            Law::PromisedBool => "promised-bool",
+            Law::Codomain => "codomain",
             Law::Fold => "fold",
             Law::TestedBool => "tested-bool",
             Law::Retuple => "retuple",
@@ -367,7 +377,7 @@ impl Law {
             Law::SpecializeChoice,
             Law::SelectHoist,
             Law::CondHoist,
-            Law::PromisedBool,
+            Law::Codomain,
             Law::Fold,
             Law::TestedBool,
             Law::Retuple,
@@ -563,7 +573,7 @@ pub enum Rule {
     /// it sits where the condition is made, and its being there is what
     /// says the condition is a bool. Without it the rule would be false — a
     /// condition of `5` is truthy, and the then block would read `5` rather
-    /// than `true`. [`Law::PromisedBool`] is the row that puts one there,
+    /// than `true`. [`Law::Codomain`] is the row that puts one there,
     /// which is the whole use of writing an instruction set's promise down
     /// as a box.
     ///
@@ -684,34 +694,55 @@ pub enum Rule {
         operands: Vec<Value>,
         reads: Vec<usize>,
     },
-    /// An answer the instruction set promises is a bool is that answer with
-    /// the promise **written down**: `op` is `op ; as_bool`, whenever
-    /// [`yields_bool`](bytecode::Instruction::yields_bool) holds of `op`.
+    /// An answer is that answer with its **codomain written down**: `op` is
+    /// `op ; as_T`, where `T` is the type
+    /// [the instruction set promises](bytecode::Instruction::codomain) `op`
+    /// lands in. `equal ; as_bool`, `add ; as_int` — one row, and the table
+    /// says which coercion.
     ///
-    /// `as_bool` *is* `truthy` made into an instruction, so on a value that
-    /// is already a bool it is the identity and the equation is exact. What
+    /// A coercion is the identity on a value already of its type — that is
+    /// the whole of what a coercion is — so the equation is exact wherever
+    /// the promise holds, and the promise is what the table measures. What
     /// it buys is that the promise stops being a fact about the instruction
     /// set and becomes a **box**: a type assertion manifested in the graph,
     /// standing where any rule can see it.
     ///
-    /// [`Rule::SpecializeBool`] is the rule that needs it. It says what a
-    /// branch decided about the value it tested, and it says it of a
-    /// condition an `as_bool` made — the coercion being how an arbitrary
-    /// truthy value becomes the bool the branch settled. A condition that
-    /// is *already* a bool carries no coercion, so the rule cannot see it.
-    /// Spending this law first puts one there.
+    /// [`Rule::SpecializeBool`] is the rule that needs the bool half. It
+    /// says what a branch decided about the value it tested, and it says it
+    /// of a condition an `as_bool` made — the coercion being how an
+    /// arbitrary truthy value becomes the bool the branch settled. A
+    /// condition that is *already* a bool carries no coercion, so the rule
+    /// cannot see it. Spending this law first puts one there.
+    ///
+    /// One row for a family, [`Rule::Idem`]'s way: the fact lives on the
+    /// instruction, `vm` measures it, and the row reads it. A row per
+    /// codomain would be one sentence written twice and a third to write
+    /// whenever the instruction set grew a type.
+    ///
+    /// **The tuple case is not here.** `Codomain::Tuple` carries a width, so
+    /// the coercion it names is `as_tuple n` rather than a box the payload's
+    /// one `kind` settles; the instruction that lands there and is not the
+    /// coercion itself is `tuple n`, and [`Rule::AsTupleBuilt`] is that row.
+    /// See `promised`, which is where the table is read.
     ///
     /// Nothing about the equation needs a side condition: it is true of a
-    /// promised bool however many `as_bool`s already stand on it. Not
+    /// promised answer however many coercions already stand on it. Not
     /// re-proposing it forever is [`propose`]'s business, and search is
     /// where a termination argument belongs.
-    PromisedBool { kind: NodeKind },
+    Codomain { kind: NodeKind },
     /// A type test of an answer the instruction set promises is a bool is
     /// **decided**, and the answer itself is untouched: `op ; is_T` folds
-    /// the test to `push (T is Bool)`. The promise is
-    /// [`yields_bool`](bytecode::Instruction::yields_bool), measured by
-    /// `vm`; the rewrite replaces only the test's answer, and `op` goes on
-    /// standing for whoever else reads it.
+    /// the test to `push (T is Bool)`. The promise is the `Bool` row of
+    /// [`codomain`](bytecode::Instruction::codomain), measured by `vm`; the
+    /// rewrite replaces only the test's answer, and `op` goes on standing
+    /// for whoever else reads it.
+    ///
+    /// The bool row of it, and only that one, which is where this row and
+    /// [`Rule::Codomain`] part company: writing a promise down is the same
+    /// sentence at every type, while *deciding a test* from one wants a
+    /// verdict per (codomain, test) pair. `as_int ; is_int` and the rest of
+    /// the `Int` half are true and are not rows yet — see
+    /// `asked_of_a_bool`, which is the half that is.
     ///
     /// One row for the whole family, because one fact answers all of it. A
     /// codomain does not only say which test succeeds — it says which
@@ -778,7 +809,7 @@ pub enum Rule {
     /// already of the type it forces; the fact lives on the instruction and
     /// `vm` measures it, the way it measures
     /// [`commutative`](bytecode::Instruction::commutative) and
-    /// [`yields_bool`](bytecode::Instruction::yields_bool). A row per
+    /// [`codomain`](bytecode::Instruction::codomain). A row per
     /// coercion would be three copies of one sentence and a fourth to write
     /// whenever the instruction set grew one.
     ///
@@ -900,7 +931,7 @@ impl Rule {
             Rule::SelectHoist { .. } => Law::SelectHoist,
             Rule::CondHoist => Law::CondHoist,
             Rule::Fold { .. } => Law::Fold,
-            Rule::PromisedBool { .. } => Law::PromisedBool,
+            Rule::Codomain { .. } => Law::Codomain,
             Rule::TestedBool { .. } => Law::TestedBool,
             Rule::Retuple { .. } => Law::Retuple,
             Rule::AsTupleRoundTrip { .. } => Law::AsTupleRoundTrip,
@@ -1509,20 +1540,17 @@ pub fn sides(rule: &Rule) -> Result<Pair, Error> {
 
             (long, short)
         }
-        Rule::PromisedBool { kind } => {
+        Rule::Codomain { kind } => {
             let NodeKind::Op(prim) = kind else {
                 return Err(ill(Ill::Refused));
             };
-            let arity = prim.arity();
-            // `as_bool` of an `as_bool` is an equation too, and a true one,
-            // but stating it invites a driver to stack them forever. The
-            // law refuses to be the reason that happens.
-            if arity.outputs != 1
-                || matches!(prim, Prim::AsBool)
-                || !prim.to_instruction().yields_bool()
-            {
+            // Which coercion, read off the table and nothing else. The
+            // refusals are [`writes_its_promise`]'s, and the one about
+            // stacking is the only one that is the law's own.
+            let Some(coercion) = writes_its_promise(prim) else {
                 return Err(ill(Ill::Refused));
-            }
+            };
+            let arity = prim.arity();
             let ins: Vec<Source> = (0..arity.inputs).map(Source::Input).collect();
 
             let mut bare = Graph::empty(arity.inputs);
@@ -1531,7 +1559,7 @@ pub fn sides(rule: &Rule) -> Result<Pair, Error> {
 
             let mut asserted = Graph::empty(arity.inputs);
             let answer = asserted.add(kind.clone(), ins);
-            let promise = asserted.add(NodeKind::Op(Prim::AsBool), answer);
+            let promise = asserted.add(NodeKind::Op(coercion), answer);
             asserted.close(promise);
 
             (bare, asserted)
@@ -1712,6 +1740,47 @@ pub fn sides(rule: &Rule) -> Result<Pair, Error> {
         }
     };
     Pair::new(a, b).map_err(|why| ill(why.into()))
+}
+
+/// The coercion that writes an instruction's **codomain** down as a box,
+/// or `None` where this row has none to write.
+///
+/// The whole of what [`Rule::Codomain`] reads off the instruction set, and
+/// a reading rather than a decision: a coercion *is* the codomain named on
+/// its own, so the type the set promises names the box that asserts it.
+/// `as_bool` for a predicate, `as_int` for arithmetic — one row where there
+/// were a family.
+///
+/// The **tuple** case is `None`, and that is the one asymmetry worth
+/// spelling out. `Codomain::Tuple` is the only variant carrying anything, so
+/// the coercion it names is `as_tuple n` rather than a box a payload of one
+/// `kind` already determines the width of; and the one instruction that
+/// lands there and is not the coercion itself is `tuple n`, which
+/// [`Rule::AsTupleBuilt`] has said since before this row was general.
+/// A width-free row and a width-carrying one, kept apart.
+fn promised(prim: &Prim) -> Option<Prim> {
+    match prim.to_instruction().codomain()? {
+        Codomain::Bool => Some(Prim::AsBool),
+        Codomain::Int => Some(Prim::AsInt),
+        Codomain::Tuple(_) => None,
+    }
+}
+
+/// Whether this row has anything to say at `prim`, and what it would write.
+///
+/// Three refusals, and only the last is about the row rather than the box:
+/// an operation leaving more than one answer has no single type to assert,
+/// an operation the table says nothing about has nothing to assert, and an
+/// operation that **is** the coercion it would be handed already carries its
+/// own promise. `as_bool ; as_bool` is a true equation and a bottomless one
+/// — the law refuses to be the reason a driver stacks them, and [`Rule::Idem`]
+/// is where a pair that got written collapses.
+fn writes_its_promise(prim: &Prim) -> Option<Prim> {
+    let coercion = promised(prim)?;
+    match prim.arity().outputs == 1 && *prim != coercion {
+        true => Some(coercion),
+        false => None,
+    }
 }
 
 /// What a type test answers of a value the instruction set promises is a
@@ -1991,7 +2060,7 @@ pub fn propose(graph: &Graph, laws: &[Law], id: NodeId) -> Vec<Step> {
 /// branch it is, and the branch grown forward over the region:
 ///
 /// ```text
-/// body(w)                               promised-bool
+/// body(w)                               codomain
 ///   = body(as_bool w)                   as-bool-branch
 ///   = body(select(w, true, false))      select-hoist
 ///   = select(w, body(true), body(false))
@@ -2004,7 +2073,7 @@ pub fn propose(graph: &Graph, laws: &[Law], id: NodeId) -> Vec<Step> {
 /// differently than the row it replaced.
 ///
 /// The first step is spent only where the promise is not written down
-/// for every reader of the answer already — `promised-bool` says so by
+/// for every reader of the answer already — `codomain` says so by
 /// declining — and the coercion the middle step unpacks is then the one
 /// that is standing: `at` itself when it is an `as_bool`, or the
 /// `as_bool` reading its answer. So a program that wrote the coercion
@@ -2050,7 +2119,18 @@ pub fn case_split(
     // reads what those readers read, so the branch comes to stand on the
     // answer itself; where it does not, the branch stands where the
     // coercion that was already there stood.
-    let promise = propose(graph, &[Law::PromisedBool], at).into_iter().next();
+    //
+    // `codomain` writes down whichever type the set promises, and a split
+    // wants the one promise it can **pin**: `true` and `false` are the whole
+    // of a bool, and no other type is two values wide. So the step is asked
+    // for only where the answer is one — at an `add` the row would write an
+    // `as_int`, which is a true equation and no case analysis.
+    let promises_a_bool =
+        matches!(graph.kind(at), NodeKind::Op(prim) if prim.to_instruction().yields_bool());
+    let promise = match promises_a_bool {
+        true => propose(graph, &[Law::Codomain], at).into_iter().next(),
+        false => None,
+    };
     let stands_on = match (&promise, standing) {
         (Some(_), _) => answer,
         (None, Some(node)) => Source::Port { node, port: 0 },
@@ -2068,7 +2148,7 @@ pub fn case_split(
     let coercion = match promise {
         Some(step) => {
             run.push(graph, step)?;
-            made(run, graph, as_bool).expect("`promised-bool` leaves the coercion it wrote down")
+            made(run, graph, as_bool).expect("`codomain` leaves the coercion it wrote down")
         }
         None => standing.expect("a decline with nothing standing answered above"),
     };
@@ -2408,25 +2488,22 @@ fn read_off(graph: &Graph, law: Law, id: NodeId) -> Vec<(Rule, NodeId)> {
         // argument either way — what the step leaves is an answer whose
         // one reader is the coercion it just wrote down, and this guard
         // declines the next one.
-        (Law::PromisedBool, NodeKind::Op(prim)) => {
-            if prim.arity().outputs != 1
-                || matches!(prim, Prim::AsBool)
-                || !prim.to_instruction().yields_bool()
-            {
+        (Law::Codomain, NodeKind::Op(prim)) => {
+            let Some(coercion) = writes_its_promise(prim) else {
                 return Vec::new();
-            }
+            };
             let asserted = graph
                 .sinks(Source::Port { node: id, port: 0 })
                 .iter()
                 .all(|sink| match sink {
                     Sink::Port { node, .. } => {
-                        matches!(graph.kind(*node), NodeKind::Op(Prim::AsBool))
+                        matches!(graph.kind(*node), NodeKind::Op(p) if *p == coercion)
                     }
                     Sink::Output(_) => false,
                 });
             match asserted {
                 true => Vec::new(),
-                false => vec![(Rule::PromisedBool { kind: kind.clone() }, id)],
+                false => vec![(Rule::Codomain { kind: kind.clone() }, id)],
             }
         }
 
@@ -2811,58 +2888,97 @@ pub(crate) mod tests {
         }
     }
 
-    /// The instruction set's promise, written down. `as_bool` is `truthy`
-    /// made into an instruction, so on a value already a bool it is the
-    /// identity — which is a fact about what the machine computes, and `vm`
-    /// is what judges it.
+    /// The instruction set's promise, written down — at every type the
+    /// table names one for, since a coercion is the identity on a value
+    /// already of its type. Which is a fact about what the machine
+    /// computes, and `vm` is what judges it.
     #[test]
-    fn a_promised_bool_may_say_so() {
+    fn an_answer_may_say_which_type_it_lands_in() {
+        // The bool half: the predicates and the connectives, which is what
+        // this row was when it was `promised-bool`.
         for prim in [Prim::Not, Prim::Equal, Prim::IsSymbol, Prim::IsBool] {
             the_machine_agrees(
-                Law::PromisedBool,
-                Rule::PromisedBool {
+                Law::Codomain,
+                Rule::Codomain {
                     kind: NodeKind::Op(prim),
                 },
             );
         }
-        // `as_bool` of an `as_bool` is a true equation and a bottomless one.
-        // The law refuses to be the reason a driver stacks them.
+        // And the int half, which is the whole of arithmetic and every
+        // count: `add ; as_int` is `add` on junk operands as much as on a
+        // pair of numbers, junk being `Int 0` and an `Int` like any other.
+        for prim in [
+            Prim::Add,
+            Prim::Subtract,
+            Prim::Multiply,
+            Prim::Divide,
+            Prim::Modulo,
+            Prim::Negate,
+            Prim::TupleLength,
+            Prim::ConstStringLen,
+        ] {
+            the_machine_agrees(
+                Law::Codomain,
+                Rule::Codomain {
+                    kind: NodeKind::Op(prim),
+                },
+            );
+        }
+        // A coercion of its own codomain is a true equation and a
+        // bottomless one. The law refuses to be the reason a driver stacks
+        // them — at either type.
+        for prim in [Prim::AsBool, Prim::AsInt] {
+            assert!(matches!(
+                sides(&Rule::Codomain {
+                    kind: NodeKind::Op(prim),
+                }),
+                Err(Error::Ill {
+                    why: Ill::Refused,
+                    ..
+                })
+            ));
+        }
+        // The tuple case is `as-tuple-built`'s, because the coercion it
+        // would write carries a width.
         assert!(matches!(
-            sides(&Rule::PromisedBool {
-                kind: NodeKind::Op(Prim::AsBool),
+            sides(&Rule::Codomain {
+                kind: NodeKind::Op(Prim::Tuple(2)),
             }),
             Err(Error::Ill {
                 why: Ill::Refused,
                 ..
             })
         ));
-        // Nothing promises what `add` answers.
-        assert!(matches!(
-            sides(&Rule::PromisedBool {
-                kind: NodeKind::Op(Prim::Add),
-            }),
-            Err(Error::Ill {
-                why: Ill::Refused,
-                ..
-            })
-        ));
+        // And nothing at all is promised of what came off the stack, or of
+        // an operation leaving more than one answer to promise about.
+        for prim in [Prim::Swap, Prim::Untuple(2)] {
+            assert!(matches!(
+                sides(&Rule::Codomain {
+                    kind: NodeKind::Op(prim),
+                }),
+                Err(Error::Ill {
+                    why: Ill::Refused,
+                    ..
+                })
+            ));
+        }
     }
 
-    /// The equation holds however many `as_bool`s already stand on the
+    /// The equation holds however many coercions already stand on the
     /// answer, so only the search declines to say it twice.
     #[test]
     fn the_promise_is_proposed_once() {
         let (_terms, graph) = built("pick 0 is_symbol");
         let count = |g: &Graph| {
             g.live()
-                .flat_map(|(id, _)| propose(g, &[Law::PromisedBool], id))
+                .flat_map(|(id, _)| propose(g, &[Law::Codomain], id))
                 .count()
         };
         assert_eq!(count(&graph), 1, "the one bool-yielding box offers it");
         let mut asserted = graph.clone();
         let step = graph
             .live()
-            .flat_map(|(id, _)| propose(&graph, &[Law::PromisedBool], id))
+            .flat_map(|(id, _)| propose(&graph, &[Law::Codomain], id))
             .next()
             .expect("there is one");
         apply(&mut asserted, &step).expect("and it applies");
@@ -2975,7 +3091,7 @@ pub(crate) mod tests {
         let spent = splits("pick 0 push 1 equal branch { not } { negate }", Prim::Equal);
         assert_eq!(
             spent,
-            vec![Law::PromisedBool, Law::AsBoolBranch, Law::SelectHoist]
+            vec![Law::Codomain, Law::AsBoolBranch, Law::SelectHoist]
         );
         // A body reading past the answer, and one holding a branch of its
         // own.
@@ -4052,8 +4168,11 @@ pub(crate) mod tests {
                 operands: vec![Value::Int(1), Value::Int(2)],
                 reads: vec![0, 1],
             },
-            Rule::PromisedBool {
+            Rule::Codomain {
                 kind: NodeKind::Op(Prim::Not),
+            },
+            Rule::Codomain {
+                kind: NodeKind::Op(Prim::Add),
             },
             Rule::TestedBool {
                 kind: NodeKind::Op(Prim::IsInt),
@@ -4177,7 +4296,13 @@ pub(crate) mod tests {
         // `add` reads two literals, so the fold decides it — and the
         // instruction set says its operands are interchangeable, which is
         // a step at the same box and on no driven list.
-        offers("push 1 push 2 add", &[Law::Fold, Law::Commute]);
+        // `add` also lands in a type the set names — `Int`, on junk
+        // operands as much as on a pair of numbers — so the row that
+        // writes a codomain down is offered at the same box.
+        offers(
+            "push 1 push 2 add",
+            &[Law::Fold, Law::Commute, Law::Codomain],
+        );
         // The window with nothing in it. `tuple 0` reads no literal, so
         // there is none behind it to anchor the pattern at and the box
         // anchors itself — and the fold is offered all the same.
@@ -4195,25 +4320,28 @@ pub(crate) mod tests {
         offers("pick 1 pick 1 equal drop 0", &[]);
         // The answer goes straight to the boundary, so there is no
         // region downstream of it for a case split to decide.
-        offers("pick 1 pick 1 equal", &[Law::PromisedBool, Law::Commute]);
+        offers("pick 1 pick 1 equal", &[Law::Codomain, Law::Commute]);
         // One wire compared with itself — which is what it is, now that
         // `pick` is a second reference rather than a `copy`.
-        offers("pick 0 pick 0 equal", &[Law::EqualRefl, Law::PromisedBool]);
+        offers("pick 0 pick 0 equal", &[Law::EqualRefl, Law::Codomain]);
         offers(
             "branch { pick 0 drop 0 not } { not }",
-            &[Law::PromisedBool, Law::SelectSame],
+            &[Law::Codomain, Law::SelectSame],
         );
         offers(
             "pick 0 push 1 equal branch { not } { negate }",
-            &[Law::PromisedBool, Law::Commute],
+            &[Law::Codomain, Law::Commute],
         );
         // One operation in both arms is *one box*: the two arms are handed
         // the same sources, so they compute the same value and there is
         // one of it.
-        offers("branch { add } { add }", &[Law::SelectSame, Law::Commute]);
+        offers(
+            "branch { add } { add }",
+            &[Law::SelectSame, Law::Commute, Law::Codomain],
+        );
         offers(
             "push 1 pick 1 branch { add } { add }",
-            &[Law::SelectSame, Law::Commute],
+            &[Law::SelectSame, Law::Commute, Law::Codomain],
         );
         // Work after a branch, which is what `select-hoist` reads: the
         // region downstream of the select's answers, lifted out as the
@@ -4222,7 +4350,7 @@ pub(crate) mod tests {
         // whatever made the wire it turns on.
         offers(
             "branch { negate } { negate } negate",
-            &[Law::SelectSame, Law::SelectHoist],
+            &[Law::SelectSame, Law::SelectHoist, Law::Codomain],
         );
 
         // A literal condition: the select is the blocks it chooses.
