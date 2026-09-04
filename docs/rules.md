@@ -86,10 +86,10 @@ Two lists group the rows a driver can run to fixpoint:
 | list | rows | what they are |
 |---|---|---|
 | `branching` | `select-literal`, `select-same`, `not-branch`, `specialize-equal`, `specialize-bool`, `specialize-choice` | the branch layer, every row stated at the `select` |
-| `folding` | `fold`, `test-coerced`, `as-tuple-round-trip`, `retuple`, `is-tuple-built`, `not-not`, `and-literal`, `or-literal`, `idem`, `tuple-cancel`, `as-tuple-built`, `equal-refl` | the value layer — what specific instructions compute, with the machine as the judge |
+| `folding` | `fold`, `codomain-test`, `as-tuple-round-trip`, `retuple`, `not-not`, `and-literal`, `or-literal`, `idem`, `tuple-cancel`, `equal-refl` | the value layer — what specific instructions compute, with the machine as the judge |
 
 The `decide` drive — what the `diagram` closer runs — spends both lists
-to fixpoint. Six rows are on **no** list at all: `codomain`,
+to fixpoint. Six rows are on **no** list at all: `codomain-coerce`,
 `select-hoist`, `cond-hoist`, `comm`, `as-bool-branch` and
 `coercion-guard`. Each is held out on purpose, and a proof names the one
 it wants — `fire(law)`, `at(#box, law)` — the way it names `inline`.
@@ -133,7 +133,7 @@ which is a fact about the whole graph rather than about a window.
 | `select-same` | `if c { x } else { x } = x`: a block the select answers with either way is what it answers, and the select goes with it — a branch answering one thing either way is not a branch. The condition loses its reader and drops out of the program with it. The strategy step of the same name ([docs/proving.md](proving.md)) is this row read as a proof: a goal whose left side answers with a branch becomes one goal per block, and this is what puts them back together. |
 | `not-branch` | `not ; if { A } else { B } = if { B } else { A }`: a negation in front of a branch is the branch with its arms exchanged, and the negation is spent. `not v` is truthy exactly where `v` is falsy — `false` being the one falsy value — so the two selects pick opposite blocks of the same pair. Sound on **every** value, for `select-literal`'s reason: truthiness is all a branch reads, and answering it is all `not` does. |
 | `specialize-equal` | `select(equal(x, y), y, x) = x`: a branch answering with one operand of its own test where the test held and the other where it did not is answering with the second, whatever the test said. `equal` is structural identity and answers `Bool(a == b)`, so a truthy condition is `x == y` and nothing weaker — where the then block is reached the two operands are one value, and the branch is choosing between a value and itself. The select goes, like `select-same`'s, and the `equal` in a host goes on standing for whatever else reads it. The mirror `select(equal(x, y), x, y) = y` is the same row read with the operands the other way round. Its answer side is bare wiring, which is what lets `on(a b, specialize-equal)` state the branch onto two named wires ([docs/tactics.md](tactics.md)). |
-| `specialize-bool` | the very value a branch tested, when it is a bool, is what the branch decided: `true` in the then block, `false` in the else block. The window holds the `as_bool` that made the condition — that coercion's presence is what says the condition is a bool at all (a condition of `5` is truthy, and its then block reads `5`, not `true`). `codomain` is the row that puts the coercion there. |
+| `specialize-bool` | the very value a branch tested, when it is a bool, is what the branch decided: `true` in the then block, `false` in the else block. The window holds the `as_bool` that made the condition — that coercion's presence is what says the condition is a bool at all (a condition of `5` is truthy, and its then block reads `5`, not `true`). `codomain-coerce` is the row that puts the coercion there. |
 | `specialize-choice` | a branch inside an arm whose condition is the very value the outer branch tested is already decided: its then block is read in the outer then arm, its else block in the outer else arm — the same value tested twice answers the same. The inner select stays; only the outer block that read its answer comes to read the block it would choose. |
 
 Lifting work both arms do out in front is not a row here, and it is not
@@ -163,16 +163,14 @@ against `vm` so the two cannot drift apart silently; see
 | law | statement |
 |---|---|
 | `fold` | an operation on literal operands is the answer the machine gives, junk included: `push v̄ ; op` = the pushes of what `vm` answers. The answer side is *built from the run*, so a payload cannot lie about it. An operation reading **no** operand meets the condition vacuously, so `tuple 0` folds to `push ()` — the one window with nothing in it, and the one that anchors at its own box rather than at a literal behind it. |
-| `test-coerced` | asking a coerced value the question its coercion answered: `as_T ; is_T` = `push true`. A coercion's whole content is its codomain, so what it leaves is of that type by construction and the test is decided without anything running — the consequence [docs/totality.md](totality.md) names as why writing a coercion is worth more than reading a check. A coercion is the **paradigm and not the side condition**: what the row reads is `codomain`, which settles the type of every data instruction, so `op ; is_T` = `op` and `push (T is op's codomain)` side by side wherever the table names a type for `op` — `equal ; is_bool` and `add ; is_int` are the same row as `as_int ; is_int`. Stated at the coercion alone it would reach them only after `codomain` wrote the promise down, and no driven list spends that. One row for the family, because one fact answers all of it: a codomain says which test succeeds *and* which fail, and the failures fold a shape guard that asked the wrong question (`is_int ; is_tuple 2` = `push false`). The rewrite replaces only the test's answer; `op` goes on standing for its other readers. The **tuple** codomain is not here: a value of tuple codomain answers `is_tuple n` by comparing widths rather than by naming a type, which is `is-tuple-built`. |
+| `codomain-test` | asking a value the question its type already answered: `op ; is_T` = `op` and `push (T is op's codomain)` side by side, for any `op` the table settles a type for and any type test `is_T`. The headline is the coercion — `as_T ; is_T` = `push true`, the consequence [docs/totality.md](totality.md) names as why writing a coercion is worth more than reading a check — and a coercion is the **paradigm rather than the side condition**: what the row reads is `codomain`, which settles the type of every data instruction, so `equal ; is_bool` and `add ; is_int` are the same row as `as_int ; is_int`. Stated at the coercion alone it would reach them only after `codomain-coerce` wrote the promise down, and no driven list spends that. One row for the family, because one fact answers all of it: a codomain says which test succeeds *and* which fail, and the failures fold a shape guard that asked the wrong question (`is_int ; is_tuple 2` = `push false`). **The tuples are here too**, and the width is the whole of what naming that type takes: the width-blind `is_tuple` holds of a tuple of any width and the widthed one exactly where the widths agree, so `tuple m ; is_tuple n` = `tuple m ; push (m == n)` is a line of this row rather than the separate `is-tuple-built` it used to be — the two widths that were its payload are the one the `kind` carries and the one the `test` does. Read **forwards only**: both verdicts are literals, and `push true` is `as_tuple n ; is_tuple n` for every `n`, so nothing could pin the question back. The rewrite replaces only the test's answer; `op` goes on standing for its other readers. |
 | `as-tuple-round-trip` | `as_tuple n ; untuple n ; tuple n = as_tuple n`: a value already coerced survives the round trip — the coercion's codomain *is* "a tuple of exactly `n`". `retuple` and `idem` reach the same place in two steps; listed before `retuple` so the longer window wins in one. |
 | `retuple` | `untuple n ; tuple n = as_tuple n`: rebuilding what `untuple` took apart is the coercion, not the identity — the slots may have been junk-filled. Whole or not at all. |
-| `is-tuple-built` | `tuple m ; is_tuple n` = `tuple m ; push (m == n)`: a shape the window watched being built answers a test of that shape. This is the row the `type`/`enum` sugar's guard (`pick 0 ; is_tuple n`) needs. |
 | `not-not` | `not ; not = as_bool` — the coercion spelled the long way round. |
 | `and-literal` | `and` with a literal operand is decided by `truthy` alone — short-circuiting as an equation. A truthy literal contributes only the coercion: the answer is `as_bool` of the other operand. The one falsy value decides everything: `push false`, the other operand discarded. This is the row that lets a case split spend a **conjunction** one conjunct at a time. |
 | `or-literal` | the dual of `and-literal`, with the poles exchanged: the one **falsy** value contributes only the coercion — the answer is `as_bool` of the other operand — and a truthy literal decides everything: `push true`, the other operand discarded. This is what lets a case split spend a **disjunction** one disjunct at a time. |
 | `idem` | `op ; op = op`, for any `op` the instruction set says is `idempotent`. One row for a family, and the family is the three coercions: a coercion's whole content is its **codomain**, so what it leaves is already of the type it forces. Backwards it is the clone, which is what a proof wants when the shape it is heading for spells the coercion twice. |
 | `tuple-cancel` | `tuple n ; untuple n = id(n)`: taking apart what `tuple n` built answers the built elements. The tuple is not part of the equation — a substitution deletes nothing, so one something else reads stays standing. |
-| `as-tuple-built` | `tuple n ; as_tuple n` answers the tuple itself: the coercion is a no-op on a value the window watched being built. |
 | `equal-refl` | `equal` on one wire read twice is `true`: `equal` is structural identity and the language is deterministic and pure. |
 
 ## Rows no list drives
@@ -180,25 +178,31 @@ against `vm` so the two cannot drift apart silently; see
 Each of these is on no list today; a proof (or a hand-rolled
 tactic) names it.
 
-**`codomain`** — `op` = `op ; as_T`, where `T` is the type the
-instruction set promises `op` lands in: `equal ; as_bool`,
-`add ; as_int`. A coercion is the identity on a value already of its type
-— that is the whole of what a coercion is — so the equation is exact
-wherever the promise holds, and `Instruction::codomain` is the promise,
-measured by `vm`. What it buys: the promise stops being a fact about the
-instruction set and becomes a **box**, a type assertion manifested in the
-graph, standing where `specialize-bool` can see it.
+**`codomain-coerce`** — `op` = `op ; as_T`, where `T` is the type the
+instruction set promises `op` lands in: `equal ; as_bool`, `add ; as_int`,
+`tuple n ; as_tuple n`. A coercion is the identity on a value already of
+its type — that is the whole of what a coercion is — so the equation is
+exact wherever the promise holds, and `Instruction::codomain` is the
+promise, measured by `vm`. What it buys: the promise stops being a fact
+about the instruction set and becomes a **box**, a type assertion
+manifested in the graph, standing where `specialize-bool` can see it.
 
 One row for a family, `idem`'s way. It began as `promised-bool` — the
 predicates and the connectives, `op ; as_bool` — which is one reading of
 a table with an entry for every data instruction; `docs/totality.md` had
-the table before the row did.
+the table before the row did. The tuple line is `as-tuple-built`, which
+was a row of its own until the table was read whole: a value the window
+watched being built is the shape it was built, which is to say a built
+tuple's shape *is* its codomain. The width is no obstacle — the payload's
+one instruction is `tuple n`, and the `n` is right there. A coercion of
+its own codomain is refused at every type, `as_tuple n` included: it is a
+true equation and a bottomless one, and `idem` is where a stacked pair
+collapses.
 
-**The tuple entry is its own row.** `Codomain::Tuple` is the only variant
-carrying anything, so the coercion it names is `as_tuple n` rather than a
-box a payload's one instruction settles — and the one instruction landing
-there that is not the coercion itself is `tuple n`, which `as-tuple-built`
-has said all along. A width-free row and a width-carrying one, kept apart.
+It is on no list because it **grows** a graph: read left to right it
+writes a box down. Taking away a coercion an answer did not need is the
+same row read the other way, and a proof names it — which is what
+`as-tuple-built` on `folding` used to buy, at one instruction.
 
 **`select-hoist`** — the commuting conversion: what runs *after* a branch
 runs inside whichever arm the branch takes,
@@ -326,7 +330,7 @@ body(w)                               codomain
 rewrites in the proof's record where there used to be one.
 
 Each step contributes one part of what the row said at once. The
-**promise** is spent at `codomain`, the only step of the three that asks
+**promise** is spent at `codomain-coerce`, the only step of the three that asks
 anything of the wire — and asking was the whole of the old row's refusal.
 The wire has to be a promised *bool* and not merely an answer with a
 codomain: `true` and `false` are the whole of a bool, and no other type is
@@ -360,7 +364,7 @@ as:
 | coercion idempotence | `idem`, one row over a new `idempotent` fact, measured by `vm` the way `commutative` is |
 | `not-branch` | a row of its own, in the branch layer |
 | `or-literal` | a row of its own, beside `and-literal` |
-| type-test family | `test-coerced`, which carries *which* test and decides it from the codomain — the family is the one row, not a row per (codomain, test) pair |
+| type-test family | `codomain-test`, which carries *which* test and decides it from the codomain — the family is the one row, not a row per (codomain, test) pair, and not a tuple-shaped row beside it |
 
 The shape of the trade is the same in all three of the general ones: the
 fact lives on the instruction, `vm` measures it, and the row reads it. A
@@ -371,7 +375,7 @@ whenever the instruction set grew a member.
 One equation named in this document is still not a row: `as_bool ; branch`
 is `branch`, the coercion a branch already applies to its condition
 ([docs/totality.md](totality.md)). It is true, and it is not needed yet —
-`codomain` puts the coercion there on purpose, and
+`codomain-coerce` puts the coercion there on purpose, and
 `specialize-bool` is what reads it.
 
 ## Further reading

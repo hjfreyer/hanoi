@@ -231,7 +231,7 @@ pub enum Codomain {
     /// rides in the variant rather than being asked about separately. It is
     /// also the one variant carrying anything, which is why a rule stated over
     /// this table can be width-free and the tuple case is its own row: see
-    /// `as-tuple-built` in `docs/rules.md`.
+    /// `codomain-coerce` in `docs/rules.md`.
     Tuple(usize),
 }
 
@@ -332,8 +332,8 @@ impl Instruction {
     /// stated about the instruction and measured against the machine: `vm` runs
     /// every candidate on every shape of operand and holds this table to what
     /// it finds. A wrong entry is a soundness bug rather than an inaccurate
-    /// comment: the rewriter's `codomain` row writes `op = op ; as_T` on the
-    /// strength of it, and `test-coerced` decides `op ; is_T` from it.
+    /// comment: the rewriter's `codomain-coerce` row writes `op = op ; as_T`
+    /// on the strength of it, and `codomain-test` decides `op ; is_T` from it.
     ///
     /// `None` is "nothing about the instruction decides it", and the entries
     /// worth naming:

@@ -270,7 +270,7 @@ identity testing_a_test { is_bool is_bool } = { drop 0 push true };
 Whatever `is_bool` answers is a boolean, so asking `is_bool` of *that*
 answers `true` — a fact about the operation's range, not about any wiring
 a rewrite window could see. That particular fact is common enough to be
-its own law (`test-coerced`); the general situation is not, and `cases` is
+its own law (`codomain-test`); the general situation is not, and `cases` is
 the general instrument.
 
 `cases(#nk) (true: …, false: …)` is one composite, and saying it as the
@@ -289,7 +289,7 @@ That answer is `true` or it is `false`, and there is no third case, so
 the left side's downstream computation equals a branch holding one copy
 per case with the assumed answer pasted in as a literal. That is not a
 row of its own: it is three rows of the table spent in order —
-`codomain`, `as-bool-branch` and `select-hoist`
+`codomain-coerce`, `as-bool-branch` and `select-hoist`
 ([docs/rules.md](rules.md)) — each an ordinary checked rewrite. Then the
 branch is split the way `select-same` splits one a goal already had:
 `select(w, T, E) = B` becomes the goals `T = B` and `E = B`, each on its
