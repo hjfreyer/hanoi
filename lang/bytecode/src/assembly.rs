@@ -1075,11 +1075,20 @@ fn parse_items(
         }
         let body = parse_sentence_body(stream)?;
 
-        // A type `A -> B` is a type for a function: its two halves are
-        // predicates over one value each, so a sentence given one is a
-        // function whether or not the keyword said so.
+        // A type `A -> B` is a function's: its two halves are predicates
+        // over one value each. A `sentence` is refused rather than quietly
+        // made a function, so the keyword says what the type assumes.
+        if let (false, Some(sig)) = (is_function, &signature) {
+            return Err(
+                Error::at("`#[type]` is not a `sentence` annotation", sig.span).with_help(
+                    "`#[type(A -> B)]` types a function, one value in and one out; \
+                     declare this with `function` if that is what it is",
+                ),
+            );
+        }
+
         let mut annotations = annotations;
-        if is_function || signature.is_some() {
+        if is_function {
             annotations.push(Annotation::Arity(1, 1));
         }
 

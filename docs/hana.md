@@ -256,13 +256,14 @@ Three things follow from being an identity:
   `inline diagram`. See [docs/proving.md](proving.md).
 - **It shares the module's namespace.** `identity f_has_type` collides with a
   sentence of that name, as any identity would.
-- **It makes the sentence a function.** `A` and `B` are predicates over one
-  value each, so `#[type]` implies `#[arity(1, 1)]` on a `sentence`, and a
-  body that is not `1 -> 1` is refused at the arity check.
+- **It belongs on a `function`.** `A` and `B` are predicates over one value
+  each, so the type is a function's, and a `sentence` given one is refused
+  rather than quietly made a function: the keyword says what the type
+  assumes.
 
-A `type` or `enum` declaration takes no `#[type]`: a predicate answers a bool
-on every value, and there is nothing to claim. Neither does an identity,
-which is a claim already.
+A `type` or `enum` declaration takes no `#[type]` either: a predicate answers
+a bool on every value, and there is nothing to claim. Neither does an
+identity, which is a claim already.
 
 ---
 
