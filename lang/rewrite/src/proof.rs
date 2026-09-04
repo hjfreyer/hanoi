@@ -2,8 +2,8 @@
 //!
 //! A [`Proof`] is what the strategy interpreter ([`crate::strategy`])
 //! writes as it runs: a tree mirroring the goals a strategy carved — a
-//! rewrite here, a swap there, a cut at a waypoint, a branch proved block
-//! by block — with the steps each one spent. It is the prover's account of
+//! rewrite here, a swap there, a branch proved block by block — with the
+//! steps each one spent. It is the prover's account of
 //! *why* it believes a claim closed, and it is the shape a report reads
 //! ([`Proof::summary`]). Nothing trusts it.
 //!
@@ -12,7 +12,7 @@
 //! side onto its right, and [`certify`](crate::kernel::goal::certify)
 //! replays that list and asks whether it landed. Everything a tree could
 //! say — that two sides met in the middle, that a swap costs nothing,
-//! that a waypoint composes, that a branch's blocks each answer for
+//! that a branch's blocks each answer for
 //! themselves — is said here as steps instead, and the kernel never learns
 //! a split happened. A draft that does not flatten, or a run that does
 //! not replay, is a prover bug, and the claim is refused rather than taken
@@ -53,10 +53,10 @@ use bytecode::{Library, SentenceIndex};
 use crate::kernel;
 use crate::kernel::goal::Goal;
 use crate::kernel::graph::{
-    self, Direction, Graph, Match, NodeId, NodeKind, Sink, Source, align, isomorphic,
+    Direction, Graph, Match, NodeId, NodeKind, Sink, Source, align, isomorphic,
 };
 use crate::kernel::rules::{self, Law, Rule, Step, apply, propose, sides};
-use crate::kernel::term::{Context, TermIndex, lower};
+use crate::kernel::term::{Context, lower};
 
 /// How a goal was discharged, as the prover tells it: a tree of the goals
 /// a strategy carved, each with the steps it spent. A **draft** — what
@@ -87,14 +87,6 @@ pub enum Proof {
     /// A `symm` swapped the sides, and the swapped goal closed. It records
     /// nothing but itself: the claim either way is the same one.
     Swapped(Box<Proof>),
-    /// A `via` cut the goal at the waypoint; each half closed
-    /// independently. The halves are rebuilt from the waypoint by
-    /// `against`, the same way the prover carved them.
-    Cut {
-        waypoint: TermIndex,
-        left_sub: Box<Proof>,
-        right_sub: Box<Proof>,
-    },
     /// A `select-same` split the goal at the branch its left side answers
     /// with: `select(c, T, E) = B` became `T = B` and `E = B`, each closed
     /// independently. The halves are `blocks`'s to rebuild, from the
@@ -141,15 +133,6 @@ impl Proof {
                 Some(name) => format!("inline {}; {}", name, sub.summary()),
             },
             Proof::Swapped(sub) => format!("symm; {}", sub.summary()),
-            Proof::Cut {
-                left_sub,
-                right_sub,
-                ..
-            } => format!(
-                "cut (left: {}; right: {})",
-                left_sub.summary(),
-                right_sub.summary()
-            ),
             Proof::SelectSame { then_sub, else_sub } => format!(
                 "select-same (then: {}; else: {})",
                 then_sub.summary(),
@@ -223,32 +206,6 @@ fn extract(
             extract(sub, &mut other, cur, ctx, &mut back)
                 .map_err(|e| format!("with the sides swapped: {}", e))?;
             invert_onto(cur, rhs, &back, run).map_err(|e| format!("undoing the swapped run: {}", e))
-        }
-        Proof::Cut {
-            waypoint,
-            left_sub,
-            right_sub,
-        } => {
-            // The first half lands on the waypoint as built for the left;
-            // the second was written against the waypoint as built for the
-            // right — the same graph, box for box — and is aligned onto
-            // where the first landed.
-            let (side, stone) = against(ctx, cur, *waypoint);
-            if !isomorphic(&side, cur) {
-                return Err(
-                    "the `via` waypoint is wider than the goal, and padding the goal is not a step"
-                        .to_string(),
-                );
-            }
-            extract(left_sub, cur, &stone, ctx, run)
-                .map_err(|e| format!("in the left half of the cut: {}", e))?;
-            let (_, stone) = against(ctx, rhs, *waypoint);
-            let mut from = stone.clone();
-            let mut second = Vec::new();
-            extract(right_sub, &mut from, rhs, ctx, &mut second)
-                .map_err(|e| format!("in the right half of the cut: {}", e))?;
-            splice(cur, &stone, &second, None, run)
-                .map_err(|e| format!("joining the halves of the cut: {}", e))
         }
         Proof::SelectSame { then_sub, else_sub } => {
             split_blocks("`select-same`", cur, then_sub, else_sub, rhs, ctx, run)
@@ -625,26 +582,6 @@ pub fn inline(
     }
 }
 
-// ---- carving a goal ----------------------------------------------------------------
-
-/// A goal's side and a waypoint, brought to one arity: the narrower is
-/// padded — the term with [`Context::under`] before it builds, the graph
-/// with [`graph::under`] — and the waypoint comes back as a graph. Both
-/// the prover's `via` and [`flatten`]'s walk of a [`Proof::Cut`] build
-/// their halves here, so the two cannot disagree about what a cut means.
-pub(crate) fn against(ctx: &mut Context, side: &Graph, waypoint: TermIndex) -> (Graph, Graph) {
-    let (ga, wa) = (side.arity(), ctx.arity(waypoint));
-    if wa.inputs < ga.inputs {
-        let padded = ctx.under(waypoint, ga.inputs - wa.inputs);
-        (side.clone(), kernel::build(ctx, padded))
-    } else {
-        (
-            graph::under(side, wa.inputs - ga.inputs),
-            kernel::build(ctx, waypoint),
-        )
-    }
-}
-
 /// The two graphs a side that **answers with one branch** is: the same
 /// side reading the `select`s' `then` blocks for its outputs, and the same
 /// side reading their `else` blocks.
@@ -756,7 +693,7 @@ mod tests {
             .unwrap()
             .remove(0)
             .strategy;
-        let strategy = crate::corpus::attach(&mut ctx, &strategy, &library).unwrap();
+        let strategy = crate::corpus::attach(&strategy, &library).unwrap();
         let outcome = Prover::new(&library)
             .prove(&mut ctx, goal.clone(), Some(&strategy))
             .unwrap();

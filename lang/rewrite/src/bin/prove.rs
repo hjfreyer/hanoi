@@ -111,7 +111,7 @@ fn emphasis(args: &Args) -> bool {
 
 fn run(args: &Args) -> Result<bool, String> {
     let emphasis = emphasis(args);
-    let mut corpus = corpus::load(&args.root)?;
+    let corpus = corpus::load(&args.root)?;
     for problem in &corpus.problems {
         eprintln!("{}", problem);
     }
@@ -125,6 +125,7 @@ fn run(args: &Args) -> Result<bool, String> {
     // reason for the claim that needs it to fail.
     let order = corpus.proving_order()?;
     let mut prover = Prover::new(&corpus.library);
+    let mut terms = rewrite::kernel::term::Context::new();
     let (mut passed, mut failed, mut filtered) = (0usize, 0usize, 0usize);
     for idx in order {
         let identity = &corpus.library.identities[idx];
@@ -136,15 +137,14 @@ fn run(args: &Args) -> Result<bool, String> {
         if !shown {
             filtered += 1;
         }
-        // One arena for the whole run: the waypoints the corpus read at load
-        // time and the goals lowered here are places in it.
-        let goal = Goal::of_identity(&mut corpus.terms, &corpus.library, idx)
-            .map_err(|e| e.to_string())?;
+        // One arena for the whole run: every goal lowered here is a place
+        // in it.
+        let goal = Goal::of_identity(&mut terms, &corpus.library, idx).map_err(|e| e.to_string())?;
         // The claim as stated, kept so a later proof may cite it.
         let stated = goal.clone();
         let strategy = corpus.proofs.get(&idx);
         match prover
-            .prove(&mut corpus.terms, goal, strategy)
+            .prove(&mut terms, goal, strategy)
             .map_err(|e| e.to_string())?
         {
             Outcome::Closed { draft, run } => {

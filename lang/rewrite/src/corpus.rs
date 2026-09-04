@@ -1,15 +1,14 @@
 //! Loading a source tree's identities and their proofs together.
 //!
 //! One entry point for `bin/prove` and the tests: read the corpus rooted at
-//! `main.hana`, read every `.hant` beside it, read every `via` waypoint as a
-//! [term](crate::parse), and hand back the library with each proof attached
-//! to the identity it names.
+//! `main.hana`, read every `.hant` beside it, and hand back the library with
+//! each proof attached to the identity it names.
 //!
-//! A body is a **term**, not a Hana sentence. A residual is printed in the
-//! term language and a waypoint is the answer to a residual, so the two are
-//! one language: `copy(1) ; id(1) * push t1 ; equal` is what the report says
-//! and what the proof writes. The padding is written rather than inferred,
-//! and a body whose halves do not meet says so where it is written.
+//! A strategy is parsed before there is a library to read it against, so the
+//! names in it — the sentence an `inline` opens, the identity a `by` spends —
+//! arrive as text and are resolved here. Resolving them at load time rather
+//! than mid-proof is what makes a proof naming something that is not there a
+//! problem with the corpus rather than a proof that failed.
 //!
 //! Attachment is checked both ways. An entry naming no stated identity is a
 //! **problem** — a renamed identity would otherwise silently shed its proof — and so
@@ -20,23 +19,50 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
-use bytecode::{IdentityIndex, Library, SourceMap, assemble_source};
+use bytecode::{IdentityIndex, Library, SentenceIndex, SourceMap, assemble_source};
 
 use crate::hant::{Body, ProofEntry, Step, Strategy, parse_hant};
-use crate::kernel::term::Context;
-use crate::parse::{Scope, parse_term, sentence_named};
 
-/// A loaded corpus: the compiled library, the arena its waypoints were read
-/// into, the proofs that attached, and the entries that could not attach.
-///
-/// The terms come with the corpus because a waypoint is an index: the prover
-/// is handed this same [`Context`] so that what a proof says and what the
-/// goals are built from are the one arena.
+/// A loaded corpus: the compiled library, the proofs that attached, and the
+/// entries that could not attach.
 pub struct Corpus {
     pub library: Library,
-    pub terms: Context,
     pub proofs: HashMap<IdentityIndex, Strategy<Body>>,
     pub problems: Vec<String>,
+}
+
+/// A sentence by the name the library keys it under, or by an unambiguous
+/// trailing part of one — the reading an `identity` and a `jump` already
+/// get, so an `inline` label need not spell a whole path either.
+fn sentence_named(library: &Library, path: &str) -> Result<SentenceIndex, String> {
+    if path.is_empty() {
+        return Err("no sentence is named".to_string());
+    }
+    let suffix = format!("::{}", path);
+    let mut matches: Vec<&String> = library
+        .names
+        .iter()
+        .filter(|name| *name == path || name.ends_with(&suffix))
+        .collect();
+    matches.sort();
+    matches.dedup();
+    let named = match matches[..] {
+        [one] => one.clone(),
+        [] => return Err(format!("no sentence is called `{}`", path)),
+        _ => {
+            return Err(format!(
+                "`{}` names {} sentences; write more of the path",
+                path,
+                matches.len()
+            ));
+        }
+    };
+    Ok(library
+        .names
+        .iter_enumerated()
+        .find(|(_, name)| **name == named)
+        .map(|(idx, _)| idx)
+        .expect("the name came out of this table"))
 }
 
 /// Every identity a strategy spends with `by`, nested arms included.
@@ -54,8 +80,7 @@ pub(crate) fn lemmas_of(strategy: &Strategy<Body>, out: &mut Vec<IdentityIndex>)
                     out.push(*idx);
                 }
             }
-            Step::Via { left, right, .. }
-            | Step::Cases {
+            Step::Cases {
                 then_arm: left,
                 else_arm: right,
                 ..
@@ -73,10 +98,9 @@ pub(crate) fn lemmas_of(strategy: &Strategy<Body>, out: &mut Vec<IdentityIndex>)
     }
 }
 
-/// Turns a parsed strategy into a runnable one by reading each body as a term
-/// against the library the proof is written for, into `ctx`.
+/// Turns a parsed strategy into a runnable one by resolving each name
+/// against the library the proof is written for.
 pub(crate) fn attach(
-    ctx: &mut Context,
     strategy: &Strategy<String>,
     library: &Library,
 ) -> Result<Strategy<Body>, String> {
@@ -118,18 +142,6 @@ pub(crate) fn attach(
                 ),
                 Step::Symm => Step::Symm,
                 Step::Exact => Step::Exact,
-                Step::Via {
-                    waypoint,
-                    left,
-                    right,
-                } => Step::Via {
-                    waypoint: Body::Stone(
-                        parse_term(ctx, waypoint, &Scope::new(library))
-                            .map_err(|e| format!("`via` body: {}", e))?,
-                    ),
-                    left: side(ctx, left, library)?,
-                    right: side(ctx, right, library)?,
-                },
                 // The address names a box of the goal, not of the
                 // library: nothing in it waits on a name being resolved.
                 Step::Cases {
@@ -140,8 +152,8 @@ pub(crate) fn attach(
                 } => Step::Cases {
                     at: at.clone(),
                     specialize: *specialize,
-                    then_arm: side(ctx, then_arm, library)?,
-                    else_arm: side(ctx, else_arm, library)?,
+                    then_arm: side(then_arm, library)?,
+                    else_arm: side(else_arm, library)?,
                 },
                 // Nothing in it waits on the library either: what it
                 // splits on it finds for itself.
@@ -149,8 +161,8 @@ pub(crate) fn attach(
                 // Nothing in it waits on the library: the branch it splits
                 // is the goal's own, and the blocks are read off it.
                 Step::SelectSame { then_arm, else_arm } => Step::SelectSame {
-                    then_arm: side(ctx, then_arm, library)?,
-                    else_arm: side(ctx, else_arm, library)?,
+                    then_arm: side(then_arm, library)?,
+                    else_arm: side(else_arm, library)?,
                 },
             })
         })
@@ -158,12 +170,11 @@ pub(crate) fn attach(
 }
 
 fn side(
-    ctx: &mut Context,
     strategy: &Option<Strategy<String>>,
     library: &Library,
 ) -> Result<Option<Strategy<Body>>, String> {
     match strategy {
-        Some(s) => attach(ctx, s, library).map(Some),
+        Some(s) => attach(s, library).map(Some),
         None => Ok(None),
     }
 }
@@ -261,11 +272,10 @@ pub fn load(root: &Path) -> Result<Corpus, String> {
     let file = map.add("main.hana", text);
     let library = assemble_source(&mut map, file, Some(root)).map_err(|e| map.render(&e))?;
 
-    let mut terms = Context::new();
     let mut problems = Vec::new();
     let mut proofs: HashMap<IdentityIndex, Strategy<Body>> = HashMap::new();
     for entry in entries {
-        let strategy = match attach(&mut terms, &entry.strategy, &library) {
+        let strategy = match attach(&entry.strategy, &library) {
             Ok(s) => s,
             Err(e) => {
                 problems.push(format!("proof {}: {}", entry.identity, e));
@@ -287,7 +297,6 @@ pub fn load(root: &Path) -> Result<Corpus, String> {
 
     Ok(Corpus {
         library,
-        terms,
         proofs,
         problems,
     })
