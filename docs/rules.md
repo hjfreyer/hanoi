@@ -94,9 +94,35 @@ to fixpoint. Six rows are on **no** list at all: `codomain-coerce`,
 `coercion-guard`. Each is held out on purpose, and a proof names the one
 it wants — `fire(law)`, `at(#box, law)` — the way it names `inline`.
 
-What holds a row off a list is that a driver could not run it to
-fixpoint. Five of the six **grow** a graph. `comm` does neither: it
-permutes, and a driver would exchange the same two operands forever.
+What holds a row off a list is that a driver run to fixpoint over it
+would do the wrong thing. Four of the six **grow** a graph. `comm`
+neither grows nor shrinks: it permutes, and a driver would exchange the
+same two operands forever. `codomain-coerce` is the one that could be
+driven and is not — see its entry below.
+
+## Which way round a row is stated
+
+A row is an equation and both readings are true, so which side the table
+builds first is a **convention** rather than a fact. It is this one:
+where a row is longer one way than the other, **forward shrinks**.
+
+What makes it worth having is that forward is the only direction a search
+offers. `propose` looks for the left side, and every driven list is spent
+forward — so a row stated the growing way round is one no driver can run
+to fixpoint, and a row stated the shrinking way is one any of them could.
+Reading it the other way is then always the same kind of act: an
+**introduction**, which someone names — `fire(law, backward)`,
+`at(#box, law, backward)`, or `rules::case_split` in so many words.
+
+Two rows here cannot follow it, and the reason is the same one twice:
+their shrinking side is not something a search can find. `select-hoist`
+carries a **region**, and its short side is a branch whose arms hold two
+copies of one — matching that means recognising the copies, which no
+pattern here says how to do; `cond-hoist` is its sibling and is spent
+with it. The two **unpackings**, `as-bool-branch` and `coercion-guard`,
+grow forward for a different reason, which is that growing is the whole
+of what they are for, and they are stated in the direction they are read
+in. Everything else shrinks forward.
 
 ## The branch layer (`branching`)
 
@@ -199,10 +225,19 @@ its own codomain is refused at every type, `as_tuple n` included: it is a
 true equation and a bottomless one, and `idem` is where a stacked pair
 collapses.
 
-It is on no list because it **grows** a graph: read left to right it
-writes a box down. Taking away a coercion an answer did not need is the
-same row read the other way, and a proof names it — which is what
-`as-tuple-built` on `folding` used to buy, at one instruction.
+Stated so that forward **shrinks**: read left to right it takes away a
+coercion an answer did not need, and writing one down is the same row
+read backward, which a proof names — `fire(codomain-coerce, backward)`,
+or `rules::case_split` asking for itself.
+
+It is nevertheless on no list, and not because a driver could not run it.
+It could. A driver that did would take away the very coercions the branch
+layer reads: `specialize-bool` wants an `as_bool` in its window, which is
+the whole use of writing a promise down, and a `decide` spending this row
+would undo every one of them before `specialize-bool` could look — the
+corpus claim `specializing_a_tested_value` stops closing, measured. So
+*whether to spend it* is a strategy's decision, the way an unpacking's
+is.
 
 **`select-hoist`** — the commuting conversion: what runs *after* a branch
 runs inside whichever arm the branch takes,

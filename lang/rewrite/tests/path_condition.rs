@@ -31,7 +31,7 @@
 
 use bytecode::assemble;
 use rewrite::kernel::goal::Goal;
-use rewrite::kernel::graph::{Graph, NodeKind, Source, isomorphic};
+use rewrite::kernel::graph::{Direction, Graph, NodeKind, Source, isomorphic};
 use rewrite::kernel::rules;
 use rewrite::kernel::rules::Law;
 use rewrite::kernel::term::{Context, Prim, TermIndex, lower};
@@ -55,8 +55,20 @@ fn drive(graph: &mut Graph, tactic: &tactic::Tactic) {
 }
 
 /// A law to fixpoint.
+#[allow(dead_code)]
 fn saturate(law: Law) -> tactic::Tactic {
     tactic::Tactic::Repeat(Box::new(tactic::fire_first(vec![law])), None)
+}
+
+/// One firing of a law read **backwards** — an introduction, which is
+/// what the growing reading of a row always is.
+///
+/// Not to fixpoint, and it could not be: `codomain-coerce` grows this way
+/// round, so a driver would write a second coercion onto the first
+/// forever. Which is the whole of why the table states the row the other
+/// way and a proof names this one.
+fn introduce(law: Law) -> tactic::Tactic {
+    tactic::fire_first_in(vec![law], Direction::Backward)
 }
 
 /// The goal as it is built, with only the right side settled: the left is
@@ -128,7 +140,7 @@ fn the_block_is_the_condition_as_built() {
 #[test]
 fn dedup_promise_specialize() {
     let (_ctx, mut goal) = settled();
-    drive(&mut goal.lhs, &saturate(Law::CodomainCoerce));
+    drive(&mut goal.lhs, &introduce(Law::CodomainCoerce));
 
     // The other half of the anchor: the condition is manifestly a bool.
     let (condition, _) = select(&goal.lhs);

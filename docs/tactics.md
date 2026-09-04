@@ -24,6 +24,7 @@ steps are:
 | `decide` | the whole table to fixpoint — what the `diagram` closer drives |
 | `tree` | `select-hoist` past everything but another branch, then `cond-hoist` out of every condition, to fixpoint — the decision tree |
 | `fire(law, …)` | the first proposal of those laws, once — fails finding none |
+| `fire(law, …, backward)` | the same, reading the equation right to left — the introduction of a row whose forward reading shrinks |
 | `at(#box, law)` | that law, once, in a match that holds **that box** — the address the residual printed |
 | `at(selects-on(#wire), law)` | the same, once at **every branch that wire decides** — one firing per answer |
 | `at(#box, law, backward)` | either aim, reading the law's equation right to left |
@@ -90,6 +91,14 @@ rather than the one written down. It anchors instead: the box named is
 the branch that moves, and nothing else. (It is also the difference between microseconds and a
 third of a second on a decision tree of a few hundred boxes, the sweep
 having pinned a cone-sized pattern once per box in it.)
+
+A direction is written last, and `forward` is the default because the
+table already leans that way: a row longer one way than the other is
+stated so that forward **shrinks** ([docs/rules.md](rules.md)), so the
+reading worth naming is the other one. `fire(codomain-coerce, backward)`
+writes a coercion down where the forward row would take one away, and it
+is an introduction like any other — not one to `repeat`, since the thing
+it introduces is what it would then introduce again.
 
 The direction field makes `at` a **found** backward step:
 `at(#nkz, not-not, backward)` looks for the law's right-hand side. A

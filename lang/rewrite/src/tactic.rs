@@ -16,7 +16,7 @@
 //!
 //! Three primitives, matching the ways a step comes to be:
 //!
-//! - [`Tactic::Fire`] — **found**, forward: a [`Query`] narrows to the box
+//! - [`Tactic::Fire`] — **found**, either direction: a [`Query`] narrows to the box
 //!   a rule is anchored at, [`rules::propose`] or
 //!   [`find_pinned`] produces the [`Match`], and
 //!   payload blanks resolve by reading the bound box — the way
@@ -312,6 +312,13 @@ pub enum Tactic {
     Fire {
         at: Query,
         rule: RuleSpec,
+        /// Which way round to read the equation. Forward is the
+        /// direction the table states a row in, and where a row is longer
+        /// one way than the other that is the **shrinking** one — so
+        /// backward is how a proof asks for an introduction it has not
+        /// named a box for. The search is the same sweep [`Tactic::At`]
+        /// runs, narrowed to the box the query bound.
+        dir: Direction,
         pick: Pick,
     },
     /// Found at a **named box**: the one address that is a name rather
@@ -560,7 +567,12 @@ struct Speculated {
 impl Runner<'_> {
     fn run(&mut self, tactic: &Tactic) -> Result<Progress, TacticError> {
         match tactic {
-            Tactic::Fire { at, rule, pick } => self.fire(at, rule, *pick),
+            Tactic::Fire {
+                at,
+                rule,
+                dir,
+                pick,
+            } => self.fire(at, rule, *dir, *pick),
             Tactic::At {
                 at,
                 law,
@@ -645,17 +657,23 @@ impl Runner<'_> {
 
     // -- the primitives --
 
-    fn fire(&mut self, at: &Query, rule: &RuleSpec, pick: Pick) -> Result<Progress, TacticError> {
+    fn fire(
+        &mut self,
+        at: &Query,
+        rule: &RuleSpec,
+        dir: Direction,
+        pick: Pick,
+    ) -> Result<Progress, TacticError> {
         match pick {
             Pick::First => {
                 let step = self
-                    .first_offer(at, rule)?
+                    .first_offer(at, rule, dir)?
                     .ok_or(TacticError::NothingFound { at: "fire" })?;
                 self.land(step)?;
                 Ok(Progress::Advanced(1))
             }
             Pick::Unique => {
-                let mut offers = self.offers(at, rule)?;
+                let mut offers = self.offers(at, rule, dir)?;
                 match offers.len() {
                     0 => Err(TacticError::NothingFound { at: "fire" }),
                     1 => {
@@ -667,7 +685,7 @@ impl Runner<'_> {
             }
             Pick::Each => {
                 let mut fired = 0;
-                while let Some(step) = self.first_offer(at, rule)? {
+                while let Some(step) = self.first_offer(at, rule, dir)? {
                     self.land(step)?;
                     fired += 1;
                 }
@@ -1074,10 +1092,15 @@ impl Runner<'_> {
     /// Every step the query and rule spec offer, deduplicated, in
     /// canonical order: bindings as [`query::eval_in`] answers them, steps
     /// as the matcher finds them.
-    fn offers(&self, at: &Query, rule: &RuleSpec) -> Result<Vec<Step>, TacticError> {
+    fn offers(
+        &self,
+        at: &Query,
+        rule: &RuleSpec,
+        dir: Direction,
+    ) -> Result<Vec<Step>, TacticError> {
         let mut out: Vec<Step> = Vec::new();
         for b in query::eval_in(self.graph, at, self.region.as_ref()) {
-            for step in self.offered(&b, rule)? {
+            for step in self.offered(&b, rule, dir)? {
                 if !out.contains(&step) {
                     out.push(step);
                 }
@@ -1087,22 +1110,47 @@ impl Runner<'_> {
     }
 
     /// The canonically-first offer, without collecting the rest.
-    fn first_offer(&self, at: &Query, rule: &RuleSpec) -> Result<Option<Step>, TacticError> {
+    fn first_offer(
+        &self,
+        at: &Query,
+        rule: &RuleSpec,
+        dir: Direction,
+    ) -> Result<Option<Step>, TacticError> {
         for b in query::eval_in(self.graph, at, self.region.as_ref()) {
-            if let Some(step) = self.offered(&b, rule)?.into_iter().next() {
+            if let Some(step) = self.offered(&b, rule, dir)?.into_iter().next() {
                 return Ok(Some(step));
             }
         }
         Ok(None)
     }
 
-    fn offered(&self, b: &Bindings, rule: &RuleSpec) -> Result<Vec<Step>, TacticError> {
+    fn offered(
+        &self,
+        b: &Bindings,
+        rule: &RuleSpec,
+        dir: Direction,
+    ) -> Result<Vec<Step>, TacticError> {
         match rule {
             RuleSpec::ReadOff { laws, anchor } => {
                 let id = b
                     .get(*anchor)
                     .ok_or(TacticError::Unresolved { var: *anchor })?;
-                Ok(rules::propose(self.graph, laws, id))
+                match dir {
+                    // The ordinary path, and the only one until a row was
+                    // stated the way round that shrinks: `read_off` reads
+                    // the payload off the bound box and `find_at` pins the
+                    // pattern where the law anchors.
+                    Direction::Forward => Ok(rules::propose(self.graph, laws, id)),
+                    // The other reading, which no proposal offers: the
+                    // payload still comes off a box in the graph, and what
+                    // is looked for is the row's other side. This is
+                    // [`Tactic::At`]'s search with the address replaced by
+                    // the query's binding.
+                    Direction::Backward => Ok(laws
+                        .iter()
+                        .flat_map(|&law| self.at_offers(id, law, dir))
+                        .collect()),
+                }
             }
             RuleSpec::Hoist { anchor } => {
                 let id = b
@@ -1511,12 +1559,23 @@ fn resolve(graph: &Graph, b: &Bindings, spec: &MatchSpec) -> Result<Match, Tacti
 /// The first proposal of any of these laws, at the canonically-first box
 /// that offers one.
 pub fn fire_first(laws: Vec<Law>) -> Tactic {
+    fire_first_in(laws, Direction::Forward)
+}
+
+/// [`fire_first`] with the direction said, which is what the `.hant`
+/// surface `fire(codomain-coerce, backward)` builds.
+///
+/// A row longer one way than the other is stated so that forward shrinks,
+/// so the growing reading of one is always an introduction — and this is
+/// how a proof asks for it without having a box address to name.
+pub fn fire_first_in(laws: Vec<Law>, dir: Direction) -> Tactic {
     Tactic::Fire {
         at: Query::new().is("n", query::NodePred::Any),
         rule: RuleSpec::ReadOff {
             laws,
             anchor: Var("n"),
         },
+        dir,
         pick: Pick::First,
     }
 }
@@ -1649,6 +1708,7 @@ pub fn tree() -> Tactic {
             Tactic::Fire {
                 at: branches(),
                 rule: RuleSpec::Hoist { anchor: Var("sel") },
+                dir: Direction::Forward,
                 pick: Pick::First,
             },
             // Read off rather than stated: the payload is three widths,
@@ -1661,6 +1721,7 @@ pub fn tree() -> Tactic {
                     laws: vec![Law::CondHoist],
                     anchor: Var("sel"),
                 },
+                dir: Direction::Forward,
                 pick: Pick::First,
             },
         ])),
@@ -1844,6 +1905,7 @@ mod tests {
                 laws: vec![Law::SelectLiteral],
                 anchor: Var("sel"),
             },
+            dir: Direction::Forward,
             pick: Pick::Unique,
         };
         run(&mut graph, &mut deriv, &tactic).unwrap();
@@ -1969,6 +2031,7 @@ mod tests {
                     laws: vec![Law::SelectSame],
                     anchor: Var("f"),
                 },
+                dir: Direction::Forward,
                 pick: Pick::First,
             },
         ]);
@@ -1994,6 +2057,7 @@ mod tests {
                 laws: vec![Law::SelectSame],
                 anchor: Var("f"),
             },
+            dir: Direction::Forward,
             pick: Pick::First,
         };
         assert!(matches!(
@@ -2041,6 +2105,7 @@ mod tests {
                 laws: vec![Law::Fold],
                 anchor: Var("a"),
             },
+            dir: Direction::Forward,
             pick,
         };
         let mut probe = graph.clone();
@@ -2079,6 +2144,7 @@ mod tests {
                 anchor: Var("n"),
                 pin: 1,
             },
+            dir: Direction::Forward,
             pick: Pick::First,
         };
         run(&mut graph, &mut deriv, &tactic).unwrap();
