@@ -71,7 +71,7 @@
 //! [`commutative`](bytecode::Instruction::commutative), [`Law::Idem`] over
 //! [`idempotent`](bytecode::Instruction::idempotent), [`Law::Codomain`]
 //! over [`codomain`](bytecode::Instruction::codomain), and
-//! [`Law::TestedBool`] over that same table and whichever type test it is
+//! [`Law::TestCoerced`] over that same table and whichever type test it is
 //! asked with. `idem` is the three coercions, `comm` the five operators
 //! that answer either way round, and `codomain` the type every data
 //! instruction lands in — none of those lists is written here: `vm`
@@ -79,13 +79,16 @@
 //! machine does, and a row per member would be several copies of one
 //! sentence with another to write whenever the instruction set grew one.
 //!
-//! `codomain` is the row those families were noticed through. It began as
-//! `promised-bool` — `op = op ; as_bool` for the predicates — which is one
-//! reading of a table that has an entry for every data instruction, so the
-//! row now writes down whichever type the set promises: `add ; as_int` as
-//! readily as `equal ; as_bool`. The tuple entry stays its own row, and
-//! for the reason a width always earns one here — see
-//! [`Rule::Codomain`].
+//! Two of those four are the codomain read twice, and they were one row
+//! narrower each until the table was written down. [`Law::Codomain`] was
+//! `promised-bool` — `op = op ; as_bool` for the predicates — and
+//! [`Law::TestCoerced`] was `tested-bool`, the same restriction on the same
+//! table. Both now read the whole of it: the first writes down whichever
+//! type the set promises, `add ; as_int` as readily as `equal ; as_bool`;
+//! the second decides a test of it, `as_int ; is_int` and `add ; is_bool`
+//! alike. The tuple entry stays its own row in both, and for the reason a
+//! width always earns one here — see [`Rule::Codomain`] and
+//! [`Rule::TestCoerced`].
 //!
 //! ## The value layer, and the two rows no list drives
 //!
@@ -297,7 +300,7 @@ pub enum Law {
     // The value layer: what an operation computes, measured on the machine.
     Codomain,
     Fold,
-    TestedBool,
+    TestCoerced,
     Retuple,
     AsTupleRoundTrip,
     IsTupleBuilt,
@@ -341,7 +344,7 @@ impl Law {
             Law::CondHoist => "cond-hoist",
             Law::Codomain => "codomain",
             Law::Fold => "fold",
-            Law::TestedBool => "tested-bool",
+            Law::TestCoerced => "test-coerced",
             Law::Retuple => "retuple",
             Law::AsTupleRoundTrip => "as-tuple-round-trip",
             Law::IsTupleBuilt => "is-tuple-built",
@@ -379,7 +382,7 @@ impl Law {
             Law::CondHoist,
             Law::Codomain,
             Law::Fold,
-            Law::TestedBool,
+            Law::TestCoerced,
             Law::Retuple,
             Law::AsTupleRoundTrip,
             Law::IsTupleBuilt,
@@ -730,31 +733,52 @@ pub enum Rule {
     /// re-proposing it forever is [`propose`]'s business, and search is
     /// where a termination argument belongs.
     Codomain { kind: NodeKind },
-    /// A type test of an answer the instruction set promises is a bool is
-    /// **decided**, and the answer itself is untouched: `op ; is_T` folds
-    /// the test to `push (T is Bool)`. The promise is the `Bool` row of
-    /// [`codomain`](bytecode::Instruction::codomain), measured by `vm`; the
-    /// rewrite replaces only the test's answer, and `op` goes on standing
-    /// for whoever else reads it.
+    /// Asking a coerced value the question its coercion answered:
     ///
-    /// The bool row of it, and only that one, which is where this row and
-    /// [`Rule::Codomain`] part company: writing a promise down is the same
-    /// sentence at every type, while *deciding a test* from one wants a
-    /// verdict per (codomain, test) pair. `as_int ; is_int` and the rest of
-    /// the `Int` half are true and are not rows yet — see
-    /// `asked_of_a_bool`, which is the half that is.
+    /// ```text
+    /// as_T ; is_T  =  push true
+    /// ```
     ///
-    /// One row for the whole family, because one fact answers all of it. A
-    /// codomain does not only say which test succeeds — it says which
-    /// tests **fail**, and the failures are worth as much: `op ; is_int` is
-    /// `push false` on a promised bool, and that is what folds a shape
-    /// guard asking the wrong question. `test` is which test, and the
-    /// answer is read off it and the promise together.
+    /// A coercion's whole content is its **codomain**, so what it leaves is
+    /// of that type by construction and the test that asks so is decided
+    /// without anything running. `docs/totality.md` names it as one of the
+    /// consequences a coercion is written for — the reason "writing one is
+    /// worth more than reading a check" — and this is that sentence as a
+    /// row.
+    ///
+    /// The value itself is untouched: the rewrite replaces only the test's
+    /// answer, and the coercion goes on standing for whoever else reads it.
+    ///
+    /// **A coercion is the paradigm and not the side condition.** What the
+    /// row reads is [`codomain`](bytecode::Instruction::codomain), which
+    /// settles the type of every data instruction and not only of the three
+    /// that force one — so `op ; is_T` is decided wherever the table names a
+    /// type for `op`, a coercion being the case where that type is the whole
+    /// of what the box is for. `equal ; is_bool` and `add ; is_int` are the
+    /// same row as `as_int ; is_int`. Stated at the coercion alone it would
+    /// reach them only after [`Rule::Codomain`] wrote the promise down, and
+    /// that is a step no driven list spends — so a window of one box would
+    /// have put the whole family out of a driver's reach.
+    ///
+    /// One row for the family, because one fact answers all of it. A
+    /// codomain does not only say which test succeeds — it says which tests
+    /// **fail**, and the failures are worth as much: `is_int ; is_tuple 2`
+    /// is `push false`, and that is what folds a shape guard asking the
+    /// wrong question. `test` is which test, and the answer is read off it
+    /// and the codomain together: whether the test names the type the value
+    /// landed in.
     ///
     /// `is_tuple` is a test at either reading, the width-blind one
-    /// included: a `Bool` is no tuple of any width, so both answer `false`.
-    /// A `prim` that is no type test at all states no equation here.
-    TestedBool { kind: NodeKind, test: Prim },
+    /// included: a `Bool` is no tuple of any width, and neither is an `Int`,
+    /// so both answer `false`. A `prim` that is no type test at all states
+    /// no equation here.
+    ///
+    /// **The tuple case is not here**, for the reason it is not in
+    /// [`Rule::Codomain`] either: a value of tuple codomain answers
+    /// `is_tuple n` by comparing two widths rather than by naming a type,
+    /// and that is [`Rule::IsTupleBuilt`], which carries both widths in its
+    /// payload. See `settled`.
+    TestCoerced { kind: NodeKind, test: Prim },
     /// Rebuilding what `untuple n` took apart is the coercion, not the
     /// identity — the slots may have been junk-filled: `untuple n ; tuple
     /// n = as_tuple n`, whole or not at all.
@@ -932,7 +956,7 @@ impl Rule {
             Rule::CondHoist => Law::CondHoist,
             Rule::Fold { .. } => Law::Fold,
             Rule::Codomain { .. } => Law::Codomain,
-            Rule::TestedBool { .. } => Law::TestedBool,
+            Rule::TestCoerced { .. } => Law::TestCoerced,
             Rule::Retuple { .. } => Law::Retuple,
             Rule::AsTupleRoundTrip { .. } => Law::AsTupleRoundTrip,
             Rule::IsTupleBuilt { .. } => Law::IsTupleBuilt,
@@ -993,7 +1017,7 @@ pub fn branching() -> Vec<Law> {
 pub fn folding() -> Vec<Law> {
     vec![
         Law::Fold,
-        Law::TestedBool,
+        Law::TestCoerced,
         // The longer window first: both are read off the same `tuple` box,
         // and `retuple` alone would take a round trip that began at a
         // coercion apart in two steps — a second coercion, then `idem` —
@@ -1564,20 +1588,17 @@ pub fn sides(rule: &Rule) -> Result<Pair, Error> {
 
             (bare, asserted)
         }
-        Rule::TestedBool { kind, test } => {
+        Rule::TestCoerced { kind, test } => {
             let NodeKind::Op(prim) = kind else {
                 return Err(ill(Ill::Refused));
             };
-            let arity = prim.arity();
-            // The promise, and the test the promise answers. Nothing else
-            // decides the verdict: what the operation *is* never enters,
-            // only that the set says what type it leaves.
-            let Some(verdict) = asked_of_a_bool(test) else {
+            // The type the set settles, and the test asked of it. Nothing
+            // else decides the verdict: what the operation *is* never
+            // enters, only that the table says what type it leaves.
+            let Some(verdict) = settled(prim).and_then(|c| asked_of(c, test)) else {
                 return Err(ill(Ill::Refused));
             };
-            if arity.outputs != 1 || !prim.to_instruction().yields_bool() {
-                return Err(ill(Ill::Refused));
-            }
+            let arity = prim.arity();
             let ins: Vec<Source> = (0..arity.inputs).map(Source::Input).collect();
 
             let mut tested = Graph::empty(arity.inputs);
@@ -1742,61 +1763,89 @@ pub fn sides(rule: &Rule) -> Result<Pair, Error> {
     Pair::new(a, b).map_err(|why| ill(why.into()))
 }
 
-/// The coercion that writes an instruction's **codomain** down as a box,
-/// or `None` where this row has none to write.
+/// The **codomain** the two rows stated over it may read at `prim`, or
+/// `None` where they have none to read.
 ///
-/// The whole of what [`Rule::Codomain`] reads off the instruction set, and
-/// a reading rather than a decision: a coercion *is* the codomain named on
+/// The width-free half of [the table](bytecode::Instruction::codomain), and
+/// that restriction is the one asymmetry worth spelling out.
+/// `Codomain::Tuple` is the only variant carrying anything, so a row over it
+/// carries a width its payload's one `kind` does not settle: the coercion
+/// [`Rule::Codomain`] would write is `as_tuple n`, and the verdict
+/// [`Rule::TestCoerced`] would give is `n == m` rather than a fact about
+/// which type was asked for. Both of those are rows already, and both carry
+/// the width in the payload — [`Rule::AsTupleBuilt`] and
+/// [`Rule::IsTupleBuilt`], read off the `tuple n` that built the value.
+/// Width-free rows and width-carrying ones, kept apart.
+///
+/// An operation leaving more than one answer has no single type to settle,
+/// which is the other refusal; the rest is the table's own `None`.
+fn settled(prim: &Prim) -> Option<Codomain> {
+    let codomain = prim.to_instruction().codomain()?;
+    match codomain {
+        Codomain::Bool | Codomain::Int if prim.arity().outputs == 1 => Some(codomain),
+        _ => None,
+    }
+}
+
+/// The coercion that writes an instruction's codomain down as a box, or
+/// `None` where [`Rule::Codomain`] has none to write.
+///
+/// A reading rather than a decision: a coercion *is* the codomain named on
 /// its own, so the type the set promises names the box that asserts it.
 /// `as_bool` for a predicate, `as_int` for arithmetic — one row where there
 /// were a family.
-///
-/// The **tuple** case is `None`, and that is the one asymmetry worth
-/// spelling out. `Codomain::Tuple` is the only variant carrying anything, so
-/// the coercion it names is `as_tuple n` rather than a box a payload of one
-/// `kind` already determines the width of; and the one instruction that
-/// lands there and is not the coercion itself is `tuple n`, which
-/// [`Rule::AsTupleBuilt`] has said since before this row was general.
-/// A width-free row and a width-carrying one, kept apart.
 fn promised(prim: &Prim) -> Option<Prim> {
-    match prim.to_instruction().codomain()? {
-        Codomain::Bool => Some(Prim::AsBool),
-        Codomain::Int => Some(Prim::AsInt),
-        Codomain::Tuple(_) => None,
-    }
+    Some(match settled(prim)? {
+        Codomain::Bool => Prim::AsBool,
+        Codomain::Int => Prim::AsInt,
+        Codomain::Tuple(_) => return None,
+    })
 }
 
-/// Whether this row has anything to say at `prim`, and what it would write.
+/// Whether [`Rule::Codomain`] has anything to say at `prim`, and what it
+/// would write.
 ///
-/// Three refusals, and only the last is about the row rather than the box:
-/// an operation leaving more than one answer has no single type to assert,
-/// an operation the table says nothing about has nothing to assert, and an
-/// operation that **is** the coercion it would be handed already carries its
-/// own promise. `as_bool ; as_bool` is a true equation and a bottomless one
-/// — the law refuses to be the reason a driver stacks them, and [`Rule::Idem`]
-/// is where a pair that got written collapses.
+/// `settled`'s refusals, and one more that is the row's own: an operation
+/// that **is** the coercion it would be handed already carries its own
+/// promise. `as_bool ; as_bool` is a true equation and a bottomless one —
+/// the law refuses to be the reason a driver stacks them, and
+/// [`Rule::Idem`] is where a pair that got written collapses.
 fn writes_its_promise(prim: &Prim) -> Option<Prim> {
     let coercion = promised(prim)?;
-    match prim.arity().outputs == 1 && *prim != coercion {
-        true => Some(coercion),
-        false => None,
-    }
+    (*prim != coercion).then_some(coercion)
 }
 
-/// What a type test answers of a value the instruction set promises is a
-/// `Bool`, or `None` for a prim that asks no question about a type.
+/// Whether a prim asks a question about a **type** at all, which is the
+/// whole of what [`Rule::TestCoerced`] wants of its `test`.
 ///
-/// The one thing [`Rule::TestedBool`] reads off its `test`, and it is a
-/// reading rather than a computation: a promised bool *is* a `Bool`, so
-/// `is_bool` holds of it and every other test of a type does not. The
-/// widths `is_tuple` may carry make no difference — a `Bool` is a tuple of
-/// no width at all.
-fn asked_of_a_bool(test: &Prim) -> Option<bool> {
-    match test {
-        Prim::IsBool => Some(true),
-        Prim::IsInt | Prim::IsConstString | Prim::IsSymbol | Prim::IsTuple(_) => Some(false),
-        _ => None,
+/// The five `is_` tests and nothing else. A test is a question, and this
+/// says only that one was asked; `asked_of` is what answers it.
+fn is_a_type_test(test: &Prim) -> bool {
+    matches!(
+        test,
+        Prim::IsBool | Prim::IsInt | Prim::IsConstString | Prim::IsSymbol | Prim::IsTuple(_)
+    )
+}
+
+/// What a type test answers of a value the instruction set settles the type
+/// of, or `None` for a prim that asks no question about a type.
+///
+/// A reading rather than a computation, and the whole of it is *does the
+/// test name the type the value landed in*: a promised `Int` **is** an
+/// `Int`, so `is_int` holds of it and every other test of a type does not.
+/// The widths `is_tuple` may carry make no difference on the types this row
+/// reaches — a `Bool` is a tuple of no width at all, and so is an `Int`.
+fn asked_of(codomain: Codomain, test: &Prim) -> Option<bool> {
+    if !is_a_type_test(test) {
+        return None;
     }
+    Some(match codomain {
+        Codomain::Bool => matches!(test, Prim::IsBool),
+        Codomain::Int => matches!(test, Prim::IsInt),
+        // Not reached: `settled` is what hands a codomain in, and the
+        // width case is `is-tuple-built`'s. See there for why.
+        Codomain::Tuple(_) => return None,
+    })
 }
 
 /// Runs one instruction on the operands it wants, on the machine itself.
@@ -2571,15 +2620,15 @@ fn read_off(graph: &Graph, law: Law, id: NodeId) -> Vec<(Rule, NodeId)> {
         // promises is a bool. Which test it is decides the answer and not
         // whether there is one, so nothing here compares the two: the
         // promise is the whole side condition.
-        (Law::TestedBool, NodeKind::Op(test)) if asked_of_a_bool(test).is_some() => {
+        (Law::TestCoerced, NodeKind::Op(test)) if is_a_type_test(test) => {
             let Some((answered, NodeKind::Op(prim))) = made_by(takes[0]) else {
                 return Vec::new();
             };
-            if prim.arity().outputs != 1 || !prim.to_instruction().yields_bool() {
+            if settled(prim).and_then(|c| asked_of(c, test)).is_none() {
                 return Vec::new();
             }
             vec![(
-                Rule::TestedBool {
+                Rule::TestCoerced {
                     kind: graph.kind(answered).clone(),
                     test: test.clone(),
                 },
@@ -3506,12 +3555,28 @@ pub(crate) mod tests {
         }
     }
 
-    /// Every type test of an answer the instruction set promises is a
-    /// bool: `is_bool` answers `true` and every other one answers `false`,
+    /// Every type test of an answer whose type the table settles: the test
+    /// that names it answers `true` and every other one answers `false`,
     /// which is the whole of what a codomain decides.
+    ///
+    /// The headline is the coercion — `as_int ; is_int` is `push true`,
+    /// which is the question a coercion is written to settle — and the row
+    /// holds of every other box the table names a type for, the coercion
+    /// being the case where that type is the whole of what the box is for.
     #[test]
-    fn a_promised_bool_answers_every_type_test() {
-        for kind in [Prim::IsInt, Prim::Equal, Prim::IsBool, Prim::AsBool] {
+    fn a_settled_type_answers_every_test() {
+        let makers = [
+            // Promised bools: two predicates, and the coercion.
+            Prim::IsInt,
+            Prim::Equal,
+            Prim::AsBool,
+            // Promised ints: arithmetic, a count, and the coercion.
+            Prim::Add,
+            Prim::Negate,
+            Prim::TupleLength,
+            Prim::AsInt,
+        ];
+        for kind in makers {
             for test in [
                 Prim::IsBool,
                 Prim::IsInt,
@@ -3521,32 +3586,50 @@ pub(crate) mod tests {
                 Prim::IsTuple(Some(2)),
             ] {
                 the_machine_agrees(
-                    Law::TestedBool,
-                    Rule::TestedBool {
+                    Law::TestCoerced,
+                    Rule::TestCoerced {
                         kind: NodeKind::Op(kind.clone()),
                         test,
                     },
                 );
             }
         }
-        // An answer the set does not promise is no window.
-        assert!(matches!(
-            sides(&Rule::TestedBool {
-                kind: NodeKind::Op(Prim::Add),
-                test: Prim::IsBool,
-            }),
-            Err(Error::Ill {
-                why: Ill::Refused,
-                ..
-            })
-        ));
+        // An answer whose type the table does not settle is no window —
+        // what `swap` leaves came off the stack, and `push` is decided
+        // better than this by the fold.
+        for kind in [Prim::Swap, Prim::Push(Value::Int(1))] {
+            assert!(matches!(
+                sides(&Rule::TestCoerced {
+                    kind: NodeKind::Op(kind),
+                    test: Prim::IsBool,
+                }),
+                Err(Error::Ill {
+                    why: Ill::Refused,
+                    ..
+                })
+            ));
+        }
+        // The tuple codomain is `is-tuple-built`'s: the verdict there
+        // compares two widths rather than naming a type.
+        for kind in [Prim::Tuple(2), Prim::AsTuple(2)] {
+            assert!(matches!(
+                sides(&Rule::TestCoerced {
+                    kind: NodeKind::Op(kind),
+                    test: Prim::IsTuple(Some(2)),
+                }),
+                Err(Error::Ill {
+                    why: Ill::Refused,
+                    ..
+                })
+            ));
+        }
         // And neither is a box that asks nothing about a type. `not` of a
         // promised bool is a true equation of another kind entirely, and
         // this row does not state it.
         for test in [Prim::Not, Prim::AsBool, Prim::TupleLength] {
             assert!(
                 matches!(
-                    sides(&Rule::TestedBool {
+                    sides(&Rule::TestCoerced {
                         kind: NodeKind::Op(Prim::IsInt),
                         test: test.clone(),
                     }),
@@ -3565,7 +3648,7 @@ pub(crate) mod tests {
     /// the shape guard that asks the wrong question of a promised bool
     /// folds to `false`, and the tuple's width makes no difference to it.
     #[test]
-    fn the_wrong_test_of_a_promised_bool_folds_to_false() {
+    fn the_wrong_test_of_a_settled_type_folds_to_false() {
         let mut graph = Graph::empty(2);
         let tested = graph.add(
             NodeKind::Op(Prim::Equal),
@@ -3577,7 +3660,7 @@ pub(crate) mod tests {
 
         let steps = propose(
             &graph,
-            &[Law::TestedBool],
+            &[Law::TestCoerced],
             only(&NodeKind::Op(Prim::IsTuple(Some(2))), &graph),
         );
         let [step] = &steps[..] else {
@@ -3585,7 +3668,7 @@ pub(crate) mod tests {
         };
         assert_eq!(
             step.rule,
-            Rule::TestedBool {
+            Rule::TestCoerced {
                 kind: NodeKind::Op(Prim::Equal),
                 test: Prim::IsTuple(Some(2)),
             }
@@ -4174,11 +4257,11 @@ pub(crate) mod tests {
             Rule::Codomain {
                 kind: NodeKind::Op(Prim::Add),
             },
-            Rule::TestedBool {
+            Rule::TestCoerced {
                 kind: NodeKind::Op(Prim::IsInt),
                 test: Prim::IsBool,
             },
-            Rule::TestedBool {
+            Rule::TestCoerced {
                 kind: NodeKind::Op(Prim::IsInt),
                 test: Prim::IsInt,
             },

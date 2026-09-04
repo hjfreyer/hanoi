@@ -270,7 +270,7 @@ identity testing_a_test { is_bool is_bool } = { drop 0 push true };
 Whatever `is_bool` answers is a boolean, so asking `is_bool` of *that*
 answers `true` — a fact about the operation's range, not about any wiring
 a rewrite window could see. That particular fact is common enough to be
-its own law (`tested-bool`); the general situation is not, and `cases` is
+its own law (`test-coerced`); the general situation is not, and `cases` is
 the general instrument.
 
 `cases(#nk) (true: …, false: …)` is one composite, and saying it as the
