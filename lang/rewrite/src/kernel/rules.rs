@@ -63,6 +63,32 @@
 //! `as_bool(x)`, so this is a law about what the machine computes, and
 //! `vm` is what measures it.
 //!
+//! ## Which way round a row is stated
+//!
+//! A row is an equation and both readings are true, so which side [`sides`]
+//! builds first is a **convention** rather than a fact. It is this one:
+//! where a row is longer one way than the other, **forward shrinks**.
+//!
+//! What makes it worth having is that forward is the only direction a
+//! search offers. [`propose`] looks for [`Pair::lhs`], and every driven
+//! list is spent forward — so a row stated the growing way round is one no
+//! driver can run to fixpoint, and a row stated the shrinking way is one
+//! any of them could. Reading it the other way is then always the same
+//! kind of act: an **introduction**, which someone names — a proof with
+//! `fire(law, backward)` or `at(#box, law, backward)`, or [`case_split`]
+//! in so many words.
+//!
+//! Two rows here cannot follow it and the reason is worth naming, because
+//! it is the same one both times: their shrinking side is not something a
+//! search can find. [`Law::SelectHoist`] carries a **region**, and its
+//! short side is a branch whose arms hold two copies of one — matching
+//! that means recognising the copies, which no pattern here says how to
+//! do; [`Law::CondHoist`] is its sibling and is spent with it. The two
+//! **unpackings** — [`Law::AsBoolBranch`] and [`Law::CoercionGuard`] —
+//! grow forward for a different reason, which is that growing is the whole
+//! of what they are for, and they are stated in the direction they are
+//! read in. Everything else, including this row, shrinks forward.
+//!
 //! ## One row for a family
 //!
 //! Four rows read a **fact off the instruction set** rather than naming
@@ -727,11 +753,15 @@ pub enum Rule {
     /// re-proposing it forever is [`propose`]'s business, and search is
     /// where a termination argument belongs.
     ///
-    /// **No list drives it**, because it grows a graph: reading it left to
-    /// right writes a box down. Removing a coercion an answer did not need
-    /// is the same row read the other way, and a proof names it — which is
-    /// what `as-tuple-built` being on [`folding`] used to buy, at one
-    /// instruction.
+    /// **No list drives it**, and not for the reason it used to be off
+    /// them. It shrinks forward now, so a driver *could* run it — and a
+    /// driver that did would take away the very coercions the branch layer
+    /// reads. [`Rule::SpecializeBool`] wants an `as_bool` in its window,
+    /// which is the whole use of writing a promise down; a `decide` that
+    /// spent this row would undo every one of them before
+    /// `specialize-bool` could look, and the corpus claim that needs it
+    /// stops closing. So *whether to spend it* stays a strategy's
+    /// decision, the way an unpacking is, and a proof names it.
     CodomainCoerce { kind: NodeKind },
     /// Asking a coerced value the question its coercion answered:
     ///
@@ -999,9 +1029,11 @@ pub fn branching() -> Vec<Law> {
 /// by name — `fire(coercion-guard)`, `at(#7, as-bool-branch)` — and a
 /// driver that wanted them could list them itself.
 ///
-/// [`Law::CodomainCoerce`] is off it for the same reason and is the near
-/// miss worth naming: read left to right it writes a coercion down, and
-/// only the other reading takes a redundant one away. Its sibling
+/// [`Law::CodomainCoerce`] is the near miss, and it is off the list for a
+/// different reason than those two: it *does* shrink forward, so a driver
+/// could run it, and a driver that did would take away the coercions
+/// [`Law::SpecializeBool`] reads — writing a promise down is what that row
+/// needs, and this one would spend it back. Its sibling
 /// [`Law::CodomainTest`] is here, because a verdict is a literal however
 /// the question was asked.
 pub fn folding() -> Vec<Law> {
@@ -1544,24 +1576,26 @@ pub fn sides(rule: &Rule) -> Result<Pair, Error> {
                 return Err(ill(Ill::Refused));
             };
             // Which coercion, read off the table and nothing else. The
-            // refusals are [`writes_its_promise`]'s, and the one about
-            // stacking is the only one that is the law's own.
-            let Some(coercion) = writes_its_promise(prim) else {
+            // refusals are `redundant_after`'s, and the one about stacking
+            // is the only one that is the law's own.
+            let Some(coercion) = redundant_after(prim) else {
                 return Err(ill(Ill::Refused));
             };
             let arity = prim.arity();
             let ins: Vec<Source> = (0..arity.inputs).map(Source::Input).collect();
 
-            let mut bare = Graph::empty(arity.inputs);
-            let answer = bare.add(kind.clone(), ins.clone());
-            bare.close(answer);
-
+            // The long side first, which is this table's convention wherever
+            // a row is longer one way than the other: forward **shrinks**.
             let mut asserted = Graph::empty(arity.inputs);
-            let answer = asserted.add(kind.clone(), ins);
+            let answer = asserted.add(kind.clone(), ins.clone());
             let promise = asserted.add(NodeKind::Op(coercion), answer);
             asserted.close(promise);
 
-            (bare, asserted)
+            let mut bare = Graph::empty(arity.inputs);
+            let answer = bare.add(kind.clone(), ins);
+            bare.close(answer);
+
+            (asserted, bare)
         }
         Rule::CodomainTest { kind, test } => {
             let NodeKind::Op(prim) = kind else {
@@ -1751,17 +1785,18 @@ fn promised(prim: &Prim) -> Option<Prim> {
     })
 }
 
-/// Whether [`Rule::CodomainCoerce`] has anything to say at `prim`, and what
-/// it would write.
+/// The coercion an answer of `prim` does not need — what
+/// [`Rule::CodomainCoerce`] takes away read forwards, and writes down read
+/// backwards — or `None` where the row says nothing at `prim`.
 ///
 /// `settled`'s refusals, and one more that is the row's own: an operation
-/// that **is** the coercion it would be handed already carries its own
-/// promise. `as_bool ; as_bool` is a true equation and a bottomless one —
-/// the law refuses to be the reason a driver stacks them, and
-/// [`Rule::Idem`] is where a pair that got written collapses. The widths
-/// decide it for the tuples, as they decide everything else: `as_tuple 2`
-/// is refused and `tuple 2` is not.
-fn writes_its_promise(prim: &Prim) -> Option<Prim> {
+/// that **is** the coercion it would be handed says nothing this row is
+/// about. `as_bool ; as_bool = as_bool` is a true equation and it is
+/// [`Rule::Idem`]'s, one row for the three coercions; stating it here as
+/// well would be two rows for one sentence, and read the other way an
+/// invitation to stack them. The widths decide it for the tuples, as they
+/// decide everything else: `as_tuple 2` is refused and `tuple 2` is not.
+fn redundant_after(prim: &Prim) -> Option<Prim> {
     let coercion = promised(prim)?;
     (*prim != coercion).then_some(coercion)
 }
@@ -2051,6 +2086,52 @@ pub fn propose(graph: &Graph, laws: &[Law], id: NodeId) -> Vec<Step> {
     out
 }
 
+/// The step that writes `at`'s promise down as a box:
+/// [`Law::CodomainCoerce`] read **backwards**.
+///
+/// A **stated** step, and the one place the kernel states one for itself.
+/// The row is oriented the way every row here is that is longer one way
+/// than the other — forward shrinks — so the reading a split wants is the
+/// other one, and no search proposes it: [`propose`] is forward only, and
+/// the pattern it would look for is the bare answer, which is already
+/// there. So the payload is read off the box and the match is `find_at`
+/// on the row's own answer side, which is one box and pins itself.
+///
+/// `None` where the promise is written down **for every reader** already.
+/// Every reader rather than any, because the rewrite redirects every
+/// reader: an answer read by an `as_bool` and by something else is an
+/// answer whose promise one reader has and the other has not, and firing
+/// gives it to both. It is also what keeps the introduction from
+/// stacking — what the step leaves is an answer whose one reader is the
+/// coercion it just wrote down, and the next ask declines.
+fn written_promise(graph: &Graph, at: NodeId) -> Option<Step> {
+    let kind = graph.kind(at).clone();
+    let NodeKind::Op(prim) = &kind else {
+        return None;
+    };
+    let coercion = redundant_after(prim)?;
+    let asserted = graph
+        .sinks(Source::Port { node: at, port: 0 })
+        .iter()
+        .all(|sink| match sink {
+            Sink::Port { node, .. } => {
+                matches!(graph.kind(*node), NodeKind::Op(p) if *p == coercion)
+            }
+            Sink::Output(_) => false,
+        });
+    if asserted {
+        return None;
+    }
+    let rule = Rule::CodomainCoerce { kind };
+    let pair = sides(&rule).ok()?;
+    let at = find_at(graph, pair.rhs(), at).into_iter().next()?;
+    Some(Step {
+        rule,
+        dir: Direction::Backward,
+        at,
+    })
+}
+
 /// The case split, spent where a proof says to: a wire the instruction
 /// set promises is a bool becomes a branch over both its cases, with
 /// everything downstream of it copied once per case and the case pasted
@@ -2125,17 +2206,15 @@ pub fn case_split(
     // answer itself; where it does not, the branch stands where the
     // coercion that was already there stood.
     //
-    // `codomain` writes down whichever type the set promises, and a split
-    // wants the one promise it can **pin**: `true` and `false` are the whole
-    // of a bool, and no other type is two values wide. So the step is asked
-    // for only where the answer is one — at an `add` the row would write an
-    // `as_int`, which is a true equation and no case analysis.
+    // `codomain-coerce` writes down whichever type the set promises, and a
+    // split wants the one promise it can **pin**: `true` and `false` are the
+    // whole of a bool, and no other type is two values wide. So the step is
+    // asked for only where the answer is one — at an `add` the row would
+    // write an `as_int`, which is a true equation and no case analysis.
     let promises_a_bool =
         matches!(graph.kind(at), NodeKind::Op(prim) if prim.to_instruction().yields_bool());
     let promise = match promises_a_bool {
-        true => propose(graph, &[Law::CodomainCoerce], at)
-            .into_iter()
-            .next(),
+        true => written_promise(graph, at),
         false => None,
     };
     let stands_on = match (&promise, standing) {
@@ -2155,7 +2234,7 @@ pub fn case_split(
     let coercion = match promise {
         Some(step) => {
             run.push(graph, step)?;
-            made(run, graph, as_bool).expect("`codomain` leaves the coercion it wrote down")
+            made(run, graph, as_bool).expect("`codomain-coerce` leaves the coercion it wrote down")
         }
         None => standing.expect("a decline with nothing standing answered above"),
     };
@@ -2460,38 +2539,28 @@ fn read_off(graph: &Graph, law: Law, id: NodeId) -> Vec<(Rule, NodeId)> {
             })
             .collect(),
 
-        // The instruction set's promise, written down as a box. Proposed
-        // only where it is not written down **for every reader**: the
-        // equation holds however many `as_bool`s are stacked on the
-        // answer, so nothing but this guard stops a driver stacking them
-        // forever. Search is where that argument belongs — the law states
-        // an equality and no more.
+        // A coercion an answer did not need: the type it forces is the
+        // type the set already promised, so the box asserts nothing the
+        // answer was not already.
         //
-        // Every reader rather than any, because the rewrite redirects
-        // every reader: an answer read by an `as_bool` and by something
-        // else is an answer whose promise one reader has and the other
-        // has not, and firing gives it to both. It terminates on the same
-        // argument either way — what the step leaves is an answer whose
-        // one reader is the coercion it just wrote down, and this guard
-        // declines the next one.
-        (Law::CodomainCoerce, NodeKind::Op(prim)) => {
-            let Some(coercion) = writes_its_promise(prim) else {
-                return Vec::new();
-            };
-            let asserted = graph
-                .sinks(Source::Port { node: id, port: 0 })
-                .iter()
-                .all(|sink| match sink {
-                    Sink::Port { node, .. } => {
-                        matches!(graph.kind(*node), NodeKind::Op(p) if *p == coercion)
-                    }
-                    Sink::Output(_) => false,
-                });
-            match asserted {
-                true => Vec::new(),
-                false => vec![(Rule::CodomainCoerce { kind: kind.clone() }, id)],
-            }
-        }
+        // Anchored at the **answer**, which is the box the row is about
+        // and the one that spells the payload — so [`instances`] finds
+        // that payload whether or not a coercion is standing yet, which
+        // is what lets a proof ask for the row the other way round. Which
+        // side is then looked for is the direction's business:
+        // [`propose`] is forward, so it finds the pair only where the
+        // coercion is there to come off.
+        //
+        // Nothing here counts readers. The row is stated the way round
+        // that **shrinks**, so a driver run to fixpoint takes coercions
+        // away rather than stacking them, and there is no termination
+        // argument left for search to make. Writing one down is the same
+        // row read backwards, and `written_promise` is where the kernel
+        // itself asks for that.
+        (Law::CodomainCoerce, NodeKind::Op(prim)) => match redundant_after(prim) {
+            Some(_) => vec![(Rule::CodomainCoerce { kind: kind.clone() }, id)],
+            None => Vec::new(),
+        },
 
         // Everything downstream of a branch's answers, lifted out as the
         // body the branch grows forward over. Read off the `select`, which
@@ -2952,29 +3021,52 @@ pub(crate) mod tests {
         }
     }
 
-    /// The equation holds however many coercions already stand on the
-    /// answer, so only the search declines to say it twice.
+    /// Forward is the direction that **shrinks**, so what the search
+    /// offers is the coercion coming off — and a bare answer, which is
+    /// where the row used to be proposed, offers nothing at all.
+    ///
+    /// Writing the promise down is the other reading, which no search
+    /// proposes: `written_promise` states it, and that is the whole of
+    /// where the introduction lives.
     #[test]
-    fn the_promise_is_proposed_once() {
-        let (_terms, graph) = built("pick 0 is_symbol");
+    fn the_promise_comes_off_forwards_and_goes_on_backwards() {
         let count = |g: &Graph| {
             g.live()
                 .flat_map(|(id, _)| propose(g, &[Law::CodomainCoerce], id))
                 .count()
         };
-        assert_eq!(count(&graph), 1, "the one bool-yielding box offers it");
-        let mut asserted = graph.clone();
-        let step = graph
+
+        // A promised bool with nothing standing on it: the row has
+        // nothing to take away, and the shrink is not offered.
+        let (_terms, bare) = built("pick 0 is_symbol");
+        assert_eq!(count(&bare), 0, "there is no coercion to take off");
+
+        // The step that writes one down is stated, at the box that
+        // promises it.
+        let mut asserted = bare.clone();
+        let step = written_promise(&bare, only(&NodeKind::Op(Prim::IsSymbol), &bare))
+            .expect("the promise is not written down yet");
+        assert_eq!(step.dir, Direction::Backward);
+        apply(&mut asserted, &step).expect("and it applies");
+
+        // Now the shrink is there to be found, and it is the one the
+        // driver would run — the two readings meeting at the same box.
+        assert_eq!(count(&asserted), 1, "a coercion standing offers the row");
+        assert!(
+            written_promise(&asserted, only(&NodeKind::Op(Prim::IsSymbol), &asserted)).is_none(),
+            "an answer already carrying its promise is asked for none"
+        );
+
+        // And the shrink applied gets back what was there before, which
+        // is the same equation read the other way.
+        let mut back = asserted.clone();
+        let step = back
             .live()
-            .flat_map(|(id, _)| propose(&graph, &[Law::CodomainCoerce], id))
+            .flat_map(|(id, _)| propose(&asserted, &[Law::CodomainCoerce], id))
             .next()
             .expect("there is one");
-        apply(&mut asserted, &step).expect("and it applies");
-        assert_eq!(
-            count(&asserted),
-            0,
-            "an answer already carrying its promise offers nothing"
-        );
+        apply(&mut back, &step).expect("and it applies");
+        assert!(isomorphic(&back, &bare), "the round trip is the identity");
     }
 
     /// A choice between one value is that value.
@@ -4349,20 +4441,14 @@ pub(crate) mod tests {
         // `add` reads two literals, so the fold decides it — and the
         // instruction set says its operands are interchangeable, which is
         // a step at the same box and on no driven list.
-        // `add` also lands in a type the set names — `Int`, on junk
-        // operands as much as on a pair of numbers — so the row that
-        // writes a codomain down is offered at the same box.
-        offers(
-            "push 1 push 2 add",
-            &[Law::Fold, Law::Commute, Law::CodomainCoerce],
-        );
+        offers("push 1 push 2 add", &[Law::Fold, Law::Commute]);
         // The window with nothing in it. `tuple 0` reads no literal, so
         // there is none behind it to anchor the pattern at and the box
         // anchors itself — and the fold is offered all the same.
-        offers("tuple 0", &[Law::Fold, Law::CodomainCoerce]);
+        offers("tuple 0", &[Law::Fold]);
         // Every operand a literal, and the answer is the tuple they
         // build.
-        offers("push 1 push 2 tuple 2", &[Law::Fold, Law::CodomainCoerce]);
+        offers("push 1 push 2 tuple 2", &[Law::Fold]);
         // And the way back: a literal taken apart is its parts.
         offers("push (1, 2) untuple 2", &[Law::Fold]);
         offers("swap swap", &[]);
@@ -4373,31 +4459,52 @@ pub(crate) mod tests {
         offers("pick 1 pick 1 equal drop 0", &[]);
         // The answer goes straight to the boundary, so there is no
         // region downstream of it for a case split to decide.
-        offers("pick 1 pick 1 equal", &[Law::CodomainCoerce, Law::Commute]);
+        offers("pick 1 pick 1 equal", &[Law::Commute]);
+        // A coercion an answer did not need is what `codomain-coerce`
+        // offers, at every type the table settles: the predicate's
+        // `as_bool`, arithmetic's `as_int`, and the width a tuple was
+        // built to. The row shrinks, so this is the direction a search
+        // answers in — writing one down is stated instead, and a bare
+        // answer above offers nothing.
+        offers(
+            "pick 1 pick 1 equal as_bool",
+            &[
+                Law::CodomainCoerce,
+                Law::Commute,
+                // The two unpackings read off every coercion, whatever
+                // made the value under it.
+                Law::AsBoolBranch,
+                Law::CoercionGuard,
+            ],
+        );
+        offers(
+            "push 1 push 2 add as_int",
+            &[
+                Law::CodomainCoerce,
+                Law::Fold,
+                Law::Commute,
+                Law::CoercionGuard,
+            ],
+        );
+        offers(
+            "push 1 push 2 tuple 2 as_tuple 2",
+            &[Law::CodomainCoerce, Law::Fold, Law::CoercionGuard],
+        );
         // One wire compared with itself — which is what it is, now that
         // `pick` is a second reference rather than a `copy`.
-        offers(
-            "pick 0 pick 0 equal",
-            &[Law::EqualRefl, Law::CodomainCoerce],
-        );
-        offers(
-            "branch { pick 0 drop 0 not } { not }",
-            &[Law::CodomainCoerce, Law::SelectSame],
-        );
+        offers("pick 0 pick 0 equal", &[Law::EqualRefl]);
+        offers("branch { pick 0 drop 0 not } { not }", &[Law::SelectSame]);
         offers(
             "pick 0 push 1 equal branch { not } { negate }",
-            &[Law::CodomainCoerce, Law::Commute],
+            &[Law::Commute],
         );
         // One operation in both arms is *one box*: the two arms are handed
         // the same sources, so they compute the same value and there is
         // one of it.
-        offers(
-            "branch { add } { add }",
-            &[Law::SelectSame, Law::Commute, Law::CodomainCoerce],
-        );
+        offers("branch { add } { add }", &[Law::SelectSame, Law::Commute]);
         offers(
             "push 1 pick 1 branch { add } { add }",
-            &[Law::SelectSame, Law::Commute, Law::CodomainCoerce],
+            &[Law::SelectSame, Law::Commute],
         );
         // Work after a branch, which is what `select-hoist` reads: the
         // region downstream of the select's answers, lifted out as the
@@ -4406,7 +4513,7 @@ pub(crate) mod tests {
         // whatever made the wire it turns on.
         offers(
             "branch { negate } { negate } negate",
-            &[Law::SelectSame, Law::SelectHoist, Law::CodomainCoerce],
+            &[Law::SelectSame, Law::SelectHoist],
         );
 
         // A literal condition: the select is the blocks it chooses.
@@ -4415,8 +4522,6 @@ pub(crate) mod tests {
             &[Law::SelectLiteral],
         );
     }
-
-    /// Every law the built graph proposes somewhere, and no other.
     fn offers(body: &str, want: &[Law]) {
         let (_terms, graph) = built(body);
         let spent = each_proposal(&graph, body);

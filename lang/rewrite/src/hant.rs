@@ -817,9 +817,14 @@ fn parse_tactic(input: &str) -> Result<(Tactic, &str), String> {
             let after = rest
                 .trim_start()
                 .strip_prefix('(')
-                .ok_or("`fire` expects `(law, …)`")?;
+                .ok_or("`fire` expects `(law, …)` or `(law, …, backward)`")?;
             let (inside, after) = after.split_once(')').ok_or("`fire(` never closes")?;
-            Ok((tactic::fire_first(parse_laws(inside)?), after))
+            // A trailing direction, spelled as `at` and `on` spell one. It
+            // is peeled before the law names are read, since a direction
+            // is no law and `parse_laws` would say so rather than saying
+            // what was meant.
+            let (laws, dir) = split_direction(inside);
+            Ok((tactic::fire_first_in(parse_laws(laws)?, dir), after))
         }
         "repeat" => {
             let (inside, after) =
@@ -857,6 +862,27 @@ fn parse_tactic(input: &str) -> Result<(Tactic, &str), String> {
 /// A law **list** is refused: pointing at one box is a claim about one
 /// rewrite, and `structural` there would mean "whichever of twelve laws
 /// happens to fire", which is the opposite of what naming a box is for.
+/// A trailing `forward` or `backward` peeled off a comma-separated field
+/// list, with the rest handed back.
+///
+/// `forward` is the default and needs no writing: the table states a row
+/// the way round that shrinks wherever the two sides differ in size, so
+/// the direction worth naming is the other one.
+fn split_direction(fields: &str) -> (&str, Direction) {
+    let trimmed = fields.trim_end();
+    for (word, dir) in [
+        ("backward", Direction::Backward),
+        ("forward", Direction::Forward),
+    ] {
+        if let Some(head) = trimmed.strip_suffix(word)
+            && let Some(head) = head.trim_end().strip_suffix(',')
+        {
+            return (head, dir);
+        }
+    }
+    (fields, Direction::Forward)
+}
+
 fn parse_at(inside: &str) -> Result<Tactic, String> {
     let mut fields = spare_last_comma(inside).split(',').map(str::trim);
     let aim = fields
@@ -1421,6 +1447,32 @@ mod tests {
             tactic.as_ref(),
             &Tactic::Repeat(Box::new(tactic::fire_first(vec![Law::NotNot])), None)
         );
+
+        // A direction, written last, the way `at` and `on` write one. It
+        // is peeled before the law names are read, so `fire(law,
+        // backward)` is one law read the other way and not two laws.
+        let entries =
+            parse_hant("proof p = lhs(fire(codomain-coerce, backward)) diagram;").unwrap();
+        let [Step::Rewrite { tactic, .. }, _] = &entries[0].strategy[..] else {
+            panic!("{:?}", entries[0].strategy);
+        };
+        assert_eq!(
+            tactic.as_ref(),
+            &tactic::fire_first_in(vec![Law::CodomainCoerce], Direction::Backward)
+        );
+        // Forward is the default and may still be written.
+        let entries =
+            parse_hant("proof p = lhs(fire(not-not, as-bool-branch, forward)) diagram;").unwrap();
+        let [Step::Rewrite { tactic, .. }, _] = &entries[0].strategy[..] else {
+            panic!("{:?}", entries[0].strategy);
+        };
+        assert_eq!(
+            tactic.as_ref(),
+            &tactic::fire_first(vec![Law::NotNot, Law::AsBoolBranch])
+        );
+        // And a direction on its own is no law list, which is what the
+        // law-name error is for.
+        assert!(parse_hant("proof p = lhs(fire(backward)) diagram;").is_err());
 
         let entries =
             parse_hant("proof p = both(decide branches tree try(fire(not-not))) diagram;").unwrap();

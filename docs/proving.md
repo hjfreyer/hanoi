@@ -181,7 +181,8 @@ Inside `lhs(…)`, `rhs(…)` and `both(…)` is the rewrite language of
 (the whole table — what `diagram` drives), `tree` (`select-hoist` past
 everything but another branch and `cond-hoist` out of every condition,
 until the selects are all at the output and no condition holds one),
-`fire(law, …)` (one directed firing), `at(#box, law)` (one firing at a
+`fire(law, …)` (one directed firing, `fire(law, …, backward)` for the
+other reading), `at(#box, law)` (one firing at a
 **named box**), `on(#wire …, law)` (a law stated onto **named wires** —
 the introduction no search anchors, `on(in0 in1, tuple-cancel)` putting
 the cancelling pair in), `repeat(…)` and `try(…)`. Laws are named as
