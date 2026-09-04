@@ -7,9 +7,10 @@
 //! facts and orders them so a person can follow the program, which is a
 //! different job and is worth its own code.
 //!
-//! A **term** is the wrong shape for the report twice over. A graph is a
-//! DAG and a term is a spine, so anything writing one has to reimpose a
-//! stack and pay for it in routing; and a term has no name for a box, so
+//! A **listing of instructions** is the wrong shape for the report twice
+//! over. A graph is a DAG and a program text is a spine, so anything
+//! writing one has to reimpose a stack and pay for it in routing; and an
+//! instruction has no name for the value it computed, so
 //! two consecutive steps of a proof cannot be compared. An [`Address`] is
 //! a box's name in every graph that computes it — a box is named by what
 //! it computes, and nothing edits one — so a listing keyed by one is a
@@ -31,9 +32,8 @@
 //! prints the listing says otherwise ([`Listing::bold`]) — one goes into
 //! an assertion and a piped log as often as it goes to a terminal.
 //!
-//! So this is the only reading of a stuck goal, and the term language is
-//! left to what it is for: stating a claim, and writing a `via` waypoint by
-//! hand off the boxes a listing names.
+//! So this is the only reading of a stuck goal, and the one a proof's next
+//! step is written off: `at(#nkz, fold)` names the box the listing named.
 //!
 //! ## A branch is a block
 //!
@@ -1367,8 +1367,7 @@ impl fmt::Display for Listing<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::kernel::term::Context;
-    use crate::kernel::{build, tests::term_of};
+    use crate::kernel::tests::built;
 
     /// A branch grown **forwards** over the work after it, and the operand
     /// that work read from outside — now read by a copy in each arm.
@@ -1377,8 +1376,8 @@ mod tests {
     /// here — and it is the shape both the arm reading and the
     /// writing-at-each-use rest on.
     fn grown() -> (Graph, NodeId) {
+        use crate::kernel::prim::Prim;
         use crate::kernel::rules::{Law, apply, propose};
-        use crate::kernel::term::Prim;
 
         let mut graph = built("branch { push 1 } { push 2 } push 10 add");
         let select = graph
@@ -1403,15 +1402,6 @@ mod tests {
                 )
             });
         (graph, shared)
-    }
-
-    /// The graph a body builds, and the arena its term lives in.
-    pub(super) fn built(body: &str) -> Graph {
-        let mut terms = Context::new();
-        let term = term_of(&mut terms, body);
-        let graph = build(&terms, term);
-        graph.check().unwrap_or_else(|e| panic!("{}", e));
-        graph
     }
 
     /// A box's own line, as the listing spells it: the whole address.

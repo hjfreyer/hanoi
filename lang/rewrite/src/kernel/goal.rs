@@ -3,17 +3,15 @@
 //!
 //! The sides are [graphs](crate::kernel::graph), so that a proof can
 //! *rewrite* them, and equality-as-stated is
-//! [isomorphism](crate::kernel::graph::isomorphic) rather than one term
-//! twice. The terms are still where a goal comes from: an identity lowers,
-//! aligns, and **builds**.
+//! [isomorphism](crate::kernel::graph::isomorphic) rather than one program
+//! twice.
 //!
 //! The compiler holds an identity to equal **net** change rather than equal
 //! arity — `pick 1 ; drop` = ε is `(2 -> 2)` against `(0 -> 0)`, and every
-//! counit reads that way. That asymmetry still lives in exactly one place:
-//! here, where the narrower side is padded with
-//! [`under`](crate::kernel::term::Context::under) until the two arities agree,
-//! before either side becomes a graph. Everything downstream is then
-//! arity-exact, which is what lets two graphs share one boundary.
+//! counit reads that way. That asymmetry lives in exactly one place: here,
+//! where the narrower side is padded with [`graph::under`] until the two
+//! arities agree. Everything downstream is then arity-exact, which is what
+//! lets two graphs share one boundary.
 //!
 //! A proof, to the kernel, is a **run**: a flat list of [`Step`]s, and
 //! [`certify`] is the whole of what is asked of one — replay it on the left
@@ -23,10 +21,9 @@
 
 use bytecode::{IdentityIndex, Library};
 
-use crate::kernel;
 use crate::kernel::graph::{self, Graph};
+use crate::kernel::lower::{Error, lower};
 use crate::kernel::rules::{self, Rule, Step};
-use crate::kernel::term::{Context, Error, TermIndex, lower};
 
 /// Two graphs of one arity, claimed to be the same program.
 #[derive(Debug, Clone, PartialEq)]
@@ -41,34 +38,28 @@ impl Goal {
     /// Lowers both sides and pads the narrower; the compiler already refused
     /// any identity whose sides differ in net change, so padding always
     /// brings the arities together.
-    pub fn of_identity(
-        ctx: &mut Context,
-        library: &Library,
-        idx: IdentityIndex,
-    ) -> Result<Goal, Error> {
+    pub fn of_identity(library: &Library, idx: IdentityIndex) -> Result<Goal, Error> {
         let identity = &library.identities[idx];
-        let lhs = lower(ctx, library, identity.lhs)?;
-        let rhs = lower(ctx, library, identity.rhs)?;
-        Ok(Goal::aligned(ctx, lhs, rhs))
+        let lhs = lower(library, identity.lhs)?;
+        let rhs = lower(library, identity.rhs)?;
+        Ok(Goal::aligned(lhs, rhs))
     }
 
-    /// Two terms padded to one arity, then built as graphs.
-    pub fn aligned(ctx: &mut Context, lhs: TermIndex, rhs: TermIndex) -> Goal {
-        let (la, ra) = (ctx.arity(lhs), ctx.arity(rhs));
+    /// Two graphs padded to one arity.
+    pub fn aligned(lhs: Graph, rhs: Graph) -> Goal {
+        let (la, ra) = (lhs.arity(), rhs.arity());
         let (lhs, rhs) = if la.inputs < ra.inputs {
-            (ctx.under(lhs, ra.inputs - la.inputs), rhs)
+            (graph::under(&lhs, ra.inputs - la.inputs), rhs)
         } else {
-            (lhs, ctx.under(rhs, la.inputs - ra.inputs))
+            let k = la.inputs - ra.inputs;
+            (lhs, graph::under(&rhs, k))
         };
         debug_assert_eq!(
-            ctx.arity(lhs),
-            ctx.arity(rhs),
+            lhs.arity(),
+            rhs.arity(),
             "an identity's sides differ by more than padding, which check_identities refuses"
         );
-        Goal {
-            lhs: kernel::build(ctx, lhs),
-            rhs: kernel::build(ctx, rhs),
-        }
+        Goal { lhs, rhs }
     }
 }
 
@@ -87,16 +78,11 @@ impl Goal {
 /// the library says it is: each one is rebuilt from the sentence it names
 /// and must be that program, or the step is refused before it is spent.
 /// Nothing else in a run refers to anything outside the run.
-pub fn certify(
-    goal: &Goal,
-    run: &[Step],
-    ctx: &mut Context,
-    library: &Library,
-) -> Result<(), String> {
+pub fn certify(goal: &Goal, run: &[Step], library: &Library) -> Result<(), String> {
     let mut lhs = goal.lhs.clone();
     for (i, step) in run.iter().enumerate() {
         if let Rule::Open { target, body } = &step.rule {
-            let sentence = lower(ctx, library, *target).map_err(|e| {
+            let sentence = lower(library, *target).map_err(|e| {
                 format!(
                     "step {}: {} does not lower: {}",
                     i + 1,
@@ -104,7 +90,7 @@ pub fn certify(
                     e
                 )
             })?;
-            if *body != kernel::build(ctx, sentence) {
+            if *body != sentence {
                 return Err(format!(
                     "step {}: opens {} to a body that is not its own",
                     i + 1,

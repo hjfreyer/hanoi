@@ -1692,7 +1692,7 @@ pub fn branch_pass() -> Tactic {
 /// run over bodies with branches in branches, and before is compared
 /// against after **on the machine**, at every assignment.
 ///
-/// The condition phase's measure is the graph read as the term it
+/// The condition phase's measure is the graph read as the tree it
 /// unfolds to, weighted so that a condition costs what it decides:
 /// `μ(op(t̄)) = 1 + Σμ(tᵢ)` and `μ(select(c, t̄, ē)) = μ(c)·(1 + Σμ(t̄) +
 /// Σμ(ē))`. A firing takes `μ(c)·(1 + μ(t) + μ(e))·K` to `μ(c)·(1 +
@@ -1732,27 +1732,12 @@ pub fn tree() -> Tactic {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::kernel::term::{Context, Prim};
-    use crate::kernel::{build, rules::replay};
+    use crate::kernel::prim::Prim;
+    use crate::kernel::rules::replay;
+    use crate::kernel::tests::built;
     use crate::query::{KindPat, NodePred};
-    use bytecode::{Value, assemble};
+    use bytecode::Value;
     use std::collections::HashMap;
-
-    fn built(body: &str) -> Graph {
-        let code = format!("sentence probe {{ {} }}", body);
-        let library = assemble(&code).unwrap();
-        let idx = library
-            .names
-            .iter_enumerated()
-            .find(|(_, n)| *n == "probe")
-            .map(|(idx, _)| idx)
-            .unwrap();
-        let mut terms = Context::new();
-        let term = crate::kernel::term::lower(&mut terms, &library, idx).unwrap();
-        let graph = build(&terms, term);
-        graph.check().unwrap();
-        graph
-    }
 
     /// What a proof would write to name that box: as much of its address
     /// as the listing emphasises.

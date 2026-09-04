@@ -32,12 +32,13 @@
 use bytecode::assemble;
 use rewrite::kernel::goal::Goal;
 use rewrite::kernel::graph::{Direction, Graph, NodeKind, Source, isomorphic};
+use rewrite::kernel::lower::lower;
+use rewrite::kernel::prim::Prim;
 use rewrite::kernel::rules;
 use rewrite::kernel::rules::Law;
-use rewrite::kernel::term::{Context, Prim, TermIndex, lower};
 use rewrite::tactic;
 
-fn term_of(terms: &mut Context, body: &str) -> TermIndex {
+fn built(body: &str) -> Graph {
     let code = format!("sentence probe {{ {} }}", body);
     let library = assemble(&code).unwrap();
     let idx = library
@@ -46,7 +47,7 @@ fn term_of(terms: &mut Context, body: &str) -> TermIndex {
         .find(|(_, n)| *n == "probe")
         .map(|(idx, _)| idx)
         .expect("the probe is the one sentence");
-    lower(terms, &library, idx).expect("the probe lowers")
+    lower(&library, idx).expect("the probe lowers")
 }
 
 fn drive(graph: &mut Graph, tactic: &tactic::Tactic) {
@@ -73,16 +74,12 @@ fn introduce(law: Law) -> tactic::Tactic {
 
 /// The goal as it is built, with only the right side settled: the left is
 /// handed over literally, so a test can say which pass does what to it.
-fn probe() -> (Context, Goal) {
-    let mut ctx = Context::new();
-    let lhs = term_of(
-        &mut ctx,
-        "pick 0 is_symbol branch { is_symbol } { drop 0 push true }",
-    );
-    let rhs = term_of(&mut ctx, "drop 0 push true");
-    let mut goal = Goal::aligned(&mut ctx, lhs, rhs);
+fn probe() -> Goal {
+    let lhs = built("pick 0 is_symbol branch { is_symbol } { drop 0 push true }");
+    let rhs = built("drop 0 push true");
+    let mut goal = Goal::aligned(lhs, rhs);
     drive(&mut goal.rhs, &tactic::decide());
-    (ctx, goal)
+    goal
 }
 
 /// Where the route below starts.
@@ -92,7 +89,7 @@ fn probe() -> (Context, Goal) {
 /// graph of values arrives that way: the arm reads the very sources the
 /// branch was handed, so its `is_symbol` *is* the condition's, and there
 /// is nothing to settle.
-fn settled() -> (Context, Goal) {
+fn settled() -> Goal {
     probe()
 }
 
@@ -111,7 +108,7 @@ fn select(graph: &Graph) -> (Source, Source) {
 /// still leaves this open, and should.
 #[test]
 fn the_decision_procedure_does_not_close_it() {
-    let (_ctx, mut goal) = settled();
+    let mut goal = settled();
     drive(&mut goal.lhs, &tactic::decide());
     assert!(
         !isomorphic(&goal.lhs, &goal.rhs),
@@ -128,7 +125,7 @@ fn the_decision_procedure_does_not_close_it() {
 /// representation, which is the same claim with nothing left to run.
 #[test]
 fn the_block_is_the_condition_as_built() {
-    let (_ctx, goal) = probe();
+    let goal = probe();
     let (condition, then_block) = select(&goal.lhs);
     assert_eq!(
         condition, then_block,
@@ -139,7 +136,7 @@ fn the_block_is_the_condition_as_built() {
 /// The whole route, and it closes.
 #[test]
 fn dedup_promise_specialize() {
-    let (_ctx, mut goal) = settled();
+    let mut goal = settled();
     drive(&mut goal.lhs, &introduce(Law::CodomainCoerce));
 
     // The other half of the anchor: the condition is manifestly a bool.

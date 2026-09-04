@@ -2,14 +2,14 @@
 //! program, and a rewrite the business of pointing at one and swapping in
 //! the other.
 //!
-//! [`super`] builds a graph and stops there; nothing shrinks one but a
-//! strategy, and a strategy belongs to whoever is proving something
-//! rather than to the module the graph lives in. So what is here is the
-//! page — this module is the thing `rewrite/src/rules.rs` was for terms,
-//! over graphs instead — and the handful of operations a driver is built
-//! out of: [`sides`], [`find`](crate::kernel::graph::find), [`propose`],
-//! [`apply`], [`replay`]. A law is a row anyone can read, and adding one
-//! is not editing an engine.
+//! [`super`] lowers a sentence to a graph and stops there; nothing shrinks
+//! one but a strategy, and a strategy belongs to whoever is proving
+//! something rather than to the module the graph lives in. So what is here
+//! is the page — the laws themselves — and the handful of operations a
+//! driver is built out of: [`sides`],
+//! [`find`](crate::kernel::graph::find), [`propose`], [`apply`],
+//! [`replay`]. A law is a row anyone can read, and adding one is not
+//! editing an engine.
 //!
 //! ## A rule states its equation; the checker only compares
 //!
@@ -21,11 +21,12 @@
 //! graphs*, and a rewrite is finding one of them and putting the other in
 //! its place.
 //!
-//! What a term version could do in one line — build both sides and compare
-//! — a graph version cannot: a subterm is named by a path, and a subgraph is
-//! named by an **embedding**. So [`Match`] is that embedding written down,
-//! and [`apply`] *verifies* it rather than searching for it: every check is
-//! local, reads one port at a time, and takes no decisions.
+//! Where a subexpression of a program text is named by a path — a walk
+//! from the root — a subgraph is named by an **embedding**: which boxes,
+//! and what the pattern's boundary stands for. So [`Match`] is that
+//! embedding written down, and [`apply`] *verifies* it rather than
+//! searching for it: every check is local, reads one port at a time, and
+//! takes no decisions.
 //!
 //! What a rule *wants* is said in its pattern rather than tested for:
 //! [`Law::SelectHoist`] exports its body's outputs and never the select's
@@ -302,7 +303,7 @@ use crate::kernel::graph::{
 };
 use bytecode::{Codomain, Instruction, Library, SentenceIndex, Value};
 
-use crate::kernel::term::{Arity, Prim};
+use crate::kernel::prim::{Arity, Prim};
 
 // ---- the laws --------------------------------------------------------------------
 
@@ -1914,13 +1915,12 @@ pub fn apply(graph: &mut Graph, step: &Step) -> Result<Step, Error> {
 
 /// A run of the table: every step, paired with the step that undoes it.
 ///
-/// The pairing is what a graph needs and a term did not. A term's step was
-/// undone by flipping a bit, because a `Path` named the same place before
-/// the rewrite and after. Undoing a graph's step puts boxes **back**, and a
-/// box put back is a new box with a new [`NodeId`] — so the undo before it
-/// has to say which ids it handed out, and everything still to be undone
-/// has to be said again in those terms. A derivation is where both halves
-/// are written down so [`Derivation::undo`] can rebase as it walks.
+/// The pairing is what a graph needs. Undoing a step puts boxes **back**,
+/// and a box put back is a new box with a new [`NodeId`] — so the undo
+/// before it has to say which ids it handed out, and everything still to be
+/// undone has to be said again in those ids. A derivation is where both
+/// halves are written down so [`Derivation::undo`] can rebase as it
+/// walks.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Derivation {
     /// Each step and the one that reverses it, in the order they landed.
@@ -2713,10 +2713,9 @@ fn read_off(graph: &Graph, law: Law, id: NodeId) -> Vec<(Rule, NodeId)> {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use crate::kernel::build;
     use crate::kernel::graph::{find, find_pinned, isomorphic, pins_itself};
-    use crate::kernel::term::Context;
-    use bytecode::{Value, assemble};
+    use crate::kernel::tests::built;
+    use bytecode::Value;
 
     /// A law holds. Four claims, and the payload is the only input: the two
     /// sides are *built* from it rather than written out here, so this
@@ -2810,23 +2809,6 @@ pub(crate) mod tests {
         }
     }
 
-    /// The graph a body builds, with the arena its term lives in.
-    fn built(body: &str) -> (Context, Graph) {
-        let code = format!("sentence probe {{ {} }}", body);
-        let library = assemble(&code).unwrap();
-        let idx = library
-            .names
-            .iter_enumerated()
-            .find(|(_, n)| *n == "probe")
-            .map(|(idx, _)| idx)
-            .unwrap();
-        let mut terms = Context::new();
-        let term = crate::kernel::term::lower(&mut terms, &library, idx).unwrap();
-        let graph = build(&terms, term);
-        graph.check().unwrap();
-        (terms, graph)
-    }
-
     fn only(kind: &NodeKind, graph: &Graph) -> NodeId {
         let mut found = graph.live().filter(|(_, k)| *k == kind);
         let (id, _) = found
@@ -2878,7 +2860,6 @@ pub(crate) mod tests {
         out
     }
 
-    /// A graph with a literal on every one of its inputs, as a term.
     /// A closed graph, run: every operation on the machine itself
     /// ([`run_window`], so there is no second semantics), and a select
     /// keeping the block `truthy` says.
@@ -3038,7 +3019,7 @@ pub(crate) mod tests {
 
         // A promised bool with nothing standing on it: the row has
         // nothing to take away, and the shrink is not offered.
-        let (_terms, bare) = built("pick 0 is_symbol");
+        let bare = built("pick 0 is_symbol");
         assert_eq!(count(&bare), 0, "there is no coercion to take off");
 
         // The step that writes one down is stated, at the box that
@@ -3196,7 +3177,7 @@ pub(crate) mod tests {
     /// spent, having checked that the machine reads the graph it left the
     /// way it read the one it was given.
     fn splits(body: &str, prim: Prim) -> Vec<Law> {
-        let (_terms, was) = built(body);
+        let was = built(body);
         let mut graph = was.clone();
         let mut run = Derivation::default();
         let at = only(&NodeKind::Op(prim), &graph);
@@ -3245,7 +3226,7 @@ pub(crate) mod tests {
             ("is_bool as_bool", Prim::IsBool),
             ("as_bool", Prim::AsBool),
         ] {
-            let (_terms, was) = built(body);
+            let was = built(body);
             let mut graph = was.clone();
             let mut run = Derivation::default();
             let at = only(&NodeKind::Op(prim), &graph);
@@ -4523,7 +4504,7 @@ pub(crate) mod tests {
         );
     }
     fn offers(body: &str, want: &[Law]) {
-        let (_terms, graph) = built(body);
+        let graph = built(body);
         let spent = each_proposal(&graph, body);
         for law in want {
             assert!(
@@ -4577,7 +4558,7 @@ pub(crate) mod tests {
     /// account for.
     #[test]
     fn a_match_that_does_not_fit_is_refused() {
-        let (_terms, mut graph) = built("not negate");
+        let mut graph = built("not negate");
         let negate = only(&NodeKind::Op(Prim::Negate), &graph);
         let not = only(&NodeKind::Op(Prim::Not), &graph);
 
@@ -4641,7 +4622,7 @@ pub(crate) mod tests {
     /// A substitution never asks, so backward is a direction like forward.
     #[test]
     fn a_right_hand_side_is_looked_for_like_any_other() {
-        let (_terms, graph) = built("as_bool");
+        let graph = built("as_bool");
         let pair = sides(&Rule::NotNot).unwrap();
         let found = find(&graph, pair.rhs());
         assert_eq!(found.len(), 1, "`not-not`'s answer is standing right there");

@@ -50,13 +50,12 @@ use std::collections::HashMap;
 
 use bytecode::{Library, SentenceIndex};
 
-use crate::kernel;
 use crate::kernel::goal::Goal;
 use crate::kernel::graph::{
     Direction, Graph, Match, NodeId, NodeKind, Sink, Source, align, isomorphic,
 };
+use crate::kernel::lower::lower;
 use crate::kernel::rules::{self, Law, Rule, Step, apply, propose, sides};
-use crate::kernel::term::{Context, lower};
 
 /// How a goal was discharged, as the prover tells it: a tree of the goals
 /// a strategy carved, each with the steps it spent. A **draft** — what
@@ -166,23 +165,17 @@ impl Proof {
 /// landed, a branch's blocks narrowed to their own readers. Nothing here
 /// is checked beyond what stating a step needs; the run is handed to
 /// [`certify`](crate::kernel::goal::certify) for that.
-pub fn flatten(proof: &Proof, goal: &Goal, ctx: &mut Context) -> Result<Vec<Step>, String> {
+pub fn flatten(proof: &Proof, goal: &Goal) -> Result<Vec<Step>, String> {
     let mut cur = goal.lhs.clone();
     let mut run = Vec::new();
-    extract(proof, &mut cur, &goal.rhs, ctx, &mut run)?;
+    extract(proof, &mut cur, &goal.rhs, &mut run)?;
     Ok(run)
 }
 
 /// Drives `cur` — the left side as the run so far has left it — onto
 /// `rhs`, appending what it spends to `run`. `cur` is left where the run
 /// lands, which a caller reads to know what the next thing is aligned to.
-fn extract(
-    proof: &Proof,
-    cur: &mut Graph,
-    rhs: &Graph,
-    ctx: &mut Context,
-    run: &mut Vec<Step>,
-) -> Result<(), String> {
+fn extract(proof: &Proof, cur: &mut Graph, rhs: &Graph, run: &mut Vec<Step>) -> Result<(), String> {
     match proof {
         Proof::Trivial => {
             if isomorphic(cur, rhs) {
@@ -196,19 +189,19 @@ fn extract(
         }
         | Proof::Inlined {
             lhs, rhs: r, sub, ..
-        } => valley(lhs, r, Some(sub), cur, rhs, ctx, run),
-        Proof::Diagram { lhs, rhs: r } => valley(lhs, r, None, cur, rhs, ctx, run),
+        } => valley(lhs, r, Some(sub), cur, rhs, run),
+        Proof::Diagram { lhs, rhs: r } => valley(lhs, r, None, cur, rhs, run),
         // The sub-proof drives the right side onto the left; its run, read
         // backwards from where the left stands, is this claim's.
         Proof::Swapped(sub) => {
             let mut other = rhs.clone();
             let mut back = Vec::new();
-            extract(sub, &mut other, cur, ctx, &mut back)
+            extract(sub, &mut other, cur, &mut back)
                 .map_err(|e| format!("with the sides swapped: {}", e))?;
             invert_onto(cur, rhs, &back, run).map_err(|e| format!("undoing the swapped run: {}", e))
         }
         Proof::SelectSame { then_sub, else_sub } => {
-            split_blocks("`select-same`", cur, then_sub, else_sub, rhs, ctx, run)
+            split_blocks("`select-same`", cur, then_sub, else_sub, rhs, run)
         }
         // η, and then the branch it made spent exactly as `select-same`
         // spends one a goal already had: the expansion's own steps, each
@@ -225,7 +218,7 @@ fn extract(
                     .map_err(|e| format!("a recorded expansion step does not re-apply: {}", e))?;
                 run.push(step.clone());
             }
-            split_blocks("`cases`", cur, then_sub, else_sub, rhs, ctx, run)
+            split_blocks("`cases`", cur, then_sub, else_sub, rhs, run)
         }
     }
 }
@@ -240,7 +233,6 @@ fn split_blocks(
     then_sub: &Proof,
     else_sub: &Proof,
     rhs: &Graph,
-    ctx: &mut Context,
     run: &mut Vec<Step>,
 ) -> Result<(), String> {
     let Some((then, els)) = blocks(cur) else {
@@ -252,7 +244,7 @@ fn split_blocks(
     for (label, block, sub, port) in [("then", then, then_sub, 1), ("else", els, else_sub, 2)] {
         let mut from = block.clone();
         let mut arm = Vec::new();
-        extract(sub, &mut from, rhs, ctx, &mut arm)
+        extract(sub, &mut from, rhs, &mut arm)
             .map_err(|e| format!("in the branch's {} block: {}", label, e))?;
         splice(cur, &block, &arm, Some(port), run)
             .map_err(|e| format!("splicing the {} block's run: {}", label, e))?;
@@ -306,7 +298,6 @@ fn valley(
     sub: Option<&Proof>,
     cur: &mut Graph,
     rhs: &Graph,
-    ctx: &mut Context,
     run: &mut Vec<Step>,
 ) -> Result<(), String> {
     for step in lhs {
@@ -319,7 +310,7 @@ fn valley(
             .map_err(|e| format!("a recorded right step does not re-apply: {}", e))?;
     }
     match sub {
-        Some(sub) => extract(sub, cur, &other, ctx, run)?,
+        Some(sub) => extract(sub, cur, &other, run)?,
         None if isomorphic(cur, &other) => {}
         None => return Err("the recorded drives do not land on one diagram".to_string()),
     }
@@ -539,10 +530,9 @@ fn carry(at: &Match, map: &HashMap<NodeId, NodeId>) -> Result<Match, String> {
 /// library.
 pub fn inline(
     graph: &mut Graph,
-    terms: &mut Context,
     library: &Library,
     only: Option<SentenceIndex>,
-) -> Result<Vec<Step>, crate::kernel::term::Error> {
+) -> Result<Vec<Step>, crate::kernel::lower::Error> {
     let mut opened = Vec::new();
     // One at a time, asked again each time round. A rewrite rebuilds
     // everything downstream of what it replaced, so a call that sat under
@@ -563,11 +553,10 @@ pub fn inline(
         let Some((id, target)) = call else {
             return Ok(opened);
         };
-        let body = lower(terms, library, target)?;
         let step = Step {
             rule: Rule::Open {
                 target,
-                body: kernel::build(terms, body),
+                body: lower(library, target)?,
             },
             dir: Direction::Forward,
             at: Match {
@@ -634,9 +623,9 @@ pub(crate) fn blocks(side: &Graph) -> Option<(Graph, Graph)> {
 ///
 /// A graph is what there is to read: it is what a step acted on, it carries
 /// the boxes a next step would name, and a box's id is stable across a step
-/// so two reports of one proof can be compared. There is no term here — the
-/// translation runs one way, and a graph is answered by naming its boxes,
-/// not by being spelled back out.
+/// so two reports of one proof can be compared. Nothing is spelled back out
+/// as instructions — the walk runs one way, and a graph is answered by
+/// naming its boxes.
 ///
 /// This output is the deliverable of a failed run — it is what says what to
 /// try next, so it is kept as data rather than printed on the spot.
@@ -677,30 +666,29 @@ mod tests {
     use crate::strategy::Prover;
     use bytecode::{Library, assemble};
 
-    fn identity(code: &str) -> (Library, Context, Goal) {
+    fn identity(code: &str) -> (Library, Goal) {
         let library = assemble(code).unwrap();
-        let mut ctx = Context::new();
         let idx = library.identity_by_name("probe").unwrap();
-        let goal = Goal::of_identity(&mut ctx, &library, idx).unwrap();
-        (library, ctx, goal)
+        let goal = Goal::of_identity(&library, idx).unwrap();
+        (library, goal)
     }
 
     /// The draft the prover writes and the run it certifies, for a proof
     /// written in the strategy language.
-    fn prove(code: &str, strategy: &str) -> (Library, Context, Goal, Proof, Vec<Step>) {
-        let (library, mut ctx, goal) = identity(code);
+    fn prove(code: &str, strategy: &str) -> (Library, Goal, Proof, Vec<Step>) {
+        let (library, goal) = identity(code);
         let strategy = crate::hant::parse_hant(&format!("proof probe = {};", strategy))
             .unwrap()
             .remove(0)
             .strategy;
         let strategy = crate::corpus::attach(&strategy, &library).unwrap();
         let outcome = Prover::new(&library)
-            .prove(&mut ctx, goal.clone(), Some(&strategy))
+            .prove(goal.clone(), Some(&strategy))
             .unwrap();
         let Outcome::Closed { draft, run } = outcome else {
             panic!("{}: {:?}", code, outcome);
         };
-        (library, ctx, goal, draft, run)
+        (library, goal, draft, run)
     }
 
     // ---- a valley, and a swap ----
@@ -710,7 +698,7 @@ mod tests {
     /// the lot against the goal as stated.
     #[test]
     fn a_valley_flattens_to_one_run() {
-        let (library, mut ctx, goal, draft, run) = prove(
+        let (library, goal, draft, run) = prove(
             "identity probe { push 1 push 2 add } = { push 0 push 3 add };",
             "diagram",
         );
@@ -722,8 +710,8 @@ mod tests {
         // The run is the flat thing: replayed on the left, it *is* the
         // right, and the draft's own right-side steps are nowhere in it as
         // written — they were turned round.
-        assert_eq!(flatten(&draft, &goal, &mut ctx).unwrap(), run);
-        certify(&goal, &run, &mut ctx, &library).unwrap();
+        assert_eq!(flatten(&draft, &goal).unwrap(), run);
+        certify(&goal, &run, &library).unwrap();
         let mut lhs = goal.lhs.clone();
         replay(&mut lhs, &run).unwrap();
         assert!(isomorphic(&lhs, &goal.rhs));
@@ -732,12 +720,12 @@ mod tests {
     /// `symm` costs nothing: the swapped proof's run, undone, is this one.
     #[test]
     fn a_swap_is_free() {
-        let (library, mut ctx, goal, draft, run) = prove(
+        let (library, goal, draft, run) = prove(
             "identity probe { push 1 push 2 add } = { push 0 push 3 add };",
             "symm diagram",
         );
         assert!(matches!(draft, Proof::Swapped(_)), "{}", draft.summary());
-        certify(&goal, &run, &mut ctx, &library).unwrap();
+        certify(&goal, &run, &library).unwrap();
     }
 
     // ---- a branch, block by block ----
@@ -753,7 +741,7 @@ mod tests {
         // blocks; then `s + (1 + 2)`, else `s + 3`. The right side is
         // `as_bool x * 3 + 3`, which each block is once `not-not` has
         // rewritten `b` — and, for the then block, the sum has folded.
-        let (library, mut ctx, goal, draft, run) = prove(
+        let (library, goal, draft, run) = prove(
             "identity probe \
                { not not push 3 multiply pick 0 is_bool branch { push 1 push 2 add add } { push 3 add } } \
              = { as_bool push 3 multiply push 3 add };",
@@ -769,7 +757,7 @@ mod tests {
             laws,
             vec![Law::NotNot, Law::Fold, Law::NotNot, Law::SelectSame]
         );
-        certify(&goal, &run, &mut ctx, &library).unwrap();
+        certify(&goal, &run, &library).unwrap();
 
         // After the then block's run, its block is the right side's sum
         // over `as_bool x` — and the else block and the condition still
@@ -787,7 +775,7 @@ mod tests {
         let [cond, then, els] = lhs.sources(select)[..] else {
             panic!()
         };
-        use crate::kernel::term::Prim;
+        use crate::kernel::prim::Prim;
         let producer = |src: Source| -> NodeId {
             let Source::Port { node, .. } = src else {
                 panic!()
@@ -820,20 +808,20 @@ mod tests {
     /// to carve, and says so.
     #[test]
     fn a_split_of_no_branch_does_not_flatten() {
-        let (_library, mut ctx, goal) = identity("identity probe { push 1 } = { push 1 };");
+        let (_library, goal) = identity("identity probe { push 1 } = { push 1 };");
         let draft = Proof::SelectSame {
             then_sub: Box::new(Proof::Trivial),
             else_sub: Box::new(Proof::Trivial),
         };
-        let err = flatten(&draft, &goal, &mut ctx).unwrap_err();
+        let err = flatten(&draft, &goal).unwrap_err();
         assert!(err.contains("does not answer with one branch"), "{}", err);
     }
 
     // ---- opening a call ----
 
     /// A call opened in place is the body's boxes on the call's wires —
-    /// the same graph building the opened term would have made — and the
-    /// opens are steps a run carries.
+    /// the same graph the callee lowers to — and the opens are steps a run
+    /// carries.
     #[test]
     fn a_call_opens_in_place() {
         let code = r#"
@@ -850,14 +838,12 @@ mod tests {
                 .map(|(idx, _)| idx)
                 .unwrap()
         };
-        let mut terms = Context::new();
-        let term = lower(&mut terms, &library, named("probe")).unwrap();
-        let mut graph = kernel::build(&terms, term);
+        let mut graph = lower(&library, named("probe")).unwrap();
 
         // A labelled inline opens that sentence and leaves what it calls
         // shut.
         let mut labelled = graph.clone();
-        let opened = inline(&mut labelled, &mut terms, &library, Some(named("outer"))).unwrap();
+        let opened = inline(&mut labelled, &library, Some(named("outer"))).unwrap();
         assert_eq!(opened.len(), 1);
         labelled.check().unwrap();
         assert!(matches!(
@@ -866,18 +852,14 @@ mod tests {
         ));
 
         // Unlabelled opens all the way down, and lands on the graph the
-        // opened term builds.
+        // opened sentences compute.
         let before = graph.clone();
-        let opened = inline(&mut graph, &mut terms, &library, None).unwrap();
+        let opened = inline(&mut graph, &library, None).unwrap();
         assert_eq!(opened.len(), 2);
         graph.check().unwrap();
-        let (_t, flat) = built("not not");
+        let flat = built("not not");
         assert!(isomorphic(&graph, &flat), "\n{}\n{}", graph, flat);
-        assert!(
-            inline(&mut graph, &mut terms, &library, None)
-                .unwrap()
-                .is_empty()
-        );
+        assert!(inline(&mut graph, &library, None).unwrap().is_empty());
 
         // The opens are ordinary steps: replayed on the graph as it was,
         // they land on the same program.
@@ -895,13 +877,13 @@ mod tests {
             #[arity(1,1)] sentence inner { not not }
             identity probe { jump crate::inner } = { as_bool };
         "#;
-        let (library, mut ctx, goal, draft, run) = prove(code, "inline diagram");
+        let (library, goal, draft, run) = prove(code, "inline diagram");
         assert!(
             matches!(draft, Proof::Inlined { .. }),
             "{}",
             draft.summary()
         );
-        certify(&goal, &run, &mut ctx, &library).unwrap();
+        certify(&goal, &run, &library).unwrap();
 
         // The same run, its open lying about the body: `as_bool` is the
         // claim's own right side, so the run would land — and is refused.
@@ -909,9 +891,9 @@ mod tests {
         let Rule::Open { body, .. } = &mut lying[0].rule else {
             panic!("the first step opens the call");
         };
-        let (_t, other) = built("as_bool");
+        let other = built("as_bool");
         *body = other;
-        let err = certify(&goal, &lying, &mut ctx, &library).unwrap_err();
+        let err = certify(&goal, &lying, &library).unwrap_err();
         assert!(err.contains("not its own"), "{}", err);
     }
 
@@ -919,16 +901,16 @@ mod tests {
     /// name boxes the other goal never had.
     #[test]
     fn a_run_answers_for_its_own_claim_only() {
-        let (library, mut ctx, goal, _draft, run) = prove(
+        let (library, goal, _draft, run) = prove(
             "identity probe { push 1 push 2 add } = { push 3 };",
             "diagram",
         );
-        let (other_lib, mut other_ctx, other) = identity("identity probe { push 1 } = { push 2 };");
-        let err = certify(&other, &run, &mut other_ctx, &other_lib).unwrap_err();
+        let (other_lib, other) = identity("identity probe { push 1 } = { push 2 };");
+        let err = certify(&other, &run, &other_lib).unwrap_err();
         assert!(err.contains("does not apply"), "{}", err);
         // And an empty run for a claim whose sides differ does not land.
-        let err = certify(&other, &[], &mut other_ctx, &other_lib).unwrap_err();
+        let err = certify(&other, &[], &other_lib).unwrap_err();
         assert!(err.contains("does not land"), "{}", err);
-        certify(&goal, &run, &mut ctx, &library).unwrap();
+        certify(&goal, &run, &library).unwrap();
     }
 }
