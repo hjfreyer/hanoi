@@ -86,7 +86,7 @@ Two lists group the rows a driver can run to fixpoint:
 | list | rows | what they are |
 |---|---|---|
 | `branching` | `select-literal`, `select-same`, `not-branch`, `specialize-equal`, `specialize-bool`, `specialize-choice` | the branch layer, every row stated at the `select` |
-| `folding` | `fold`, `tested-bool`, `as-tuple-round-trip`, `retuple`, `is-tuple-built`, `not-not`, `and-literal`, `or-literal`, `idem`, `tuple-cancel`, `as-tuple-built`, `equal-refl` | the value layer — what specific instructions compute, with the machine as the judge |
+| `folding` | `fold`, `test-coerced`, `as-tuple-round-trip`, `retuple`, `is-tuple-built`, `not-not`, `and-literal`, `or-literal`, `idem`, `tuple-cancel`, `as-tuple-built`, `equal-refl` | the value layer — what specific instructions compute, with the machine as the judge |
 
 The `decide` drive — what the `diagram` closer runs — spends both lists
 to fixpoint. Six rows are on **no** list at all: `codomain`,
@@ -163,7 +163,7 @@ against `vm` so the two cannot drift apart silently; see
 | law | statement |
 |---|---|
 | `fold` | an operation on literal operands is the answer the machine gives, junk included: `push v̄ ; op` = the pushes of what `vm` answers. The answer side is *built from the run*, so a payload cannot lie about it. An operation reading **no** operand meets the condition vacuously, so `tuple 0` folds to `push ()` — the one window with nothing in it, and the one that anchors at its own box rather than at a literal behind it. |
-| `tested-bool` | `op ; is_T` = `op` and `push (T is Bool)` side by side, for any `op` the instruction set promises answers a bool (the `Bool` row of `codomain`) and any type test `is_T`. One row for the whole family, because one fact answers all of it: a codomain says which test succeeds *and* which fail, and the failures fold a shape guard that asked the wrong question. The rewrite replaces only the test's answer; `op` goes on standing for its other readers. The `Bool` row of the table and only that one, which is where this row and `codomain` part company: writing a promise down is the same sentence at every type, while *deciding* a test from one wants a verdict per (codomain, test) pair. `as_int ; is_int` is true and is not a row yet. |
+| `test-coerced` | asking a coerced value the question its coercion answered: `as_T ; is_T` = `push true`. A coercion's whole content is its codomain, so what it leaves is of that type by construction and the test is decided without anything running — the consequence [docs/totality.md](totality.md) names as why writing a coercion is worth more than reading a check. A coercion is the **paradigm and not the side condition**: what the row reads is `codomain`, which settles the type of every data instruction, so `op ; is_T` = `op` and `push (T is op's codomain)` side by side wherever the table names a type for `op` — `equal ; is_bool` and `add ; is_int` are the same row as `as_int ; is_int`. Stated at the coercion alone it would reach them only after `codomain` wrote the promise down, and no driven list spends that. One row for the family, because one fact answers all of it: a codomain says which test succeeds *and* which fail, and the failures fold a shape guard that asked the wrong question (`is_int ; is_tuple 2` = `push false`). The rewrite replaces only the test's answer; `op` goes on standing for its other readers. The **tuple** codomain is not here: a value of tuple codomain answers `is_tuple n` by comparing widths rather than by naming a type, which is `is-tuple-built`. |
 | `as-tuple-round-trip` | `as_tuple n ; untuple n ; tuple n = as_tuple n`: a value already coerced survives the round trip — the coercion's codomain *is* "a tuple of exactly `n`". `retuple` and `idem` reach the same place in two steps; listed before `retuple` so the longer window wins in one. |
 | `retuple` | `untuple n ; tuple n = as_tuple n`: rebuilding what `untuple` took apart is the coercion, not the identity — the slots may have been junk-filled. Whole or not at all. |
 | `is-tuple-built` | `tuple m ; is_tuple n` = `tuple m ; push (m == n)`: a shape the window watched being built answers a test of that shape. This is the row the `type`/`enum` sugar's guard (`pick 0 ; is_tuple n`) needs. |
@@ -360,7 +360,7 @@ as:
 | coercion idempotence | `idem`, one row over a new `idempotent` fact, measured by `vm` the way `commutative` is |
 | `not-branch` | a row of its own, in the branch layer |
 | `or-literal` | a row of its own, beside `and-literal` |
-| type-test family | `tested-bool`, which now carries *which* test and decides it — the family is the one row, not a row per (codomain, test) pair |
+| type-test family | `test-coerced`, which carries *which* test and decides it from the codomain — the family is the one row, not a row per (codomain, test) pair |
 
 The shape of the trade is the same in all three of the general ones: the
 fact lives on the instruction, `vm` measures it, and the row reads it. A

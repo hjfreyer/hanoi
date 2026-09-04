@@ -923,8 +923,8 @@ identity coercing_to_int_twice_is_coercing_once { as_int as_int } = { as_int };
 identity coercing_to_a_tuple_twice_is_coercing_once
     { as_tuple 2 as_tuple 2 } = { as_tuple 2 };
 
-// `op ; is_T` = `op ; drop ; push (T is op's codomain)`, for an op the
-// instruction set promises answers a bool.
+// `op ; is_T` = `op ; drop ; push (T is op's codomain)`, for an op whose
+// codomain the instruction set settles.
 //
 // `testing_a_test` above is the half where the test succeeds. This is the
 // other half, and it is worth as much: a codomain says which tests **fail**
@@ -940,6 +940,27 @@ test sentence a_promised_bool_answers_every_type_test {
 identity a_promised_bool_is_no_tuple { is_int is_tuple 2 } = { drop 0 push false };
 
 identity a_promised_bool_is_no_integer { is_int is_int } = { drop 0 push false };
+
+// `as_T ; is_T` = `drop ; push true` — the question a coercion is written to
+// settle, asked right after it settled it.
+//
+// The same law again, at the box where the codomain is the whole of what
+// the box is for. Case-splitting a value on `is_int` leaves it opaque in the
+// arm where it is not one, so no amount of rewriting concludes that what came
+// out is an `Int`; after `as_int` it is one by construction, and that is what
+// makes writing a coercion worth more than reading a check. The `Int` half of
+// the same table also decides every *other* test of a coerced value: an `Int`
+// is no bool, and no tuple of any width.
+test sentence a_coerced_value_answers_every_type_test {
+    push ()  as_int  is_int      push true  jump crate::prelude::check_equals ? drop 0
+    push 7   as_bool is_bool     push true  jump crate::prelude::check_equals ? drop 0
+    push 7   as_int  is_bool     push false jump crate::prelude::check_equals ? drop 0
+    push 7   as_int  is_tuple 2  push false jump crate::prelude::check_equals
+}
+
+identity coercing_to_int_settles_the_question { as_int is_int } = { drop 0 push true };
+
+identity a_coerced_int_is_no_tuple { as_int is_tuple 2 } = { drop 0 push false };
 
 // `roll 1 ; op` = `op`, for the commutative operators.
 //

@@ -34,7 +34,7 @@ Facts about instructions live **on the instruction** and are measured by
 `vm` — `truthy`, `op_arity`, `codomain`, `commutative`, `idempotent` —
 and the rewriter reads them there rather than keeping its own. A row may
 read one to stand for a whole family (`comm`, `idem`, `codomain`,
-`tested-bool`), which is the same discipline seen from the other end: the table asks the
+`test-coerced`), which is the same discipline seen from the other end: the table asks the
 instruction set which instructions a law is about instead of naming them
 itself. `fold` executes its window on a scratch VM rather than
 reimplementing any operation. A law that turns on what the machine

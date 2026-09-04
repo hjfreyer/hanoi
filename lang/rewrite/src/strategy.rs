@@ -1897,6 +1897,13 @@ mod tests {
                 "identities::coercing_to_a_tuple_twice_is_coercing_once",
                 "identities::a_promised_bool_is_no_tuple",
                 "identities::a_promised_bool_is_no_integer",
+                // `test-coerced` at the box its name is for: a coercion's
+                // codomain settles the very question `is_T` asks, and the
+                // same table decides every other test of it. Both halves
+                // arrived when the row stopped reading only the `Bool`
+                // entry.
+                "identities::coercing_to_int_settles_the_question",
+                "identities::a_coerced_int_is_no_tuple",
             ],
             "the table's reach changed"
         );

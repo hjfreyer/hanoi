@@ -248,7 +248,10 @@ as_tuple n ; untuple n      =  untuple n
 ```
 
 The first is why a coercion is idempotent; the second and third are why writing
-one is worth more than reading a check. `as_bool` has a fourth: it is the
+one is worth more than reading a check. The first two are rows of
+[docs/rules.md](rules.md) — `idem` and `test-coerced` — and both are stated
+over the whole instruction set rather than over the coercions, since what makes
+them true is the codomain and every data instruction has one. `as_bool` has a fourth: it is the
 coercion `not`, `and`, `or` and `branch` already apply to their operands, so it
 is absorbed by any of them — `as_bool ; branch` is `branch`.
 

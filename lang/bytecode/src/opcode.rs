@@ -333,7 +333,7 @@ impl Instruction {
     /// every candidate on every shape of operand and holds this table to what
     /// it finds. A wrong entry is a soundness bug rather than an inaccurate
     /// comment: the rewriter's `codomain` row writes `op = op ; as_T` on the
-    /// strength of it, and `tested-bool` decides `op ; is_T` from it.
+    /// strength of it, and `test-coerced` decides `op ; is_T` from it.
     ///
     /// `None` is "nothing about the instruction decides it", and the entries
     /// worth naming:
