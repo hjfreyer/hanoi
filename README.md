@@ -48,7 +48,7 @@ Hanoi supports two keywords to define execution blocks:
 ### Annotations
 Sentences and functions can be annotated with metadata used by the compiler and static verification tools:
 - `#[arity(inputs, outputs)]`: Declares the expected stack transition (implicit `#[arity(1, 1)]` for `function`).
-- `#[type(A -> B)]`: Gives a function a type, `A` and `B` being specs in the grammar of the `type` keyword. It is sugar for an identity, `<name>_has_type`, claiming that a well-formed input gives a well-formed output; `bin/prove` discharges it.
+- `#[type(A -> B)]`: Gives a `function` a type (and only a `function`), `A` and `B` being specs in the grammar of the `type` keyword. It is sugar for an identity, `<name>_has_type`, claiming that a well-formed input gives a well-formed output; `bin/prove` discharges it.
 - `#[precondition(fn_name)]`: Names a `1 -> 1` function that must evaluate to `true` on the input for the annotated function to be considered safe to call.
 - `#[postcondition(fn_name)]`: Names a `1 -> 1` function that must evaluate to `true` on the output, given the precondition (if any) held on the input.
 

@@ -168,7 +168,7 @@ payload paths now resolve, and `type_tests.hana` pins the behavior.
 | sugar | core |
 |---|---|
 | `function f { … }` | `sentence f { … }` + `Annotation::Arity(1, 1)` |
-| `#[type(A -> B)] function f { … }` | the sentence unchanged, plus `identity f_has_type { pick 0 …A… branch { jump f …B… } { drop 0 push true } } = { drop 0 push true };` beside it, `Arity(1, 1)` on both — and `Arity(1, 1)` on the sentence too, if `sentence` was the keyword |
+| `#[type(A -> B)] function f { … }` | the sentence unchanged, plus `identity f_has_type { pick 0 …A… branch { jump f …B… } { drop 0 push true } } = { drop 0 push true };` beside it, `Arity(1, 1)` on both. Only a `function` may carry one; the parser refuses it on a `sentence` |
 | `type N spec;` | `mod N { export sentence check { …spec… } }`, `Total` added if absent |
 | `enum N { V(specs), … }` | `mod N { mod V { symbol tag; mod Body { check }; check }, …; check }` |
 | `mod m compose_X(args);` | `mod m { …template items… }`, plus sibling `__anon_mod_N` for nested composers |

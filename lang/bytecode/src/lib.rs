@@ -1306,17 +1306,19 @@ mod tests {
         );
     }
 
-    /// A type `A -> B` is a function's, so a sentence given one is held to
-    /// `1 -> 1` whether or not it said `function`.
+    /// A type `A -> B` is a function's, and a `sentence` given one is refused
+    /// rather than made a function behind the keyword's back — even one whose
+    /// body happens to be `1 -> 1`.
     #[test]
-    fn a_type_annotation_makes_a_sentence_a_function() {
-        assemble("#[type(bool -> bool)] sentence negation { not }").unwrap();
-        let err = assemble("#[type(int -> int)] sentence sum { add }").unwrap_err();
+    fn a_type_annotation_belongs_on_a_function_not_a_sentence() {
+        let err = assemble("#[type(bool -> bool)] sentence negation { not }").unwrap_err();
         assert!(
-            err.contains("requires 2 inputs, which exceeds its annotated arity 1"),
+            err.contains("`#[type]` is not a `sentence` annotation"),
             "{}",
             err
         );
+        assert!(err.contains("declare this with `function`"), "{}", err);
+        assemble("#[type(bool -> bool)] function negation { not }").unwrap();
     }
 
     /// The identity lands in the sentence's own module, so its name shares
