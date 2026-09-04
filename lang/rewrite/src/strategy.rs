@@ -3,7 +3,7 @@
 //! A proof mirrors a tree of goals, and a goal is two
 //! [graphs](crate::kernel::graph). A strategy acts on one: manipulations
 //! transform it — the tactic steps rewrite a side in place, `inline` opens
-//! calls, `symm` turns it — a splitter (`via`, `select-same`) replaces it
+//! calls, `symm` turns it — a splitter (`select-same`, `cases`) replaces it
 //! with independent subgoals each carrying its own strategy, and
 //! `diagram` closes it. A goal
 //! whose sides have become **isomorphic** closes on its own, before any
@@ -43,7 +43,7 @@ use crate::kernel::goal::{self, Goal};
 use crate::kernel::graph::{self, Address, Graph, Named, NodeId, Pair, Prefix, Sink, Source};
 use crate::kernel::rules::{self, Derivation};
 use crate::kernel::term::{Context, Error, Prim};
-use crate::proof::{self, Outcome, Proof, Residual, against};
+use crate::proof::{self, Outcome, Proof, Residual};
 use crate::query::Query;
 use crate::tactic;
 use crate::tactic::{MatchSpec, Reader, Readers, SrcExpr, Tactic};
@@ -67,12 +67,7 @@ struct Lemma {
 
 /// Proves goals against one library.
 ///
-/// Every step reads the goal's terms out of a [`Context`] and writes the
-/// terms it makes back into it, so the one arena is threaded through: a
-/// waypoint read at load time, the goal, and every subgoal a strategy carves
-/// out of it are all places in it.
-///
-/// It also **remembers what it has proved**, which is what a `by` spends. A
+/// It **remembers what it has proved**, which is what a `by` spends. A
 /// prover is filled by whoever drives it — [`Prover::learn`] after each
 /// close, in the corpus's [proving
 /// order](crate::corpus::Corpus::proving_order) — and a `by` naming a claim
@@ -118,8 +113,8 @@ impl<'l> Prover<'l> {
     /// beside the certified run that takes the one onto the other, which is
     /// what a `by` carries in. Nothing about *how* the claim closed is
     /// kept: every close is a flat run by the time it is certified, so a
-    /// claim proved by `via`, by `inline`, by `select-same` or by driving
-    /// both sides together is as citable as one driven from the left.
+    /// claim proved by `inline`, by `select-same` or by driving both sides
+    /// together is as citable as one driven from the left.
     ///
     /// Remembers a claim that closed, as what a `by` spends: its two sides
     /// as the goal built them, and the certified run that takes the one
@@ -184,8 +179,8 @@ impl<'l> Prover<'l> {
 
     /// One strategy on one goal. A goal whose sides are one graph —
     /// isomorphic — is closed before any step runs, at every level, so a
-    /// cut's side that a manipulation made trivial needs no steps of its
-    /// own.
+    /// split's block that a manipulation made trivial needs no steps of
+    /// its own.
     fn run(&self, ctx: &mut Context, strategy: &[Step<Body>], goal: Goal) -> Result<Draft, Error> {
         if graph::isomorphic(&goal.lhs, &goal.rhs) {
             return Ok(Draft::Closed(Proof::Trivial));
@@ -400,58 +395,6 @@ impl<'l> Prover<'l> {
                 })
             }
 
-            Step::Via {
-                waypoint,
-                left,
-                right,
-            } => {
-                let Body::Stone(waypoint) = *waypoint else {
-                    unreachable!("the loader reads a via body as a stone");
-                };
-                // The cut is a claim, so a waypoint whose stack effect cannot
-                // sit between the sides is refused here, loudly, rather than
-                // producing goals nothing could ever close.
-                if ctx.arity(waypoint).net() != goal.lhs.arity().net() {
-                    let why = format!(
-                        "the `via` waypoint's net stack change ({}) is not the goal's ({})",
-                        ctx.arity(waypoint).net(),
-                        goal.lhs.arity().net()
-                    );
-                    return Ok(Draft::Stuck(gave_up(&goal, &why)));
-                }
-                // Two goals, fully independent from here: each side takes its
-                // own road, and proving both proves the whole by transitivity.
-                // A narrower waypoint is padded as a term before it builds;
-                // a wider one would pad the *goal*, which is not a step a
-                // run can carry, so a proof may not cut there.
-                if ctx.arity(waypoint).inputs > goal.lhs.arity().inputs {
-                    let why = format!(
-                        "the `via` waypoint takes {} input(s) and the goal {}: a waypoint may \
-                         be narrower than the goal, not wider",
-                        ctx.arity(waypoint).inputs,
-                        goal.lhs.arity().inputs
-                    );
-                    return Ok(Draft::Stuck(gave_up(&goal, &why)));
-                }
-                let (lhs, stone) = against(ctx, &goal.lhs, waypoint);
-                let sub = Goal { lhs, rhs: stone };
-                let left_sub = match self.side(ctx, "in the left half of the cut", left, sub)? {
-                    Ok(p) => p,
-                    Err(residual) => return Ok(Draft::Stuck(residual)),
-                };
-                let (rhs, stone) = against(ctx, &goal.rhs, waypoint);
-                let sub = Goal { lhs: stone, rhs };
-                let right_sub = match self.side(ctx, "in the right half of the cut", right, sub)? {
-                    Ok(p) => p,
-                    Err(residual) => return Ok(Draft::Stuck(residual)),
-                };
-                Ok(Draft::Closed(Proof::Cut {
-                    waypoint,
-                    left_sub,
-                    right_sub,
-                }))
-            }
-
             // The other splitter, and the one that eliminates a branch
             // rather than introducing one: the left side answers with a
             // `select`, so the goal `select(c, T, E) = B` is the two goals
@@ -514,10 +457,10 @@ impl<'l> Prover<'l> {
             }
 
             Step::Inline(label) => {
-                // A label opens one sentence's calls and leaves the rest shut,
-                // which is what lets a waypoint keep naming the calls it does
-                // not care about: unfolding everything means spelling
-                // everything out on the other side of the cut.
+                // A label opens one sentence's calls and leaves the rest
+                // shut, which is what lets a proof open the one call the
+                // claim turns on without spelling out everything the rest
+                // of the side happens to name.
                 let only = match label {
                     None => None,
                     Some(Body::Target(idx)) => Some(*idx),
@@ -1014,7 +957,7 @@ mod tests {
     use super::*;
     use crate::hant::parse_hant;
     use crate::kernel::graph::NodeKind;
-    use crate::kernel::term::Prim;
+    use crate::kernel::term::{Arity, Prim};
     use bytecode::{Value, assemble};
 
     /// The live boxes of a graph, in id order: what a residual's side is,
@@ -1049,7 +992,7 @@ mod tests {
 
     /// Proves the identity named `name`, with the strategy written as a
     /// `.hant` entry body, or the default when `strategy` is `None` —
-    /// reading `via` bodies exactly as `corpus::load` does.
+    /// resolving its names exactly as `corpus::load` does.
     ///
     /// The arena comes back with the outcome: a residual names its terms by
     /// index, so reading one means keeping the context it was built in.
@@ -1061,7 +1004,7 @@ mod tests {
         let mut ctx = Context::new();
         let strategy = entries
             .first()
-            .map(|e| crate::corpus::attach(&mut ctx, &e.strategy, &library).unwrap());
+            .map(|e| crate::corpus::attach(&e.strategy, &library).unwrap());
         let idx = library.identity_by_name(name).unwrap();
         let goal = Goal::of_identity(&mut ctx, &library, idx).unwrap();
         let outcome = Prover::new(&library)
@@ -1162,26 +1105,39 @@ mod tests {
     #[test]
     fn a_labelled_inline_opens_one_sentence_and_leaves_the_rest_shut() {
         // `outer` calls `inner`. Opening `outer` alone leaves the call to
-        // `inner` standing, so the waypoint can name it rather than spell it,
-        // and the summary says which sentence was spent.
+        // `inner` standing, which the residual shows: the left side is that
+        // one call box and nothing else, where an unlabelled `inline` would
+        // have opened it too.
         let code = r#"
             #[arity(1,1)] sentence inner { drop 0 push true }
             #[arity(1,1)] sentence outer { jump crate::inner }
             identity probe { jump crate::outer } = { drop 0 push true };
         "#;
-        let (_ctx, outcome) = prove_with(
-            code,
-            "probe",
-            Some("inline(outer) via { call inner } (right: inline)"),
-        );
-        let Outcome::Closed { draft: proof, .. } = outcome else {
-            panic!("the opened goal is `call inner` against the claim");
+        let inner = |library: &bytecode::Library| {
+            library
+                .names
+                .iter_enumerated()
+                .find(|(_, n)| *n == "inner")
+                .map(|(idx, _)| idx)
+                .unwrap()
+        };
+        let library = assemble(code).unwrap();
+        let (_ctx, outcome) = prove_with(code, "probe", Some("inline(outer) exact"));
+        let Outcome::Stuck(residual) = outcome else {
+            panic!("`exact` fails and shows the goal as it stands");
         };
         assert_eq!(
-            proof.summary(),
-            "inline outer; cut (left: the two sides are one graph; \
-             right: inline; the two sides are one graph)"
+            kinds(&residual.lhs_graph),
+            vec![NodeKind::Call {
+                target: inner(&library),
+                arity: Arity::new(1, 1),
+            }],
+            "the labelled `inline` opened `outer` and left `inner` shut"
         );
+
+        // The label is what did it: opening everything closes the claim.
+        let (_ctx, opened) = prove_with(code, "probe", Some("inline diagram"));
+        assert!(matches!(opened, Outcome::Closed { .. }));
     }
 
     #[test]
@@ -1207,8 +1163,7 @@ mod tests {
         // that failed, so it is caught when the entry is attached.
         let library = assemble("identity probe { is_bool } = { is_bool };").unwrap();
         let entries = parse_hant("proof probe = inline(nowhere) diagram;").unwrap();
-        let err =
-            crate::corpus::attach(&mut Context::new(), &entries[0].strategy, &library).unwrap_err();
+        let err = crate::corpus::attach(&entries[0].strategy, &library).unwrap_err();
         assert!(err.contains("no sentence is called"), "{}", err);
     }
 
@@ -1325,45 +1280,7 @@ mod tests {
         };
     }
 
-    #[test]
-    fn a_cut_splits_the_goal_and_closes_each_half() {
-        // `is_bool ; is_bool` = `is_int ; is_bool`, cut at the normal form
-        // both sides reach: two independent goals, each decided by the
-        // diagram.
-        let (_ctx, outcome) = prove_with(
-            "identity probe { is_bool is_bool } = { is_int is_bool };",
-            "probe",
-            Some("via { drop(1) ; push true }"),
-        );
-        let Outcome::Closed { draft: proof, .. } = outcome else {
-            panic!("both halves close");
-        };
-        assert_eq!(
-            proof.summary(),
-            "cut (left: the two sides are one diagram; right: the two sides are one diagram)"
-        );
-    }
 
-    #[test]
-    fn a_cut_lets_each_half_take_its_own_road() {
-        // The right half compares the waypoint against a call, so it inlines;
-        // the left half needs no such thing. Fully independent strategies.
-        let (_ctx, outcome) = prove_with(
-            r#"
-            sentence drop_and_true { drop 0 push true }
-            identity probe { is_bool is_bool } = { jump crate::drop_and_true };
-            "#,
-            "probe",
-            Some("via { drop(1) ; push true } (right: inline diagram)"),
-        );
-        let Outcome::Closed { draft: proof, .. } = outcome else {
-            panic!("both halves close");
-        };
-        assert_eq!(
-            proof.summary(),
-            "cut (left: the two sides are one diagram; right: inline; the two sides are one graph)"
-        );
-    }
 
     #[test]
     fn a_swapped_goal_that_sticks_says_which_way_round_it_is() {
@@ -1388,41 +1305,7 @@ mod tests {
         );
     }
 
-    #[test]
-    fn a_wrong_waypoint_fails_its_half_by_name() {
-        // `not` has the right arity but is no midpoint: the left goal,
-        // `is_bool ; is_bool` = `not`, is false and says so.
-        let (_ctx, outcome) = prove_with(
-            "identity probe { is_bool is_bool } = { is_int is_bool };",
-            "probe",
-            Some("via { not }"),
-        );
-        let Outcome::Stuck(residual) = outcome else {
-            panic!("the left half is false");
-        };
-        assert!(
-            residual.path.iter().any(|p| p.contains("left half")),
-            "{:?}",
-            residual.path
-        );
-    }
 
-    #[test]
-    fn a_waypoint_off_the_goal_net_is_refused_loudly() {
-        let (_ctx, outcome) = prove_with(
-            "identity probe { is_bool is_bool } = { is_int is_bool };",
-            "probe",
-            Some("via { push 1 }"),
-        );
-        let Outcome::Stuck(residual) = outcome else {
-            panic!("the waypoint's net does not fit");
-        };
-        assert!(
-            residual.stopped.contains("net stack change"),
-            "{}",
-            residual.stopped
-        );
-    }
 
     #[test]
     fn a_false_goal_reports_a_residual() {
@@ -1509,8 +1392,8 @@ mod tests {
     }
 
     /// A case that fails names which one it stood in, on top of whatever
-    /// its own strategy complained about — the same labelling a `via`
-    /// half or a `select-same` block gets.
+    /// its own strategy complained about — the same labelling a
+    /// `select-same` block gets.
     #[test]
     fn a_failed_case_names_itself() {
         let code = "identity probe { is_bool is_bool } = { drop 0 push true };";
@@ -1841,9 +1724,9 @@ mod tests {
             .and_then(std::path::Path::parent)
             .expect("the crate sits in the workspace, beside the corpus")
             .join("hana");
-        let mut corpus = crate::corpus::load(&tests).unwrap();
+        let corpus = crate::corpus::load(&tests).unwrap();
         let library = &corpus.library;
-        let terms = &mut corpus.terms;
+        let terms = &mut Context::new();
         let mut closed = Vec::new();
         for (idx, identity) in library.identities.iter_enumerated() {
             let mut goal = Goal::of_identity(terms, library, idx).unwrap();

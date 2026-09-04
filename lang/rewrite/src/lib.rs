@@ -24,8 +24,7 @@
 //! [`strategy`] interprets one, writing a [`proof`] — a *draft*, the tree
 //! of goals it carved and the steps each spent — that [`proof::flatten`]
 //! turns into the one run the kernel is handed; [`render`] lays a stuck
-//! graph out for reading; [`parse`] reads a `via` waypoint back out of the
-//! language a term prints in; [`corpus`] loads a source tree's identities
+//! graph out for reading; [`corpus`] loads a source tree's identities
 //! and proofs together. A bug in any of these seeds a step the kernel
 //! refuses or a run that does not land, never a wrong graph. `bin/prove`
 //! drives the lot.
@@ -41,7 +40,6 @@
 pub mod corpus;
 pub mod hant;
 pub mod kernel;
-pub mod parse;
 pub mod proof;
 pub mod query;
 pub mod render;

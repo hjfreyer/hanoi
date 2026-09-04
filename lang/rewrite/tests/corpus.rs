@@ -41,13 +41,14 @@ fn prove_them(corpus: &mut corpus::Corpus, expected: &[&str]) {
     let order = corpus.proving_order().unwrap();
     assert_eq!(order.len(), corpus.library.identities.len());
     let mut prover = Prover::new(&corpus.library);
+    let mut terms = rewrite::kernel::term::Context::new();
     let mut stragglers = Vec::new();
     for idx in order {
         let name = corpus.library.identities[idx].name.clone();
-        let goal = Goal::of_identity(&mut corpus.terms, &corpus.library, idx).unwrap();
+        let goal = Goal::of_identity(&mut terms, &corpus.library, idx).unwrap();
         let stated = goal.clone();
         match prover
-            .prove(&mut corpus.terms, goal, corpus.proofs.get(&idx))
+            .prove(&mut terms, goal, corpus.proofs.get(&idx))
             .unwrap()
         {
             Outcome::Closed { run, .. } => prover.learn(idx, &stated, &run),
