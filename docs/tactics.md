@@ -41,7 +41,7 @@ backward steps exist as data first, and grow a spelling here when a
 proof needs one.
 
 Wherever commas separate — a law list, an `at`'s or an `on`'s fields,
-and the sides of a `via` or a `cases` — **the last one is optional**:
+and the blocks of a `select-same` or the cases of a `cases` — **the last one is optional**:
 
 ```text
 lhs(saturate(
@@ -279,7 +279,7 @@ is a decision tree said in a graph.
 
 Both phases terminate, and the arguments are in `tactic::tree`: a
 multiset over what the copies read for the hoisting phase, and for the
-condition phase the unfolded term weighted so that a condition costs
+condition phase the tree the graph unfolds to, weighted so that a condition costs
 what it decides. The first of those is **not currently a proof**. It
 leaned on a select never being copied, which held while a select carried
 every answer of its branch; now that it carries one, a hoist over a

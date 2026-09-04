@@ -17,23 +17,26 @@ discard or share work.
 ## Reading the equations
 
 Programs are graphs: one box per operation, wires carrying values between
-them, a branch as a single `select` with its arms laid out in front of
-it. The equations below are stated in the term language as
-pseudocode, because a linear spelling reads better than a wiring list —
-but the graph is what a law actually is, and the term spelling is a
-picture of it.
+them, a branch as a `select` per answer with its arms laid out in front
+of them. The equations below are written as **stack-program pseudocode**,
+the way a Hana sentence reads, because a linear spelling reads better
+than a wiring list — but the graph is what a law actually is, and the
+linear spelling is a picture of it.
 
-- `;` is composition in program order — the left factor runs first.
-- `*` is the tensor: `A * B` is A and B side by side, A on the deeper
-  stack region. `dip { A }` is `A * id(1)`.
-- `id(n)`, `copy(n)`, `drop(n)`, `swap` — a wire, a fan-out, a discard, a
-  crossing. **None of these is a box.** They are how a stack program
-  spells things a graph of values says by naming: a fan-out is one source
-  named twice, a discard is a source named nowhere, a crossing is two
-  names in the other order, and a wire is nothing at all.
+- `;` is "and then": the left runs first, and what it leaves the right
+  reads. There is no such box — sequencing is one box's output wire being
+  another's input.
+- `copy`, `drop`, `swap` — a fan-out, a discard, a crossing. **None of
+  these is a box either**, and neither is a value an operation simply did
+  not touch. They are what a stack program has to write down to say
+  things a graph of values says by naming: a fan-out is one source named
+  twice, a discard is a source named nowhere, a crossing is two names in
+  the other order, and a value nothing touched is a source still sitting
+  where it was.
 - `if c { T } else { E }` — a branch. In the graph that is one `select`
-  box: the condition at port 0, then the two blocks. Both arms are handed
-  the same sources, so whatever they compute alike they compute *once*.
+  box per answer: the condition at port 0, then the two blocks. Both arms
+  are handed the same sources, so whatever they compute alike they
+  compute *once*.
 
 Two facts about windows apply to every row. A law is stated in its
 minimal window and congruence is free: a match is an embedding, so every
@@ -55,12 +58,12 @@ answers with the one that is already there. So the wiring theory is not a
 set of laws that fire — it is a set of things the representation cannot
 say:
 
-- associativity and units of `;` and `*` — sequencing is one box's output
-  wire being another's input; there is no `;` node to re-associate;
-- the interchange laws — with no `;` or `*` stored there is nothing to
-  interchange;
+- associativity and units of sequencing — one box's output wire is
+  another's input; there is no node to re-associate;
+- the interchange laws — with nothing stored to say what ran beside what,
+  there is nothing to interchange;
 - everything about `swap` — a crossing is not recorded, so
-  `swap ; swap = id(2)`, naturality of the crossing, and the braid
+  `swap ; swap` doing nothing, naturality of the crossing, and the braid
   relation are all one wiring. What *is* recorded is which operand of a
   box is which, so `swap ; op = op` for a commutative `op` is a row after
   all, and `comm` is it: the equation is about the operand order, not
@@ -196,7 +199,7 @@ against `vm` so the two cannot drift apart silently; see
 | `and-literal` | `and` with a literal operand is decided by `truthy` alone — short-circuiting as an equation. A truthy literal contributes only the coercion: the answer is `as_bool` of the other operand. The one falsy value decides everything: `push false`, the other operand discarded. This is the row that lets a case split spend a **conjunction** one conjunct at a time. |
 | `or-literal` | the dual of `and-literal`, with the poles exchanged: the one **falsy** value contributes only the coercion — the answer is `as_bool` of the other operand — and a truthy literal decides everything: `push true`, the other operand discarded. This is what lets a case split spend a **disjunction** one disjunct at a time. |
 | `idem` | `op ; op = op`, for any `op` the instruction set says is `idempotent`. One row for a family, and the family is the three coercions: a coercion's whole content is its **codomain**, so what it leaves is already of the type it forces. Backwards it is the clone, which is what a proof wants when the shape it is heading for spells the coercion twice. |
-| `tuple-cancel` | `tuple n ; untuple n = id(n)`: taking apart what `tuple n` built answers the built elements. The tuple is not part of the equation — a substitution deletes nothing, so one something else reads stays standing. |
+| `tuple-cancel` | `tuple n ; untuple n` leaves the elements it was built from: taking apart what `tuple n` built answers them. The tuple is not part of the equation — a substitution deletes nothing, so one something else reads stays standing. |
 | `equal-refl` | `equal` on one wire read twice is `true`: `equal` is structural identity and the language is deterministic and pure. |
 
 ## Rows no list drives
