@@ -6,9 +6,9 @@
 //! kept apart from it because the two are different things. A graph knows
 //! what a box takes and leaves, what reads what, whether it holds together,
 //! and whether another graph is the same program. It knows nothing about
-//! terms, laws, tactics or proofs; the traffic in that direction is all the
-//! kernel's, which [`build`](crate::kernel::build)s one from a term and
-//! never turns one back.
+//! sentences, laws, tactics or proofs; the traffic in that direction is all
+//! the kernel's, which [`lower`](crate::kernel::lower)s one out of a
+//! sentence and never turns one back.
 //!
 //! ## A box is what it computes
 //!
@@ -108,7 +108,7 @@ use std::fmt;
 
 use bytecode::SentenceIndex;
 
-use crate::kernel::term::{Arity, Prim};
+use crate::kernel::prim::{Arity, Prim};
 
 // ---- the graph ----------------------------------------------------------------
 
@@ -360,7 +360,7 @@ pub enum NodeKind {
     /// One prim, `push` included.
     Op(Prim),
     /// A sentence called by name, left unopened; the arity is carried for
-    /// the same reason [`Term::Call`](crate::kernel::term::Term::Call) carries it.
+    /// the same reason the walk that built it looked the arity up.
     Call { target: SentenceIndex, arity: Arity },
     /// `select`: the two blocks of **one** answer, and the condition that
     /// keeps one of them. A branch is this box and nothing else.
@@ -388,7 +388,7 @@ pub enum NodeKind {
 
 impl NodeKind {
     /// What this box takes and leaves — the same table
-    /// [`Context::arity`](crate::kernel::term::Context::arity) keeps for terms.
+    /// [`Graph::arity`] answers for a whole graph.
     pub fn arity(&self) -> Arity {
         match self {
             NodeKind::Op(prim) => prim.arity(),
@@ -1064,15 +1064,15 @@ pub(crate) fn lift(
 
 // ---- padding ---------------------------------------------------------------------
 
-/// The graph as `id(k) * itself` reads: `k` fresh boundary wires passed
-/// straight through beneath it.
+/// The same graph with `k` fresh boundary wires passed straight through
+/// beneath it.
 ///
-/// This is the graph-side spelling of
-/// [`Context::under`](crate::kernel::term::Context::under), and it exists for the
-/// same reason: a goal pads its narrower side until the arities agree, and
-/// once a side is a graph the padding has to be said on the graph. Every
-/// box is rebuilt, since a box that reads `Input(i)` is a different box
-/// once that input is `Input(i + k)`.
+/// The one place padding is ever said. A sentence needs none — a stack of
+/// sources says "these went past untouched" by not mentioning them — but a
+/// [`Goal`](crate::kernel::goal::Goal) whose sides were stated at different
+/// depths has to bring them to one boundary, and by then both sides are
+/// graphs. Every box is rebuilt, since a box that reads `Input(i)` is a
+/// different box once that input is `Input(i + k)`.
 pub fn under(graph: &Graph, k: usize) -> Graph {
     if k == 0 {
         return graph.clone();
@@ -1404,7 +1404,8 @@ impl Pair {
 /// A part of a host graph, pointed at: the claim that some pattern graph
 /// *is* these boxes, reading these sources.
 ///
-/// Not a path. A term's subterm has a name in the term; a graph's does not,
+/// Not a path. A subexpression has a name in a program text; a subgraph
+/// does not,
 /// so the embedding itself is the name — which box is which, and what the
 /// pattern's boundary inputs stand for outside.
 ///
@@ -2053,11 +2054,11 @@ mod tests {
     #[test]
     fn the_same_program_aligns_box_for_box() {
         // The sum, built as the whole of a program: three boxes, ids 0..3.
-        let (_t, whole) = built("push 1 push 2 add");
+        let whole = built("push 1 push 2 add");
         // The same sum as the tail of a longer one, re-closed to answer
         // only the sum: the ids are shifted by one, and the leading
         // literal is a box the boundary no longer reaches.
-        let (_t, mut tail) = built("push 3 push 1 push 2 add");
+        let mut tail = built("push 3 push 1 push 2 add");
         let sum = tail.outputs()[1];
         tail.close(vec![sum]);
         assert!(isomorphic(&whole, &tail));
@@ -2086,7 +2087,7 @@ mod tests {
             assert_eq!(map[a], *b);
         }
 
-        let (_t, other) = built("push 1 push 3 add");
+        let other = built("push 1 push 3 add");
         assert!(align(&tail, &other).is_none(), "a different program");
     }
 
@@ -2100,7 +2101,7 @@ mod tests {
         // `as_bool x` stands, read by output 0; `not not x` is output 1.
         // `not-not` rewrites the latter *onto* the former, so afterwards
         // one box answers both outputs.
-        let (_t, before) = built("pick 0 as_bool swap not not");
+        let before = built("pick 0 as_bool swap not not");
         let pair = crate::kernel::rules::sides(&crate::kernel::rules::Rule::NotNot).unwrap();
         let found = pair.find(&before, Direction::Forward);
         assert_eq!(found.len(), 1);
@@ -2122,7 +2123,7 @@ mod tests {
 
     #[test]
     fn padding_slides_wires_underneath() {
-        let (_terms, graph) = built("not");
+        let graph = built("not");
         let padded = under(&graph, 2);
         padded.check().unwrap();
         assert_eq!(padded.arity(), Arity::new(3, 3));
@@ -2137,20 +2138,23 @@ mod tests {
 
     #[test]
     fn two_graphs_are_one_program_or_they_are_not() {
-        let (_t, a) = built("push 1 push 2 add");
-        let (_t, b) = built("push 1 push 2 add");
+        let a = built("push 1 push 2 add");
+        let b = built("push 1 push 2 add");
         assert!(isomorphic(&a, &b));
-        let (_t, c) = built("push 1 push 3 add");
+        let c = built("push 1 push 3 add");
         assert!(
             !isomorphic(&a, &c),
             "a different literal is a different program"
         );
-        let (_t, d) = built("not");
+        let d = built("not");
         assert!(!isomorphic(&a, &d));
-        let (_t, e) = built("branch { add } { add }");
-        let (_t, f) = built("branch { add } { add }");
-        assert!(isomorphic(&e, &f), "one term built twice is one program");
-        let (_t, g) = built("branch { add } { subtract }");
+        let e = built("branch { add } { add }");
+        let f = built("branch { add } { add }");
+        assert!(
+            isomorphic(&e, &f),
+            "one program written twice is one program"
+        );
+        let g = built("branch { add } { subtract }");
         assert!(!isomorphic(&e, &g));
     }
 
@@ -2215,7 +2219,7 @@ mod tests {
     /// boundary stops naming it, and that is the whole of being deleted.
     #[test]
     fn sameness_ignores_the_graveyard() {
-        let (_t, mut host) = built("not not");
+        let mut host = built("not not");
         assert_eq!(host.live_count(), 2);
         let pair = Pair::new(
             {
@@ -2233,7 +2237,7 @@ mod tests {
             .unwrap();
         host.check().unwrap();
 
-        let (_t, want) = built("as_bool");
+        let want = built("as_bool");
         assert!(
             isomorphic(&host, &want),
             "the two `not`s are still in the arena and count for nothing:\n{}",
@@ -2249,7 +2253,7 @@ mod tests {
     /// first of the pair sits.
     #[test]
     fn a_pair_replaces_what_it_is_found_at() {
-        let (_t, mut host) = built("push 1 push 2 add");
+        let mut host = built("push 1 push 2 add");
         let pair = Pair::new(
             Graph::of_box(NodeKind::Op(Prim::Add)),
             Graph::of_box(NodeKind::Op(Prim::Subtract)),
@@ -2264,7 +2268,7 @@ mod tests {
             .expect("the match is the one the search just read");
         host.check().unwrap_or_else(|e| panic!("{}\n{}", e, host));
 
-        let (_t, want) = built("push 1 push 2 subtract");
+        let want = built("push 1 push 2 subtract");
         assert!(isomorphic(&host, &want), "\n{}\n{}", host, want);
 
         // And the way back is the embedding it handed over, not a bit
@@ -2272,7 +2276,7 @@ mod tests {
         // seen.
         pair.apply(&mut host, Direction::Backward, &back)
             .expect("the answer names where the replacement landed");
-        let (_t, again) = built("push 1 push 2 add");
+        let again = built("push 1 push 2 add");
         assert!(isomorphic(&host, &again));
     }
 
@@ -2340,7 +2344,7 @@ mod tests {
     /// refuses it also leaves alone.
     #[test]
     fn a_stated_match_that_is_not_one_is_refused() {
-        let (_t, host) = built("push 1 push 2 add");
+        let host = built("push 1 push 2 add");
         let pair = Pair::new(
             Graph::of_box(NodeKind::Op(Prim::Add)),
             Graph::of_box(NodeKind::Op(Prim::Subtract)),
@@ -2763,8 +2767,8 @@ mod tests {
     /// one down and what makes two reports of one proof comparable.
     #[test]
     fn a_box_is_called_what_it_computes() {
-        let (_t, a) = built("push 1 push 2 add");
-        let (_t, b) = built("push 1 push 2 add");
+        let a = built("push 1 push 2 add");
+        let b = built("push 1 push 2 add");
         let names = |g: &Graph| -> Vec<String> {
             let mut said: Vec<String> = g.live().map(|(id, _)| g.address(id).letters()).collect();
             said.sort();
@@ -2772,7 +2776,7 @@ mod tests {
         };
         assert_eq!(names(&a), names(&b), "one program, one set of names");
 
-        let (_t, c) = built("push 1 push 3 add");
+        let c = built("push 1 push 3 add");
         assert_ne!(
             names(&a),
             names(&c),
@@ -2797,7 +2801,7 @@ mod tests {
     /// short of that means several, and says so.
     #[test]
     fn a_prefix_names_a_box_while_it_means_one() {
-        let (_t, graph) = built("push 1 push 2 add push 3 add");
+        let graph = built("push 1 push 2 add push 3 add");
         for (id, _) in graph.live() {
             let short = Prefix::parse(&graph.shortest(id)).expect("what a listing prints");
             assert_eq!(graph.lookup(&short), Named::One(id), "{}", short);

@@ -253,7 +253,6 @@
 //! error (a renamed identity would otherwise silently shed its proof), and a claim
 //! discharged twice was discharged once too often.
 
-
 use std::fmt;
 
 use bytecode::{IdentityIndex, SentenceIndex};
@@ -1342,14 +1341,7 @@ mod tests {
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].identity, "identities::by_name");
         assert_eq!(entries[0].strategy, vec![Step::Inline(None), Step::Diagram]);
-        let [
-            Step::Symm,
-            Step::SelectSame {
-                then_arm,
-                else_arm,
-            },
-        ] = &entries[1].strategy[..]
-        else {
+        let [Step::Symm, Step::SelectSame { then_arm, else_arm }] = &entries[1].strategy[..] else {
             panic!("{:?}", entries[1].strategy);
         };
         assert_eq!(
@@ -1660,8 +1652,7 @@ mod tests {
         assert!(err.contains("nothing can follow"), "{}", err);
         // A tree is nested splits, and each block may take its own road.
         let entries =
-            parse_hant("proof p = select-same (then: inline diagram, else: select-same);")
-                .unwrap();
+            parse_hant("proof p = select-same (then: inline diagram, else: select-same);").unwrap();
         let [Step::SelectSame { then_arm, else_arm }] = &entries[0].strategy[..] else {
             panic!("{:?}", entries[0].strategy);
         };
@@ -1713,9 +1704,9 @@ mod tests {
 
     #[test]
     fn the_retired_steps_are_unknown() {
-        // The e-graph era's steps are gone, and so are the term-shaped ones
-        // a graph goal has no reading for — none aliased: a proof that
-        // names one should fail loudly rather than mean something else.
+        // The e-graph era's steps are gone, and so are the ones a graph
+        // goal has no reading for — none aliased: a proof that names one
+        // should fail loudly rather than mean something else.
         for retired in ["egraph", "solve", "norm", "norm_trusted", "peel", "via"] {
             let err = parse_hant(&format!("proof p = {};", retired)).unwrap_err();
             assert!(err.contains("no step is called"), "{}: {}", retired, err);

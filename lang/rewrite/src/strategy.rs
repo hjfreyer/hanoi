@@ -41,8 +41,9 @@ use crate::hant::{Body, OnSide, Step, Strategy, default_strategy};
 use crate::kernel;
 use crate::kernel::goal::{self, Goal};
 use crate::kernel::graph::{self, Address, Graph, Named, NodeId, Pair, Prefix, Sink, Source};
+use crate::kernel::lower::Error;
+use crate::kernel::prim::Prim;
 use crate::kernel::rules::{self, Derivation};
-use crate::kernel::term::{Context, Error, Prim};
 use crate::proof::{self, Outcome, Proof, Residual};
 use crate::query::Query;
 use crate::tactic;
@@ -142,20 +143,15 @@ impl<'l> Prover<'l> {
     /// stated. A draft that does not flatten, or a run that does not land,
     /// is a prover bug and comes back [`Outcome::Stuck`] saying so rather
     /// than closed on the prover's word.
-    pub fn prove(
-        &self,
-        ctx: &mut Context,
-        goal: Goal,
-        strategy: Option<&Strategy<Body>>,
-    ) -> Result<Outcome, Error> {
+    pub fn prove(&self, goal: Goal, strategy: Option<&Strategy<Body>>) -> Result<Outcome, Error> {
         let default = default_strategy();
         let strategy = strategy.unwrap_or(&default);
         let stated = goal.clone();
-        let draft = match self.run(ctx, strategy, goal)? {
+        let draft = match self.run(strategy, goal)? {
             Draft::Closed(draft) => draft,
             Draft::Stuck(residual) => return Ok(Outcome::Stuck(residual)),
         };
-        let run = match proof::flatten(&draft, &stated, ctx) {
+        let run = match proof::flatten(&draft, &stated) {
             Ok(run) => run,
             Err(why) => {
                 let why = format!(
@@ -166,7 +162,7 @@ impl<'l> Prover<'l> {
                 return Ok(Outcome::Stuck(gave_up(&stated, &why)));
             }
         };
-        if let Err(why) = goal::certify(&stated, &run, ctx, self.library) {
+        if let Err(why) = goal::certify(&stated, &run, self.library) {
             let why = format!(
                 "the run does not certify — a prover bug, and the claim is not accepted on \
                  its word: {}",
@@ -181,7 +177,7 @@ impl<'l> Prover<'l> {
     /// isomorphic — is closed before any step runs, at every level, so a
     /// split's block that a manipulation made trivial needs no steps of
     /// its own.
-    fn run(&self, ctx: &mut Context, strategy: &[Step<Body>], goal: Goal) -> Result<Draft, Error> {
+    fn run(&self, strategy: &[Step<Body>], goal: Goal) -> Result<Draft, Error> {
         if graph::isomorphic(&goal.lhs, &goal.rhs) {
             return Ok(Draft::Closed(Proof::Trivial));
         }
@@ -245,7 +241,7 @@ impl<'l> Prover<'l> {
                 if !rest.is_empty() {
                     unreachable!("`cases` closes the goal, and `validate` refused what follows");
                 }
-                self.cases_step(ctx, goal, at, *specialize, then_arm, else_arm)
+                self.cases_step(goal, at, *specialize, then_arm, else_arm)
             }
 
             // The same tree, searched for rather than written out: the
@@ -300,7 +296,7 @@ impl<'l> Prover<'l> {
                     }
                 }
                 let [lhs, rhs] = spent;
-                Ok(match self.run(ctx, rest, goal)? {
+                Ok(match self.run(rest, goal)? {
                     Draft::Closed(sub) => Draft::Closed(Proof::Rewrote {
                         side: side.word(),
                         lhs,
@@ -379,7 +375,7 @@ impl<'l> Prover<'l> {
                     }
                 }
                 let [lhs, rhs] = spent;
-                Ok(match self.run(ctx, rest, goal)? {
+                Ok(match self.run(rest, goal)? {
                     Draft::Closed(sub) => Draft::Closed(Proof::Rewrote {
                         side: side.word(),
                         lhs,
@@ -421,7 +417,7 @@ impl<'l> Prover<'l> {
                     lhs: then,
                     rhs: goal.rhs.clone(),
                 };
-                let then_sub = match self.side(ctx, "in the branch's then block", then_arm, sub)? {
+                let then_sub = match self.side("in the branch's then block", then_arm, sub)? {
                     Ok(p) => p,
                     Err(residual) => return Ok(Draft::Stuck(residual)),
                 };
@@ -429,7 +425,7 @@ impl<'l> Prover<'l> {
                     lhs: els,
                     rhs: goal.rhs.clone(),
                 };
-                let else_sub = match self.side(ctx, "in the branch's else block", else_arm, sub)? {
+                let else_sub = match self.side("in the branch's else block", else_arm, sub)? {
                     Ok(p) => p,
                     Err(residual) => return Ok(Draft::Stuck(residual)),
                 };
@@ -445,7 +441,7 @@ impl<'l> Prover<'l> {
                     lhs: goal.rhs,
                     rhs: goal.lhs,
                 };
-                Ok(match self.run(ctx, rest, swapped)? {
+                Ok(match self.run(rest, swapped)? {
                     Draft::Closed(sub) => Draft::Closed(Proof::Swapped(Box::new(sub))),
                     Draft::Stuck(mut residual) => {
                         residual
@@ -467,8 +463,8 @@ impl<'l> Prover<'l> {
                     Some(_) => unreachable!("the loader reads an inline label as a target"),
                 };
                 let mut goal = goal;
-                let lhs = proof::inline(&mut goal.lhs, ctx, self.library, only)?;
-                let rhs = proof::inline(&mut goal.rhs, ctx, self.library, only)?;
+                let lhs = proof::inline(&mut goal.lhs, self.library, only)?;
+                let rhs = proof::inline(&mut goal.rhs, self.library, only)?;
                 if lhs.is_empty() && rhs.is_empty() {
                     let why = match only {
                         None => "`inline` found no calls to open".to_string(),
@@ -480,7 +476,7 @@ impl<'l> Prover<'l> {
                     return Ok(Draft::Stuck(gave_up(&goal, &why)));
                 }
                 let name = only.map(|idx| self.library.names[idx].clone());
-                Ok(match self.run(ctx, rest, goal)? {
+                Ok(match self.run(rest, goal)? {
                     Draft::Closed(sub) => Draft::Closed(Proof::Inlined {
                         target: only,
                         name,
@@ -498,14 +494,13 @@ impl<'l> Prover<'l> {
     /// its residual labelled with where it lives.
     fn side(
         &self,
-        ctx: &mut Context,
         label: &str,
         strategy: &Option<Strategy<Body>>,
         sub: Goal,
     ) -> Result<Result<Box<Proof>, Residual>, Error> {
         let default = default_strategy();
         let strategy = strategy.as_ref().unwrap_or(&default);
-        Ok(match self.run(ctx, strategy, sub)? {
+        Ok(match self.run(strategy, sub)? {
             Draft::Closed(p) => Ok(Box::new(p)),
             Draft::Stuck(mut residual) => {
                 residual.path.insert(0, label.to_string());
@@ -527,7 +522,6 @@ impl<'l> Prover<'l> {
     #[allow(clippy::too_many_arguments)]
     fn cases_step(
         &self,
-        ctx: &mut Context,
         goal: Goal,
         at: &Prefix,
         specialize: bool,
@@ -582,15 +576,14 @@ impl<'l> Prover<'l> {
                 return Ok(Draft::Stuck(gave_up(&goal, &why)));
             }
         };
-        let then_sub = match self.side(ctx, "in the true case of the split", then_arm, then_goal)? {
+        let then_sub = match self.side("in the true case of the split", then_arm, then_goal)? {
             Ok(p) => p,
             Err(residual) => return Ok(Draft::Stuck(residual)),
         };
-        let else_sub =
-            match self.side(ctx, "in the false case of the split", else_arm, else_goal)? {
-                Ok(p) => p,
-                Err(residual) => return Ok(Draft::Stuck(residual)),
-            };
+        let else_sub = match self.side("in the false case of the split", else_arm, else_goal)? {
+            Ok(p) => p,
+            Err(residual) => return Ok(Draft::Stuck(residual)),
+        };
         Ok(Draft::Closed(Proof::Cases {
             lhs,
             then_sub,
@@ -606,8 +599,6 @@ impl<'l> Prover<'l> {
     /// running out is a failure like any other, and the residual says so.
     /// It is there because termination is an argument rather than a
     /// theorem — see [`pick_split`].
-    /// Takes no [`Context`]: a search builds no terms, which is the same
-    /// thing as saying it never cuts. Every road it takes is the table's.
     fn by_cases(&self, goal: Goal, gas: &mut usize) -> Result<Draft, Error> {
         if graph::isomorphic(&goal.lhs, &goal.rhs) {
             return Ok(Draft::Closed(Proof::Trivial));
@@ -957,7 +948,7 @@ mod tests {
     use super::*;
     use crate::hant::parse_hant;
     use crate::kernel::graph::NodeKind;
-    use crate::kernel::term::{Arity, Prim};
+    use crate::kernel::prim::{Arity, Prim};
     use bytecode::{Value, assemble};
 
     /// The live boxes of a graph, in id order: what a residual's side is,
@@ -983,7 +974,7 @@ mod tests {
     /// author gets them: `exact` on an open goal fails and prints what it
     /// was reached with.
     fn standing(code: &str, name: &str, steps: &str) -> (Graph, Graph) {
-        let (_ctx, outcome) = prove_with(code, name, Some(&format!("{} exact", steps)));
+        let outcome = prove_with(code, name, Some(&format!("{} exact", steps)));
         match outcome {
             Outcome::Stuck(residual) => (residual.lhs_graph, residual.rhs_graph),
             _ => panic!("`exact` reached on an open goal fails and shows it"),
@@ -994,32 +985,30 @@ mod tests {
     /// `.hant` entry body, or the default when `strategy` is `None` —
     /// resolving its names exactly as `corpus::load` does.
     ///
-    /// The arena comes back with the outcome: a residual names its terms by
-    /// index, so reading one means keeping the context it was built in.
-    fn prove_with(code: &str, name: &str, strategy: Option<&str>) -> (Context, Outcome) {
+    /// Answers the outcome, which carries whatever a residual has to show:
+    /// the two sides as graphs, and the boxes a next step would name.
+    fn prove_with(code: &str, name: &str, strategy: Option<&str>) -> Outcome {
         let entries = strategy
             .map(|s| parse_hant(&format!("proof {} = {};", name, s)).unwrap())
             .unwrap_or_default();
         let library = assemble(code).unwrap();
-        let mut ctx = Context::new();
         let strategy = entries
             .first()
             .map(|e| crate::corpus::attach(&e.strategy, &library).unwrap());
         let idx = library.identity_by_name(name).unwrap();
-        let goal = Goal::of_identity(&mut ctx, &library, idx).unwrap();
-        let outcome = Prover::new(&library)
-            .prove(&mut ctx, goal, strategy.as_ref())
-            .unwrap();
-        (ctx, outcome)
+        let goal = Goal::of_identity(&library, idx).unwrap();
+        Prover::new(&library)
+            .prove(goal, strategy.as_ref())
+            .unwrap()
     }
 
-    fn prove_identity(code: &str, name: &str) -> (Context, Outcome) {
+    fn prove_identity(code: &str, name: &str) -> Outcome {
         prove_with(code, name, None)
     }
 
     #[test]
     fn the_default_is_the_diagram_alone() {
-        let (_ctx, outcome) = prove_identity(
+        let outcome = prove_identity(
             "identity probe { drop 0 is_bool is_bool } = { drop 0 drop 0 push true };",
             "probe",
         );
@@ -1031,7 +1020,7 @@ mod tests {
 
     #[test]
     fn differing_arms_close_as_one_diagram() {
-        let (_ctx, outcome) = prove_identity(
+        let outcome = prove_identity(
             "identity probe { branch { is_bool is_bool } { not } } = { branch { is_int is_bool } { not } };",
             "probe",
         );
@@ -1045,10 +1034,10 @@ mod tests {
             identity probe { is_bool is_bool } = { jump crate::drop_and_true };
         "#;
         // The default does not spend the library's definitions…
-        let (_ctx, outcome) = prove_identity(code, "probe");
+        let outcome = prove_identity(code, "probe");
         assert!(matches!(outcome, Outcome::Stuck(_)));
         // …a written proof does.
-        let (_ctx, outcome) = prove_with(code, "probe", Some("inline diagram"));
+        let outcome = prove_with(code, "probe", Some("inline diagram"));
         let Outcome::Closed { draft: proof, .. } = outcome else {
             panic!("expected the opened goal to close");
         };
@@ -1057,9 +1046,9 @@ mod tests {
 
     #[test]
     fn exact_closes_what_a_manipulation_made_identical() {
-        // Inlining the call leaves the two sides one term, so the claim holds
+        // Inlining the call leaves the two sides one graph, so the claim holds
         // and no engine ever runs.
-        let (_ctx, outcome) = prove_with(
+        let outcome = prove_with(
             r#"
             sentence drop_and_true { drop 0 push true }
             identity probe { jump crate::drop_and_true } = { drop 0 push true };
@@ -1079,7 +1068,7 @@ mod tests {
         // closes it — but `exact` claims more, fails, and shows the goal
         // exactly as it stands: no normalization, nothing spent. That
         // unaltered residual is what the step is for.
-        let (_ctx, outcome) = prove_with(
+        let outcome = prove_with(
             "identity probe { is_bool is_bool } = { drop 0 push true };",
             "probe",
             Some("exact"),
@@ -1122,7 +1111,7 @@ mod tests {
                 .unwrap()
         };
         let library = assemble(code).unwrap();
-        let (_ctx, outcome) = prove_with(code, "probe", Some("inline(outer) exact"));
+        let outcome = prove_with(code, "probe", Some("inline(outer) exact"));
         let Outcome::Stuck(residual) = outcome else {
             panic!("`exact` fails and shows the goal as it stands");
         };
@@ -1136,7 +1125,7 @@ mod tests {
         );
 
         // The label is what did it: opening everything closes the claim.
-        let (_ctx, opened) = prove_with(code, "probe", Some("inline diagram"));
+        let opened = prove_with(code, "probe", Some("inline diagram"));
         assert!(matches!(opened, Outcome::Closed { .. }));
     }
 
@@ -1146,7 +1135,7 @@ mod tests {
             #[arity(1,1)] sentence elsewhere { drop 0 push false }
             identity probe { is_bool is_bool } = { drop 0 push true };
         "#;
-        let (_ctx, outcome) = prove_with(code, "probe", Some("inline(elsewhere) diagram"));
+        let outcome = prove_with(code, "probe", Some("inline(elsewhere) diagram"));
         let Outcome::Stuck(residual) = outcome else {
             panic!("nothing here calls it");
         };
@@ -1173,7 +1162,7 @@ mod tests {
     fn a_rewritten_side_closes_by_isomorphism() {
         // A directed law leads the left and the driver alone takes the
         // right: the two sides settle on the one graph.
-        let (_ctx, outcome) = prove_with(
+        let outcome = prove_with(
             "identity probe { push 1 push 2 add } = { push 2 push 1 add };",
             "probe",
             Some("lhs(fire(fold)) rhs(decide) exact"),
@@ -1191,7 +1180,7 @@ mod tests {
         );
 
         // `both` spends each side in turn.
-        let (_ctx, outcome) = prove_with(
+        let outcome = prove_with(
             "identity probe { not not not } = { as_bool not };",
             "probe",
             Some("both(saturate(not-not)) exact"),
@@ -1212,7 +1201,7 @@ mod tests {
     /// residual carries that state.
     #[test]
     fn a_stuck_tactic_shows_the_goal_standing() {
-        let (_ctx, outcome) = prove_with(
+        let outcome = prove_with(
             "identity probe { push 1 push 2 add } = { push 4 };",
             "probe",
             Some("lhs(fire(fold) fire(tuple-cancel)) exact"),
@@ -1238,7 +1227,7 @@ mod tests {
     #[test]
     fn a_step_that_does_nothing_fails_loudly() {
         let code = "identity probe { is_bool is_bool } = { drop 0 push true };";
-        let (_ctx, outcome) = prove_with(code, "probe", Some("inline diagram"));
+        let outcome = prove_with(code, "probe", Some("inline diagram"));
         let Outcome::Stuck(residual) = outcome else {
             panic!("there are no calls to open");
         };
@@ -1247,7 +1236,7 @@ mod tests {
             "{}",
             residual.stopped
         );
-        let (_ctx, outcome) = prove_with(code, "probe", Some("lhs(fire(tuple-cancel)) diagram"));
+        let outcome = prove_with(code, "probe", Some("lhs(fire(tuple-cancel)) diagram"));
         let Outcome::Stuck(residual) = outcome else {
             panic!("there is no tuple to cancel");
         };
@@ -1265,26 +1254,22 @@ mod tests {
     #[test]
     fn a_stated_pair_carries_a_side_to_the_packed_shape() {
         let code = "identity probe { swap swap } = { tuple 2 untuple 2 };";
-        let (_ctx, outcome) =
-            prove_with(code, "probe", Some("lhs(on(in0 in1, tuple-cancel)) exact"));
+        let outcome = prove_with(code, "probe", Some("lhs(on(in0 in1, tuple-cancel)) exact"));
         let Outcome::Closed { .. } = outcome else {
             panic!("the stated pair meets the packed side: {:?}", outcome);
         };
 
         // The wire order is the window's shape: the other order states
         // the other tuple, which is not the one the right side builds.
-        let (_ctx, outcome) =
-            prove_with(code, "probe", Some("lhs(on(in1 in0, tuple-cancel)) exact"));
+        let outcome = prove_with(code, "probe", Some("lhs(on(in1 in0, tuple-cancel)) exact"));
         let Outcome::Stuck(_) = outcome else {
             panic!("the swapped statement is a different pair: {:?}", outcome);
         };
     }
 
-
-
     #[test]
     fn a_swapped_goal_that_sticks_says_which_way_round_it_is() {
-        let (_ctx, outcome) = prove_with(
+        let outcome = prove_with(
             "identity probe { push 1 } = { push 2 };",
             "probe",
             Some("symm diagram"),
@@ -1305,11 +1290,9 @@ mod tests {
         );
     }
 
-
-
     #[test]
     fn a_false_goal_reports_a_residual() {
-        let (_ctx, outcome) = prove_identity("identity probe { push 1 } = { push 2 };", "probe");
+        let outcome = prove_identity("identity probe { push 1 } = { push 2 };", "probe");
         let Outcome::Stuck(residual) = outcome else {
             panic!("push 1 is not push 2");
         };
@@ -1335,27 +1318,23 @@ mod tests {
     #[test]
     fn a_proof_that_lies_is_refused() {
         let false_lib = assemble("identity probe { push 1 } = { push 2 };").unwrap();
-        let mut ctx = Context::new();
         let idx = false_lib.identity_by_name("probe").unwrap();
-        let false_goal = Goal::of_identity(&mut ctx, &false_lib, idx).unwrap();
+        let false_goal = Goal::of_identity(&false_lib, idx).unwrap();
 
         // Claimed trivial, and the sides are not one graph: no run.
-        let err = proof::flatten(&Proof::Trivial, &false_goal, &mut ctx).unwrap_err();
+        let err = proof::flatten(&Proof::Trivial, &false_goal).unwrap_err();
         assert!(err.contains("not one graph"), "{}", err);
 
         // An honest run for a different claim does not certify this one:
         // its steps name boxes this goal does not have.
         let true_lib = assemble("identity probe { push 1 push 2 add } = { push 3 };").unwrap();
-        let mut true_ctx = Context::new();
         let idx = true_lib.identity_by_name("probe").unwrap();
-        let true_goal = Goal::of_identity(&mut true_ctx, &true_lib, idx).unwrap();
-        let outcome = Prover::new(&true_lib)
-            .prove(&mut true_ctx, true_goal, None)
-            .unwrap();
+        let true_goal = Goal::of_identity(&true_lib, idx).unwrap();
+        let outcome = Prover::new(&true_lib).prove(true_goal, None).unwrap();
         let Outcome::Closed { run: stolen, .. } = outcome else {
             panic!("the sum folds");
         };
-        let err = goal::certify(&false_goal, &stolen, &mut ctx, &false_lib).unwrap_err();
+        let err = goal::certify(&false_goal, &stolen, &false_lib).unwrap_err();
         assert!(err.contains("does not apply"), "{}", err);
     }
 
@@ -1375,7 +1354,7 @@ mod tests {
         let at = address(&lhs, |g, id| {
             matches!(g.kind(id), NodeKind::Op(Prim::IsBool)) && g.sources(id) == [Source::Input(0)]
         });
-        let (_ctx, outcome) = prove_with(
+        let outcome = prove_with(
             code,
             "probe",
             Some(&format!("cases({}) (true: diagram, false: diagram)", at)),
@@ -1401,7 +1380,7 @@ mod tests {
         let at = address(&lhs, |g, id| {
             matches!(g.kind(id), NodeKind::Op(Prim::IsBool)) && g.sources(id) == [Source::Input(0)]
         });
-        let (_ctx, outcome) = prove_with(
+        let outcome = prove_with(
             code,
             "probe",
             Some(&format!(
@@ -1438,7 +1417,7 @@ mod tests {
         let at = address(&rhs, |g, id| {
             matches!(g.kind(id), NodeKind::Op(Prim::IsBool)) && g.sources(id) == [Source::Input(0)]
         });
-        let (_ctx, outcome) = prove_with(
+        let outcome = prove_with(
             code,
             "probe",
             Some(&format!("cases({}) (true: diagram, false: diagram)", at)),
@@ -1474,7 +1453,7 @@ mod tests {
         });
 
         let cases = format!("cases({}) (true: diagram, false: diagram)", at);
-        let (_ctx, outcome) = prove_with(code, "probe", Some(&cases));
+        let outcome = prove_with(code, "probe", Some(&cases));
         let Outcome::Stuck(residual) = outcome else {
             panic!("`cases` leaves the true case reading a value it cannot decide");
         };
@@ -1487,7 +1466,7 @@ mod tests {
             residual.path
         );
 
-        let (_ctx, outcome) = prove_with(
+        let outcome = prove_with(
             code,
             "probe",
             Some(&cases.replacen("cases", "cases-equal", 1)),
@@ -1511,7 +1490,7 @@ mod tests {
         let at = address(&lhs, |g, id| {
             matches!(g.kind(id), NodeKind::Op(Prim::IsBool)) && g.sources(id) == [Source::Input(0)]
         });
-        let (_ctx, outcome) = prove_with(
+        let outcome = prove_with(
             code,
             "probe",
             Some(&format!(
@@ -1537,7 +1516,7 @@ mod tests {
         let at = address(&lhs, |g, id| {
             matches!(g.kind(id), NodeKind::Op(Prim::Equal))
         });
-        let (_ctx, outcome) = prove_with(
+        let outcome = prove_with(
             code,
             "probe",
             Some(&format!(
@@ -1564,7 +1543,7 @@ mod tests {
         // `b and not b` is false, and no window says so: whatever the
         // test answered, it answered one thing, and that is the split.
         let code = "identity probe { is_int pick 0 not and } = { drop 0 push false };";
-        let (_ctx, outcome) = prove_with(code, "probe", Some("by-cases"));
+        let outcome = prove_with(code, "probe", Some("by-cases"));
         let Outcome::Closed { draft, run } = outcome else {
             panic!("one split and the table close this: {:?}", outcome);
         };
@@ -1579,7 +1558,7 @@ mod tests {
         let code = "identity probe \
              { pick 0 push 7 equal branch { push 1 add } { drop 0 push 8 } } \
            = { drop 0 push 8 };";
-        let (_ctx, outcome) = prove_with(code, "probe", Some("by-cases"));
+        let outcome = prove_with(code, "probe", Some("by-cases"));
         assert!(
             matches!(outcome, Outcome::Closed { .. }),
             "the search spends the substitution without being asked: {:?}",
@@ -1593,7 +1572,7 @@ mod tests {
     #[test]
     fn a_search_that_does_not_close_says_how_it_stopped() {
         // Nothing to split on: no box here answers a bool at all.
-        let (_ctx, outcome) = prove_with(
+        let outcome = prove_with(
             "identity probe { push 1 add } = { push 2 add };",
             "probe",
             Some("by-cases"),
@@ -1609,7 +1588,7 @@ mod tests {
 
         // And a budget of none, on a goal that would otherwise close.
         let code = "identity probe { is_int pick 0 not and } = { drop 0 push false };";
-        let (_ctx, outcome) = prove_with(code, "probe", Some("by-cases(0)"));
+        let outcome = prove_with(code, "probe", Some("by-cases(0)"));
         let Outcome::Stuck(residual) = outcome else {
             panic!("no splits is no case analysis");
         };
@@ -1621,7 +1600,7 @@ mod tests {
 
         // One is enough for that goal, which is what makes the budget a
         // bound on the search rather than on the claim.
-        let (_ctx, outcome) = prove_with(code, "probe", Some("by-cases(1)"));
+        let outcome = prove_with(code, "probe", Some("by-cases(1)"));
         assert!(matches!(outcome, Outcome::Closed { .. }), "{:?}", outcome);
     }
 
@@ -1636,7 +1615,7 @@ mod tests {
 
         // A name nothing answers to: a listing read from before the steps
         // in front of it changed what that box computes.
-        let (_ctx, outcome) = prove_with(
+        let outcome = prove_with(
             code,
             "probe",
             Some("cases(#zzzzzzzzzzzz) (true: diagram, false: diagram)"),
@@ -1658,7 +1637,7 @@ mod tests {
         let at = address(&lhs, |g, id| {
             matches!(g.kind(id), NodeKind::Op(Prim::Push(Value::Int(7))))
         });
-        let (_ctx, outcome) = prove_with(
+        let outcome = prove_with(
             code,
             "probe",
             Some(&format!("cases({}) (true: diagram, false: diagram)", at)),
@@ -1689,7 +1668,7 @@ mod tests {
             .iter()
             .find(|(_, held)| **held > 1)
             .expect("sixteen letters cannot tell seventeen boxes apart");
-        let (_ctx, outcome) = prove_with(
+        let outcome = prove_with(
             wide,
             "wide",
             Some(&format!(
@@ -1726,12 +1705,11 @@ mod tests {
             .join("hana");
         let corpus = crate::corpus::load(&tests).unwrap();
         let library = &corpus.library;
-        let terms = &mut Context::new();
         let mut closed = Vec::new();
         for (idx, identity) in library.identities.iter_enumerated() {
-            let mut goal = Goal::of_identity(terms, library, idx).unwrap();
-            proof::inline(&mut goal.lhs, terms, library, None).unwrap();
-            proof::inline(&mut goal.rhs, terms, library, None).unwrap();
+            let mut goal = Goal::of_identity(library, idx).unwrap();
+            proof::inline(&mut goal.lhs, library, None).unwrap();
+            proof::inline(&mut goal.rhs, library, None).unwrap();
             for side in [&mut goal.lhs, &mut goal.rhs] {
                 let mut deriv = kernel::rules::Derivation::default();
                 tactic::run(side, &mut deriv, &tactic::decide()).unwrap();
@@ -1813,7 +1791,7 @@ mod tests {
         let code = "identity probe { push 1 push 2 add } = { push 3 };";
 
         // A reached `exact` fails — the report is its whole job.
-        let (_ctx, outcome) = prove_with(code, "probe", Some("exact"));
+        let outcome = prove_with(code, "probe", Some("exact"));
         let Outcome::Stuck(residual) = outcome else {
             panic!("the sides are not one diagram yet");
         };
@@ -1836,7 +1814,7 @@ mod tests {
             address.to_string(),
             format!("#{}", residual.lhs_graph.shortest(add)),
         ] {
-            let (_ctx, outcome) = prove_with(
+            let outcome = prove_with(
                 code,
                 "probe",
                 Some(&format!("lhs(at({}, fold)) diagram", written)),
@@ -1852,8 +1830,7 @@ mod tests {
         }
 
         // A box the side does not have is its own mistake, said as one.
-        let (_ctx, outcome) =
-            prove_with(code, "probe", Some("lhs(at(#zzzzzzzzzzzz, fold)) diagram"));
+        let outcome = prove_with(code, "probe", Some("lhs(at(#zzzzzzzzzzzz, fold)) diagram"));
         let Outcome::Stuck(residual) = outcome else {
             panic!("no box is called that")
         };
@@ -1864,7 +1841,7 @@ mod tests {
         );
 
         // So is a box that is there with nothing of that law to fire.
-        let (_ctx, outcome) = prove_with(
+        let outcome = prove_with(
             code,
             "probe",
             Some(&format!("lhs(at({}, equal-refl)) diagram", address)),
@@ -1893,12 +1870,12 @@ mod tests {
         "#;
         // The driver alone cannot: a call is opaque, so the two blocks are
         // not the one block `select-same` would need to see.
-        let (_ctx, outcome) = prove_identity(code, "probe");
+        let outcome = prove_identity(code, "probe");
         assert!(matches!(outcome, Outcome::Stuck(_)));
 
         // Split, and each block takes its own road — the false one needing
         // no steps at all, since it is already what the right side says.
-        let (_ctx, outcome) = prove_with(code, "probe", Some("select-same (then: inline diagram)"));
+        let outcome = prove_with(code, "probe", Some("select-same (then: inline diagram)"));
         let Outcome::Closed { draft: proof, .. } = outcome else {
             panic!("both blocks answer to the right side");
         };
@@ -1913,7 +1890,7 @@ mod tests {
     /// block against the right side rather than the branch it came out of.
     #[test]
     fn a_block_that_sticks_names_itself() {
-        let (_ctx, outcome) = prove_with(
+        let outcome = prove_with(
             "identity probe { branch { push 1 } { push 2 } } = { drop 0 push 1 };",
             "probe",
             Some("select-same"),
@@ -1938,7 +1915,7 @@ mod tests {
     #[test]
     fn a_side_that_is_no_branch_is_refused() {
         let code = "identity probe { drop 0 push true } = { branch { push true } { push true } };";
-        let (_ctx, outcome) = prove_with(code, "probe", Some("select-same"));
+        let outcome = prove_with(code, "probe", Some("select-same"));
         let Outcome::Stuck(residual) = outcome else {
             panic!("the left side is a literal");
         };
@@ -1949,7 +1926,7 @@ mod tests {
         );
 
         // Turned round, the same claim splits.
-        let (_ctx, outcome) = prove_with(code, "probe", Some("symm select-same"));
+        let outcome = prove_with(code, "probe", Some("symm select-same"));
         assert!(matches!(outcome, Outcome::Closed { .. }));
 
         // And the checker asks the same question the step did, rather than
@@ -1957,14 +1934,13 @@ mod tests {
         // blocks off the goal itself, so a claimed split of a side that is
         // no branch has nothing to carve.
         let library = assemble(code).unwrap();
-        let mut ctx = Context::new();
         let idx = library.identity_by_name("probe").unwrap();
-        let goal = Goal::of_identity(&mut ctx, &library, idx).unwrap();
+        let goal = Goal::of_identity(&library, idx).unwrap();
         let draft = Proof::SelectSame {
             then_sub: Box::new(Proof::Trivial),
             else_sub: Box::new(Proof::Trivial),
         };
-        let err = proof::flatten(&draft, &goal, &mut ctx).unwrap_err();
+        let err = proof::flatten(&draft, &goal).unwrap_err();
         assert!(err.contains("does not answer with one branch"), "{}", err);
     }
 
@@ -1986,7 +1962,7 @@ mod tests {
             ),
         ] {
             let code = format!("identity probe {{ {} }} = {{ {} }};", lhs, rhs);
-            let (_ctx, outcome) = prove_with(&code, "probe", Some("select-same"));
+            let outcome = prove_with(&code, "probe", Some("select-same"));
             let Outcome::Stuck(residual) = outcome else {
                 panic!("`{}` answers more than the branch does", lhs);
             };

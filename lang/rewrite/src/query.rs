@@ -36,7 +36,7 @@ use std::collections::{HashMap, HashSet};
 
 use bytecode::{SentenceIndex, Value};
 
-use crate::kernel::term::Prim;
+use crate::kernel::prim::Prim;
 
 use crate::kernel::graph::{Graph, NodeId, NodeKind, Sink, Source};
 
@@ -422,26 +422,7 @@ impl Eval<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::kernel::build;
-    use crate::kernel::term::Context;
-    use bytecode::assemble;
-
-    /// The graph a body builds — the same probe the rules tests use.
-    fn built(body: &str) -> Graph {
-        let code = format!("sentence probe {{ {} }}", body);
-        let library = assemble(&code).unwrap();
-        let idx = library
-            .names
-            .iter_enumerated()
-            .find(|(_, n)| *n == "probe")
-            .map(|(idx, _)| idx)
-            .unwrap();
-        let mut terms = Context::new();
-        let term = crate::kernel::term::lower(&mut terms, &library, idx).unwrap();
-        let graph = build(&terms, term);
-        graph.check().unwrap();
-        graph
-    }
+    use crate::kernel::tests::built;
 
     #[test]
     fn a_query_names_the_shape_it_describes() {

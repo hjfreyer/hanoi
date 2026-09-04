@@ -125,7 +125,6 @@ fn run(args: &Args) -> Result<bool, String> {
     // reason for the claim that needs it to fail.
     let order = corpus.proving_order()?;
     let mut prover = Prover::new(&corpus.library);
-    let mut terms = rewrite::kernel::term::Context::new();
     let (mut passed, mut failed, mut filtered) = (0usize, 0usize, 0usize);
     for idx in order {
         let identity = &corpus.library.identities[idx];
@@ -137,16 +136,11 @@ fn run(args: &Args) -> Result<bool, String> {
         if !shown {
             filtered += 1;
         }
-        // One arena for the whole run: every goal lowered here is a place
-        // in it.
-        let goal = Goal::of_identity(&mut terms, &corpus.library, idx).map_err(|e| e.to_string())?;
+        let goal = Goal::of_identity(&corpus.library, idx).map_err(|e| e.to_string())?;
         // The claim as stated, kept so a later proof may cite it.
         let stated = goal.clone();
         let strategy = corpus.proofs.get(&idx);
-        match prover
-            .prove(&mut terms, goal, strategy)
-            .map_err(|e| e.to_string())?
-        {
+        match prover.prove(goal, strategy).map_err(|e| e.to_string())? {
             Outcome::Closed { draft, run } => {
                 prover.learn(idx, &stated, &run);
                 if !shown {
