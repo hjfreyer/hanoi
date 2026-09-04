@@ -110,14 +110,14 @@ format, listed below.
 ## A close is certified, fail closed
 
 What a strategy writes is a **draft**: the tree of goals it carved — a
-rewrite here, a swap there, a cut at a waypoint, a branch proved block by
-block — and the steps each spent. Nothing trusts the draft. `flatten`
+rewrite here, a swap there, a branch proved block by block — and the
+steps each spent. Nothing trusts the draft. `flatten`
 turns it into one flat run of steps from the goal's left side to its
 right, saying as steps everything the tree said as structure: a valley's
 right-side steps are inverted and aligned onto where the left landed, a
-cut's second half is aligned onto the first, a branch's blocks are
-spliced back into the whole with each step narrowed to that block's own
-readers, and an `inline` is the `open` steps it spent. `certify` then
+branch's blocks are spliced back into the whole with each step narrowed
+to that block's own readers, and an `inline` is the `open` steps it
+spent. `certify` then
 replays the run against the goal *as stated* — every step through the
 table, and one isomorphism at the end — and never learns a split
 happened. A draft that does not flatten, or a run that does not land,
@@ -176,10 +176,11 @@ whichever way it goes.
 
 An identity equates **net** stack change, not arity. `Goal::aligned` pads
 the narrower side once, when the goal is built, and every downstream
-question is arity-exact; nothing else pads, and a `.hant` waypoint whose
-halves do not meet is an error where it is written. Paying once at the
-top is what lets every law be stated arity-exact, which is a convenience
-rather than a necessity.
+question is arity-exact. Nothing else pads, and nothing else has to: a
+sentence lowers onto a stack of sources, which says "and these went past
+untouched" by not mentioning them. Paying once at the top is what lets
+every law be stated arity-exact, which is a convenience rather than a
+necessity.
 
 ### Proofs attach both ways
 

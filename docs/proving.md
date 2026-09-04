@@ -53,14 +53,15 @@ produces a step the kernel refuses or a proof that fails to check.
 
 | layer | module | what it does |
 |---|---|---|
-| proofs | `hant.rs`, `corpus.rs`, `parse.rs` | the strategy language a proof is written in, the loader that attaches each `.hant` entry to the identity it names — ordering them, since `by name` cites another identity and needs it proved first — and the reader that turns a waypoint's text into a term |
+| proofs | `hant.rs`, `corpus.rs` | the strategy language a proof is written in, and the loader that attaches each `.hant` entry to the identity it names — ordering them, since `by name` cites another identity and needs it proved first |
 | driving | `strategy.rs`, `proof.rs`, `tactic.rs`, `query.rs`, `render.rs` | the interpreter that runs a strategy over a goal and writes a *draft* of the proof; `flatten`, which reads the one run the kernel is handed off that draft; the tactic language that drives the table (see [docs/tactics.md](tactics.md)); the queries a tactic points with; and the listing a stuck graph is read as |
-| kernel | `kernel/goal.rs`, `kernel/mod.rs`, `kernel/rules.rs` | a goal is two [graphs](../lang/rewrite/src/kernel/graph.rs), lowered and padded to one arity before they build, and `certify` is the one judgement of a proof: a flat run of steps, replayed on the left side, lands on the right; `mod.rs` is the literal translation of a term into a graph; `rules.rs` is the law table, and `apply` the one way a graph is rewritten |
-| graphs | `kernel/graph.rs`, `kernel/term.rs` | boxes and the links between them, well-formedness, the isomorphism that says two graphs are one diagram, and the rewrite itself — a `Pair` of graphs spliced in at a checked `Match`; and the term model a claim is stated over |
+| kernel | `kernel/goal.rs`, `kernel/lower.rs`, `kernel/rules.rs` | a goal is two [graphs](../lang/rewrite/src/kernel/graph.rs), padded to one arity when it is built, and `certify` is the one judgement of a proof: a flat run of steps, replayed on the left side, lands on the right; `lower.rs` is the walk from a sentence's instructions to the graph it computes; `rules.rs` is the law table, and `apply` the one way a graph is rewritten |
+| graphs | `kernel/graph.rs`, `kernel/prim.rs` | boxes and the links between them, well-formedness, the isomorphism that says two graphs are one diagram, and the rewrite itself — a `Pair` of graphs spliced in at a checked `Match`; and what a box computes |
 
-A program in the engine is a **literal** graph: one box per term leaf —
-`id`, `swap`, `copy` and `drop` included — and a branch as a `select`
-with its arms flattened in front of it. Nothing is
+A program in the engine is a **literal** graph: one box per operation —
+and only the operations, since `copy`, `drop`, `swap` and a value nothing
+touched are things a graph says by naming — with a branch as a `select`
+per answer, its arms flattened in front of them. Nothing is
 simplified by representation beyond what the wiring cannot say
 ([docs/rules.md](rules.md) opens with that list); everything else is
 simplified by *rewriting*, against the table.
@@ -104,7 +105,6 @@ proof identities::testing_a_test_by_name = inline diagram;
 | `inline(name)` | opens the calls to that one sentence | it is not called here |
 | `symm` | swaps the two sides | never — but two in a row are refused |
 | `exact` | claims the sides are one diagram — which the auto-close has already checked, so a reached `exact` fails and shows the goal exactly as it stands | always, when reached |
-| `via { body } (left: s, right: s)` | **cuts**: `A = B` splits into the goals `A = C` and `C = B`, the waypoint built as a graph | the waypoint's net stack change is not the goal's, or a side fails |
 | `select-same (then: s, else: s)` | **splits a branch**: the left side answers with a `select`, so `select(c, T, E) = B` becomes the goals `T = B` and `E = B` (see below) | the left side's answer is not one `select`, or a block fails |
 | `cases(#nk) (true: s, false: s)` | **case analysis**, which is η on a wire and then `select-same`: the box is named by [address](tactics.md), the instruction set promises its answer is `true` or `false` and nothing else, so the left side's downstream becomes a branch holding one copy per case with the assumed answer pasted in as a literal — and that branch is then split into the two goals (see below) | the left side does not name that box, nothing promises its answer is a bool, nothing depends on it, or a case fails — and the residual says which |
 | `cases-equal(#nk) (true: s, false: s)` | the same on an `equal`, with the **substitution** the true case licenses: every other reader of the deep operand comes to read the top one there (see below) | the box is no `equal`, nothing but the test reads its deep operand, or the split fails |
@@ -112,8 +112,8 @@ proof identities::testing_a_test_by_name = inline diagram;
 | `diagram` | rewrites both sides by the whole table to fixpoint and asks whether they landed on one diagram | they did not — and the residual is both sides as they stand |
 
 A strategy acts on **one goal**, and the proof mirrors a tree of goals:
-the manipulations transform the current goal, a splitter — `via`,
-`select-same`, `cases` — replaces it with independent subgoals each
+the manipulations transform the current goal, a splitter —
+`select-same`, `cases`, `by-cases` — replaces it with independent subgoals each
 carrying its own strategy inside the split, and `diagram` closes it. So the closers end a strategy,
 and what follows a split is written *inside* it. A goal whose sides
 become isomorphic at any point closes on the spot — the second road to a
@@ -126,19 +126,17 @@ Which steps carry which weight: `inline` and `cases` (and the `by-cases`
 that searches for one) **change what is provable** — the engine treats a call as an opaque box and a computed
 value as opaque, and these are the two ways a proof spends what the
 driver will not. The tactic steps direct and report: they spend named
-laws where the author points them. `via` lets a failure say which half of
-a journey it lives in, checked against a named midpoint, and
-`select-same` lets it say which block of a branch. `exact` is the
+laws where the author points them, and `select-same` lets a failure say
+which block of a branch it lives in. `exact` is the
 way to *read* a goal: write `proof x = exact;`, look at the goal as built
 and aligned, then replace `exact` with the real strategy. `symm` claims
 nothing — equality is symmetric — it moves which side the asymmetric
 steps read.
 
-An omitted `via` side gets `diagram`: a cut's sides are the author's own
-construction, and handing the decision procedure the halves is what a cut
-is for. An omitted `select-same` block gets `diagram` for the same
-reason, and a block that is already the right side closes before any step
-runs, so its arm is usually left out.
+An omitted `select-same` block gets `diagram`: handing the decision
+procedure a block is what splitting one off is for. A block that is
+already the right side closes before any step runs, so its arm is usually
+left out.
 
 ## `select-same`: proving a branch block by block
 
@@ -188,7 +186,8 @@ the introduction no search anchors, `on(in0 in1, tuple-cancel)` putting
 the cancelling pair in), `repeat(…)` and `try(…)`. Laws are named as
 [docs/rules.md](rules.md) names them — `fold`, `select-same`, `not-not`
 — and `branching` names the list. Wherever commas separate — a law list, an
-`at`'s or an `on`'s fields, the sides of a `via` or a `cases` — the last
+`at`'s or an `on`'s fields, the blocks of a `select-same` or the cases of
+a `cases` — the last
 one is optional, so a list written down the page gains a line without
 touching the one above it.
 
@@ -545,14 +544,13 @@ an entry naming no stated identity is an error — a renamed identity would
 otherwise silently shed its proof — and a claim discharged twice was
 discharged once too often.
 
-A body — a `via` waypoint — is a **term**, read by
-`lang/rewrite/src/parse.rs`, which is the inverse of the term model's own
-printing: a waypoint is written `copy(1) ; id(1) * push t1 ; equal`,
-in the language the model says rather than in Hana's. Two consequences
-worth knowing. Nothing pads — the term language says what it means, so a
-body whose halves do not meet is `cannot compose 1 -> 2 with 1 -> 1`
-where it is written, rather than something quietly widened. And a call is
-named (`call types_test::number`, or any unambiguous tail of that).
+The names an entry uses — the sentence an `inline` opens, the identity a
+`by` spends — are resolved when it is loaded, not when it runs. So a
+proof naming something that is not there is a problem with the corpus,
+reported before any proof runs, rather than a proof that failed; the two
+mean different things to whoever reads the report. A name may be written
+as any unambiguous tail of a path (`inline(number)` for
+`types_test::number`), the reading a `jump` already gets.
 
 ## The failure output is the point
 
@@ -580,12 +578,12 @@ enters one; a box that reads nothing is placed just before the box that
 reads it, so an operand sits with its `equal`.
 
 The sides are shown as graphs and only as graphs. A graph is a DAG and a
-term is a spine, so anything spelling one back out has to reimpose a
-stack and pay for it in routing, and a term has no name for a box, so two
-reports of one proof could not be compared. Every box the boundary
-reaches is listed — every box is an operation, so there is nothing a
-reader would rather look through. A `via` answering the report is
-written by hand off the boxes the listing names.
+list of instructions is a spine, so anything spelling one back out has to
+reimpose a stack and pay for it in routing, and an instruction has no
+name for the value it computed, so two reports of one proof could not be
+compared. Every box the boundary reaches is listed — every box is an
+operation, so there is nothing a reader would rather look through, and
+the next step of a proof is written off the boxes the listing names.
 
 ## Trust, in one paragraph
 
