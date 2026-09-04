@@ -289,7 +289,7 @@ That answer is `true` or it is `false`, and there is no third case, so
 the left side's downstream computation equals a branch holding one copy
 per case with the assumed answer pasted in as a literal. That is not a
 row of its own: it is three rows of the table spent in order —
-`promised-bool`, `as-bool-branch` and `select-hoist`
+`codomain`, `as-bool-branch` and `select-hoist`
 ([docs/rules.md](rules.md)) — each an ordinary checked rewrite. Then the
 branch is split the way `select-same` splits one a goal already had:
 `select(w, T, E) = B` becomes the goals `T = B` and `E = B`, each on its

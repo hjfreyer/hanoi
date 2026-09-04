@@ -166,6 +166,16 @@ section below, applied to the type the instruction was going to answer in.
 `untuple n` *is* `as_tuple n` followed by taking a tuple of the right width
 apart, and that is the whole definition rather than a coincidence.
 
+`Instruction::codomain` is this column as something a program can ask, and
+`vm::totality_tests` measures it the way it measures everything else here:
+every instruction run on every shape of operand, the table held to what the
+top of the stack came back as. The rewriter reads it there — the `codomain`
+row of [docs/rules.md](rules.md) is `op` = `op ; as_T`, which is this
+sentence written into a graph — and the entries with no type to name (`push`,
+whose literal is known better than a type; `drop`, `copy` and `swap`, which
+leave what came off the stack; `untuple n`, whose answers the tuple decides)
+are the negative cases that keep the sweep a measurement.
+
 **No instruction reports on itself.** There is no `bool` on top saying whether
 the answer was computed or invented, because the question belongs to the caller
 and the caller can ask it — `is_int` before the arithmetic, `pick 0 ; pick 0 ;

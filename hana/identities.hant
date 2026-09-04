@@ -13,13 +13,13 @@ proof identities::testing_a_test_by_name = inline diagram;
 //
 // `specialize-bool` is the row that says a bool a branch turned on is
 // `true` where the select reads it, and it wants the coercion in its
-// window — so the proof spends `promised-bool` on each side to put one
-// there, and the branch layer takes both sides home. `cases` is not what
-// this needs: a split carves the left side's blocks and proves each
+// window — so the proof spends `codomain` on each side to write the
+// promise down as a box, and the branch layer takes both sides home.
+// `cases` is not what this needs: a split carves the left side's blocks and proves each
 // against the *whole* right side, and this right side tests the same wire,
 // so neither case would be true on its own.
 proof identities::specializing_a_tested_value =
-    both(decide) both(fire(promised-bool)) diagram;
+    both(decide) both(fire(codomain)) diagram;
 
 // The reader-split, said outright. The right side reads one of a shared
 // wire's two readings through the cancelling pair and leaves the other on

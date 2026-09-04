@@ -1097,6 +1097,7 @@ mod tests {
 #[cfg(test)]
 mod totality_tests {
     use super::*;
+    use bytecode::Codomain;
     use bytecode::arity::op_arity;
     use bytecode::value::Symbol;
 
@@ -1305,9 +1306,11 @@ mod totality_tests {
 
     /// Every instruction whose result is computed from operands.
     ///
-    /// The candidates for the sweep below, not the answer to it. `tuple n` is
-    /// in the list precisely because it is *not* one — a sweep with no negative
-    /// case is a sweep that would pass on any list at all.
+    /// The candidates for the sweep below, not the answer to it. `untuple n`
+    /// is in the list precisely because the table says *nothing* about it — it
+    /// leaves the elements, whose types the tuple decides rather than the
+    /// instruction — and a sweep with no negative case is a sweep that would
+    /// pass on any table at all.
     ///
     /// `push`, `drop`, `pick` and `roll` are absent because what they leave
     /// came off the stack rather than out of the instruction, so running them
@@ -1358,14 +1361,30 @@ mod totality_tests {
         Ok(vm.stack().to_vec())
     }
 
-    /// `Instruction::yields_bool` is measured, not asserted.
+    /// The type of a value, as the table names it. `None` where the machine
+    /// left something no coercion forces — a symbol, a const string — which is
+    /// the same "nothing about it decides a type" the table says with `None`.
+    fn typed(v: &Value) -> Option<Codomain> {
+        Some(match v {
+            Value::Bool(_) => Codomain::Bool,
+            Value::Int(_) => Codomain::Int,
+            Value::Tuple(elements) => Codomain::Tuple(elements.len()),
+            _ => return None,
+        })
+    }
+
+    /// `Instruction::codomain` is measured, not asserted.
     ///
-    /// Folding `op ; is_bool` to `op ; drop ; push true` rests on that list.
-    /// The fact cannot be derived by rewriting — a codomain is not something a
-    /// case split can reach — so this is the only thing holding it to the
-    /// machine.
+    /// Folding `op ; is_bool` to `op ; drop ; push true` rests on that table,
+    /// and so does writing the promise down — `add` = `add ; as_int`. The fact
+    /// cannot be derived by rewriting — a codomain is not something a case
+    /// split can reach — so this is the only thing holding it to the machine.
+    ///
+    /// Measured the way the table is stated: run the instruction on every
+    /// shape of operand, ask what type the top came back as, and the codomain
+    /// is that type when every run agrees and `None` when they do not.
     #[test]
-    fn the_instructions_that_leave_a_bool_are_exactly_the_ones_the_list_names() {
+    fn every_instruction_lands_in_the_type_the_table_names() {
         for inst in every_computation() {
             let (n, _) = bytecode::arity::op_arity(&inst)
                 .unwrap_or_else(|| panic!("{:?} has no arity", inst));
@@ -1381,24 +1400,32 @@ mod totality_tests {
                 ),
             };
 
-            let mut always = true;
+            let mut measured: Option<Option<Codomain>> = None;
             let mut witness = None;
             for operands in operand_sets {
                 let top = run_on(&operands, &inst)
                     .ok()
                     .and_then(|s| s.last().cloned());
-                if !matches!(top, Some(Value::Bool(_))) {
-                    always = false;
-                    witness = Some((operands, top));
+                let here = top.as_ref().and_then(typed);
+                match measured {
+                    // The first run says what the table would have to say;
+                    // every later disagreement takes it back to `None`.
+                    None => measured = Some(here),
+                    Some(so_far) if so_far != here => {
+                        measured = Some(None);
+                        witness = Some((operands, top));
+                    }
+                    Some(_) => {}
                 }
             }
+            let measured = measured.flatten();
             assert_eq!(
-                always,
-                inst.yields_bool(),
-                "{:?} leaves a bool = {}, but the list says {} (witness {:?})",
+                measured,
+                inst.codomain(),
+                "{:?} lands in {:?}, but the table says {:?} (witness {:?})",
                 inst,
-                always,
-                inst.yields_bool(),
+                measured,
+                inst.codomain(),
                 witness
             );
         }
@@ -1704,7 +1731,7 @@ mod totality_tests {
     ///
     /// A codomain is not something a rewrite can discover — case-splitting a
     /// value on `is_int` leaves it opaque in the arm where it is not one — so
-    /// it has to be measured against the machine, exactly as `yields_bool` is.
+    /// it has to be measured against the machine, exactly as `codomain` is.
     #[test]
     fn a_coercion_lands_in_the_type_it_names() {
         for v in every_shape() {
@@ -2265,7 +2292,7 @@ mod runtime_tests {
 /// compiler that nothing in the compiler can check.
 ///
 /// So it is measured, the way [`Instruction::commutative`] and
-/// [`Instruction::yields_bool`] are: both sides are run and compared, over
+/// [`Instruction::codomain`] are: both sides are run and compared, over
 /// every depth and every stack size the sweep reaches. A wrong recursion is a
 /// silently wrong program, and this is what stands between the two.
 #[cfg(test)]

@@ -2390,8 +2390,8 @@ mod tests {
     /// the window — and the recorded inverse folds the copies back onto
     /// the boxes that stood, interning doing the folding.
     ///
-    /// `promised-bool` says `op = op ; as_bool`, and where the `as_bool`
-    /// is already standing the step stacks a second one on it. Not
+    /// `codomain` says `op = op ; as_T`, and where the coercion is
+    /// already standing the step stacks a second one on it. Not
     /// re-saying it forever is a strategy's business — `propose` already
     /// declines an answer that carries its promise — and no business of
     /// the checker's.

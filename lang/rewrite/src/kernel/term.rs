@@ -84,7 +84,7 @@ impl fmt::Display for Arity {
 ///
 /// A separate enum rather than a validated `Instruction` also gives the rule
 /// set somewhere to put facts that are true of the local instructions and of
-/// nothing else — [`Instruction::commutative`] and [`Instruction::yields_bool`]
+/// nothing else — [`Instruction::commutative`] and [`Instruction::codomain`]
 /// are two that already exist — without a call variant coming along that they
 /// would have to answer for.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
