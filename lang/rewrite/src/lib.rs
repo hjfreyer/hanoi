@@ -2,15 +2,15 @@
 //!
 //! The crate is cut in two, and the cut is what a bug would cost.
 //!
-//! [`kernel`] is everything a proof's *truth* rests on: [`term`](kernel::term)
-//! is the model claims are stated over — terms live in a
-//! [`Context`] arena and are passed around as [`TermIndex`]; [`graph`](kernel::graph) is what
-//! a claim is *carried* in — boxes, the links between them, well-formedness,
+//! [`kernel`] is everything a proof's *truth* rests on:
+//! [`prim`](kernel::prim) is what a box computes and how many values it
+//! reads; [`graph`](kernel::graph) is what a claim is *carried* in — boxes,
+//! the links between them, well-formedness,
 //! whether two of them are the same diagram, and the one rewriting operation
 //! there is: a [`Pair`](kernel::graph::Pair) of graphs put down where a
 //! [`Match`](kernel::graph::Match) says, checked before anything moves;
-//! [`kernel::build`] is the term translated *literally* into a graph,
-//! structural boxes and all;
+//! [`lower`](kernel::lower) is the walk from a sentence's instructions to
+//! the graph it computes, one box per operation;
 //! [`rules`](kernel::rules) is the table whose every law *is* such a pair;
 //! and [`goal`](kernel::goal) is a claim — two graphs — and
 //! [`certify`](kernel::goal::certify), which replays a flat run of steps on
@@ -24,8 +24,7 @@
 //! [`strategy`] interprets one, writing a [`proof`] — a *draft*, the tree
 //! of goals it carved and the steps each spent — that [`proof::flatten`]
 //! turns into the one run the kernel is handed; [`render`] lays a stuck
-//! graph out for reading; [`parse`] reads a `via` waypoint back out of the
-//! language a term prints in; [`corpus`] loads a source tree's identities
+//! graph out for reading; [`corpus`] loads a source tree's identities
 //! and proofs together. A bug in any of these seeds a step the kernel
 //! refuses or a run that does not land, never a wrong graph. `bin/prove`
 //! drives the lot.
@@ -41,11 +40,11 @@
 pub mod corpus;
 pub mod hant;
 pub mod kernel;
-pub mod parse;
 pub mod proof;
 pub mod query;
 pub mod render;
 pub mod strategy;
 pub mod tactic;
 
-pub use kernel::term::{Arity, Context, Error, Prim, Term, TermIndex, lower, lower_all};
+pub use kernel::lower::{Error, call_arity, lower};
+pub use kernel::prim::{Arity, Prim};

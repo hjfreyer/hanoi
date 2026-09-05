@@ -111,7 +111,7 @@ fn emphasis(args: &Args) -> bool {
 
 fn run(args: &Args) -> Result<bool, String> {
     let emphasis = emphasis(args);
-    let mut corpus = corpus::load(&args.root)?;
+    let corpus = corpus::load(&args.root)?;
     for problem in &corpus.problems {
         eprintln!("{}", problem);
     }
@@ -136,17 +136,11 @@ fn run(args: &Args) -> Result<bool, String> {
         if !shown {
             filtered += 1;
         }
-        // One arena for the whole run: the waypoints the corpus read at load
-        // time and the goals lowered here are places in it.
-        let goal = Goal::of_identity(&mut corpus.terms, &corpus.library, idx)
-            .map_err(|e| e.to_string())?;
+        let goal = Goal::of_identity(&corpus.library, idx).map_err(|e| e.to_string())?;
         // The claim as stated, kept so a later proof may cite it.
         let stated = goal.clone();
         let strategy = corpus.proofs.get(&idx);
-        match prover
-            .prove(&mut corpus.terms, goal, strategy)
-            .map_err(|e| e.to_string())?
-        {
+        match prover.prove(goal, strategy).map_err(|e| e.to_string())? {
             Outcome::Closed { draft, run } => {
                 prover.learn(idx, &stated, &run);
                 if !shown {

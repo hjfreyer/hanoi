@@ -44,12 +44,9 @@ fn prove_them(corpus: &mut corpus::Corpus, expected: &[&str]) {
     let mut stragglers = Vec::new();
     for idx in order {
         let name = corpus.library.identities[idx].name.clone();
-        let goal = Goal::of_identity(&mut corpus.terms, &corpus.library, idx).unwrap();
+        let goal = Goal::of_identity(&corpus.library, idx).unwrap();
         let stated = goal.clone();
-        match prover
-            .prove(&mut corpus.terms, goal, corpus.proofs.get(&idx))
-            .unwrap()
-        {
+        match prover.prove(goal, corpus.proofs.get(&idx)).unwrap() {
             Outcome::Closed { run, .. } => prover.learn(idx, &stated, &run),
             Outcome::Stuck(residual) => {
                 eprintln!("{} stuck: {}", name, residual.stopped);
