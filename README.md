@@ -165,6 +165,7 @@ The language lives in `lang/`, a cargo workspace of several key packages, and th
   - [lang/rewrite/src/hant.rs](lang/rewrite/src/hant.rs): The strategy language proofs are written in (`inline`, `cases`, `by-cases`, `select-same`, `diagram`, `by`); [strategy.rs](lang/rewrite/src/strategy.rs) interprets one per identity behind `bin/prove`.
 - **[lang/test-runner](lang/test-runner)**: CLI harness that compiles and runs integration test suites.
 - **[hana](hana)**: The `.hana`/`.hant` corpus — test cases covering all VM features, string/data parsers, queues, and multi-agent CSP networks, and the identities `bin/prove` discharges.
+- **[lean](lean)**: Lean 4 experiments — the machine interface, its composition operators, and the coffee shop of `barista.hana`, written as Lean would have them. See [lean/README.md](lean/README.md).
 
 ---
 

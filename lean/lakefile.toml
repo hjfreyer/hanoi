@@ -1,0 +1,13 @@
+name = "hanoi"
+version = "0.1.0"
+defaultTargets = ["Hanoi", "barista"]
+
+# Everything under Hanoi/. `lake build` elaborates it all, which runs every
+# `#guard` and checks every `example`: that is the test suite.
+[[lean_lib]]
+name = "Hanoi"
+
+# `lake exe barista` runs the coffee shop and prints what happens.
+[[lean_exe]]
+name = "barista"
+root = "Main"

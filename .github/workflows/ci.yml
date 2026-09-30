@@ -66,3 +66,15 @@ jobs:
         with:
           workspaces: lang
       - run: cargo clippy --workspace --all-targets -- -D warnings
+
+  lean:
+    name: lake build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Builds lean/, which checks every #guard and example in it. The action
+      # reads lean/lean-toolchain and installs that version of Lean.
+      - uses: leanprover/lean-action@v1
+        with:
+          lake-package-directory: lean
+          test: false
