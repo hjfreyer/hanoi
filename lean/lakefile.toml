@@ -1,13 +1,13 @@
-name = "hanoi"
+name = "coffee-shop"
 version = "0.1.0"
-defaultTargets = ["Hanoi", "barista"]
+defaultTargets = ["CCS", "CoffeeShop"]
 
-# Everything under Hanoi/. `lake build` elaborates it all, which runs every
-# `#guard` and checks every `example`: that is the test suite.
+# The generic part: labelled transition systems, CCS's operators on them, and
+# bisimulation.
 [[lean_lib]]
-name = "Hanoi"
+name = "CCS"
 
-# `lake exe barista` runs the coffee shop and prints what happens.
-[[lean_exe]]
-name = "barista"
-root = "Main"
+# The coffee shop modelled with it, and what is proved about it. `lake build`
+# checks everything; there is nothing to run.
+[[lean_lib]]
+name = "CoffeeShop"
